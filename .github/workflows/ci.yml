@@ -13,9 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        file: # TODO: Rename
-          - Integrations/ESPHome/PLT-1.yaml
-          - Integrations/ESPHome/PLT-1_BLE.yaml
+        file:
+          - Integrations/ESPHome/TAB-1.yaml
+          - Integrations/ESPHome/TAB-1_BLE.yaml
         esphome-version:
           - stable
           - beta

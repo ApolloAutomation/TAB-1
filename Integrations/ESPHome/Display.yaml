@@ -1,0 +1,1356 @@
+color:
+  - id: my_blue
+    blue: 100%
+  - id: color_black
+    blue: 0%
+    red: 0%
+    green: 0%
+  - id: color_yellow
+    blue: 0%
+    red: 100%
+    green: 100%
+  - id: color_deep_purple
+    blue: 31%
+    red: 27%
+    green: 14%
+  - id: color_sky_blue
+    hex: 3FA7F3
+  - id: color_slate_blue_gray
+    hex: 343645
+  - id: color_steel_blue
+    hex: 606682
+  - id: color_misty_blue
+    hex: 9BA2BC
+  - id: color_gray
+    hex: 666666
+  - id: color_white
+    hex: f2f0eb
+  - id: color_red
+    hex: ff0000
+  - id: color_crimson
+    hex: f5075c
+  - id: color_light_blue
+    hex: 2fc0ff
+  - id: color_blue
+    hex: 4C9FFF
+  - id: color_light_yellow
+    hex: f0d45c
+  - id: color_amber
+    hex: f4a900
+  - id: color_mint
+    hex: 39d19c
+  - id: color_light_mint
+    hex: 66dcb3
+  - id: color_light_green
+    hex: 00ff00
+  - id: color_green
+    hex: 5CA848
+  - id: color_orange
+    hex: f07c40
+  - id: color_deep_orange
+    hex: ff6600
+  - id: color_violet
+    hex: 926BC7
+  - id: color_dark_blue
+    hex: 4867aa
+
+font:
+  - file: "gfonts://Roboto"
+    id: roboto_24
+    size: 24
+  - file: "gfonts://Nunito"
+    id: nunito_20
+    size: 20
+  - file: "gfonts://Nunito"
+    id: nunito_24
+    size: 24
+  - file: "gfonts://Nunito"
+    id: nunito_28
+    size: 28
+  - file: "gfonts://Nunito"
+    id: nunito_32
+    size: 32
+  - file: "gfonts://Nunito"
+    id: nunito_42
+    size: 42
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/refs/heads/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi46
+    size: 46
+    bpp: 4
+    glyphs: [
+      "\U000F0BC4",#alarm away
+      "\U000F0384",#music
+      "\U000F07C5",#sound
+      "\U000F1322",#tools
+      "\U000F07AE",#cctv
+      "\U000F0493",#settings cog
+      "\U000F05CB",#voice
+      "\U000F0502",#screen settings
+      "\U000F1C6F",#info
+      "\U000F0521",#scr 
+      "\U000F04B2",#sleep
+      "\U000F1110",#s_saver
+      "\U000F0D90",#screen off
+      "\U000F009E",#bell
+      "\U000F04DB",#stop
+      "\U000F18DD",#light_mut
+      "\U000F062C",#source
+      "\U000F10FE",#kubernetes
+      "\U000F02A4",#github
+      "\U000F06B2",#angular
+      "\U000F0439",#radio
+      "\U000F0BB1",#next
+      "\U000F036B",#videocall
+      "\U000F1A13",#heure
+      "\U000F0F30",#meteo
+      "\U000F1923",#timer
+      "\U000F056E",#dashboard
+      "\U000F07DC",#micro-sd
+      "\U000F0CB8",#music_play
+      "\U000F08D6",#settings
+      "\U000F0565",#arming
+      "\U000F050F",#temp sensor
+      "\U000F0150",#clock
+      "\U000F081A",#door
+      "\U000F06D9",#garage
+      "\U000F1A8B",#shutter
+      "\U000F02E9",#Gallery
+      "\U000F040A", #mdi-play
+      "\U000F03E4", #mdi-pause
+      "\U000F0156", #mdi-skip-previous
+      "\U000F0157", #mdi-skip-next
+      "\U000F0A6A", #mdi-fullscreen
+      "\U000F0450", #mdi-refresh
+      "\U000F0143", #mdi-chevron-up
+      "\U000F0140", #mdi-chevron-down
+      "\U000F0425", #power
+      "\U000F0BB0", #next
+      "\U000F0BB2", #prev
+      "\U000F02DC", #home
+      "\U000F0119", #connected
+      "\U000F028D", #forward
+      "\U000F0050", #arrow-left-bold-circle-outline
+      "\U000F0057", #arrow-right-bold-circle-outline
+      ]
+  - file: "https://cdnjs.cloudflare.com/ajax/libs/MaterialDesign-Webfont/7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: mdi24
+    size: 24
+    bpp: 2
+    glyphs: [
+      "\U000F0BC4",#alarm away
+      "\U000F0384",#music
+      "\U000F07C5",#sound
+      "\U000F1322",#tools
+      "\U000F07AE",#cctv
+      "\U000F0493",#settings cog
+      "\U000F05CB",#voice
+      "\U000F0502",#screen settings
+      "\U000F1C6F",#info
+      "\U000F0521",#scr 
+      "\U000F04B2",#sleep
+      "\U000F1110",#s_saver
+      "\U000F0D90",#screen off
+      "\U000F009E",#bell
+      "\U000F04DB",#stop
+      "\U000F18DD",#light_mut
+      "\U000F062C",#source
+      "\U000F10FE",#kubernetes
+      "\U000F02A4",#github
+      "\U000F06B2",#angular
+      "\U000F0439",#radio
+      "\U000F0BB1",#next
+      "\U000F036B",#videocall
+      "\U000F1A13",#heure
+      "\U000F0F30",#meteo
+      "\U000F1923",#timer
+      "\U000F056E",#dashboard
+      "\U000F07DC",#micro-sd
+      "\U000F0CB8",#music_play
+      "\U000F08D6",#settings
+      "\U000F0565",#arming
+      "\U000F050F",#temp sensor
+      "\U000F0150",#clock
+      "\U000F081A",#door
+      "\U000F06D9",#garage
+      "\U000F1A8B",#shutter
+      "\U000F02E9",#Gallery
+      "\U000F040A", #mdi-play
+      "\U000F03E4", #mdi-pause
+      "\U000F0156", #mdi-skip-previous
+      "\U000F0157", #mdi-skip-next
+      "\U000F0A6A", #mdi-fullscreen
+      "\U000F0450", #mdi-refresh
+      "\U000F0143", #mdi-chevron-up
+      "\U000F0140", #mdi-chevron-down
+      "\U000F0425", # power
+      "\U000F0BB0", # next
+      "\U000F0BB2", # prev
+      "\U000F02DC", # home
+      "\U000F0119", # connected
+      ]
+  - file: "fonts/StoryScript-Regular.ttf"
+    id: my_font
+    size: 25
+    bpp: 2
+    extras:
+      - file: "fonts/materialdesignicons-webfont.ttf"
+        glyphs: [
+          "\U000F0425", # power
+          "\U000F0BB0", # next
+          "\U000F0BB2", # prev
+          "\U000F02DC", # home
+          "\U000F0119", # connected
+        ]
+
+ble_client:
+  - id: ble_client_1
+    mac_address: "47:54:41:F7:61:08"
+
+ble_client_hid:
+  - id: ble_client_hid_1
+    ble_client_id: ble_client_1
+    
+video_player:
+  id: video_player_id
+  containers: mp4
+  audio_codecs: ['flac','mp3']
+  loop: false
+  speaker: speaker_id
+
+usb_host:
+  id: usb_host_id
+  enable_hubs: True
+  max_transfer_requests: 16
+  devices:
+#    - id: ftdi_serial_usb
+#      vid: 0x0403
+#      pid: 0x6010
+#    - id: quad_serial_usb
+#      vid: 0x1A86
+#      pid: 0x55D5
+#    - id: usb_storage_clients
+#      pid: 0
+#      vid: 0
+    - id: octa_serial_usb
+      vid: 0x1A86
+      pid: 0x55D9
+
+usb_msc_host:
+  id: usb_msc_host_id
+  devices:
+    - id: usb_storage_30gb
+      mount_path: "/usb"
+      vid: 0x1F75
+      pid: 0x0917
+    - id: usb_storage_new
+      mount_path: "/usb2"
+      vid: 0x058F
+      pid: 0x6387
+
+usb_uart:
+#  - id: single_ftdi_uart
+#    type: FT23XX
+#    vid: 0x0403
+#    pid: 0x8A99
+#    channels: 
+#      - id: ftdi_uart_1
+#        baud_rate: 115200
+#        buffer_size: 1024
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "ftdi_uart_1"
+#        debug_add_uart_settings: True
+#  - id: dual_channel_uart
+#    type: FT23XX
+#    vid: 0x0403
+#    pid: 0x6010
+#    channels: 
+#      - id: ftdi_uart_1
+#        baud_rate: 115200
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "ftdi_uart_1"
+#        debug_add_uart_settings: True
+#        buffer_size: 4096
+#      - id: ftdi_uart_2
+#        baud_rate: 115200
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "ftdi_uart_2"
+#        debug_add_uart_settings: True
+#        buffer_size: 4096
+#  - id: quad_channel_uart
+#    type: CH34X
+#    vid: 0x1A86
+#    pid: 0x55D5
+#    channels: 
+#      - id: usb_uart_1
+#        baud_rate: 115200
+#        buffer_size: 1024
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "quad_uart_1"
+#        debug_add_uart_settings: True
+#      - id: usb_uart_2
+#        baud_rate: 115200
+#        buffer_size: 1024
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "quad_uart_2"
+#        debug_add_uart_settings: True
+#      - id: usb_uart_3
+#        baud_rate: 115200
+#        buffer_size: 1024
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "quad_uart_3"
+#        debug_add_uart_settings: True
+#      - id: usb_uart_4
+#        baud_rate: 115200
+#        buffer_size: 1024
+#        data_bits: 8
+#        stop_bits: 1
+#        parity: NONE
+#        debug: True
+#        dummy_receiver: False
+#        debug_prefix: "quad_uart_4"
+#        debug_add_uart_settings: True
+  - id: octa_channel_uart
+    type: CH934X
+    vid: 0x1A86
+    pid: 0x55D9
+    channels:
+      - id: octa_uart_1
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_1"
+        debug_add_uart_settings: False
+      - id: octa_uart_2
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_2"
+        debug_add_uart_settings: False
+      - id: octa_uart_3
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_3"
+        debug_add_uart_settings: False
+      - id: octa_uart_4
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_4"
+        debug_add_uart_settings: False
+      - id: octa_uart_5
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_5"
+        debug_add_uart_settings: False
+      - id: octa_uart_6
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_6"
+        debug_add_uart_settings: False
+      - id: octa_uart_7
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_7"
+        debug_add_uart_settings: False
+      - id: octa_uart_8
+        baud_rate: 115200
+        buffer_size: 1024
+        data_bits: 8
+        stop_bits: 1
+        parity: NONE
+        debug: False
+        dummy_receiver: False
+        debug_prefix: "octa_uart_8"
+        debug_add_uart_settings: False
+
+touchscreen:
+  - platform: gt911
+    id: touchscreen_id
+    update_interval: 100ms
+    transform:
+      swap_xy: True
+      mirror_y: False
+      mirror_x: True
+    on_touch:
+    - lambda: |-
+          // Any touch shows UI and resets timer
+          id(toggle_ui).execute();
+    on_release:
+      - if:
+          condition: lvgl.is_paused        
+          then:
+            - logger.log: "LVGL resuming"
+            - lvgl.resume:
+            - lvgl.widget.redraw: 
+            - lvgl.page.show: main_page      
+            - light.turn_on:
+                id: backlight
+                brightness: 80%
+                transition_length: 2s
+
+i2c_device:
+  - id: display_i2c
+    address: 0x45
+    i2c_id: i2c_bus_a
+
+light:
+  - platform: mipi_dsi
+    id: backlight
+    pwm_register: 0x96
+    restore_mode: ALWAYS_ON
+
+display:
+  - platform: mipi_dsi
+    setup_priority: 790.0
+    model: WAVESHARE-P4-NANO-10.1
+    id: dsi_display
+    rotation: 270°
+    show_test_card: False
+    update_interval: 13ms
+
+
+sd_mmc_card:
+  id: sd_card
+  clk_pin: GPIO43
+  cmd_pin: GPIO44
+  data0_pin: GPIO39
+  data1_pin: GPIO40
+  data2_pin: GPIO41
+  data3_pin: GPIO42
+  mode_1bit: false
+  slot: 0
+
+storage_host:
+  id: storage_host_id
+  mounts:
+    - path: /sdcard
+      platform: sd_mmc
+      id: sd_storage
+    - path: /usb
+      platform: usb_msc
+      id: usb_storage
+    - path: /usb2
+      platform: usb_msc
+      id: usb_storage_2
+  file_managers:
+    - id: photo_monitor
+      watch_directory: /usb/jpg
+      patterns: ["*.jpg", "*.jpeg"]
+      on_directory_changed:
+        - lambda: |-
+            // Log changes for debugging
+            ESP_LOGI("FileManager", "Directory changed: %zu files total", x.files.size());
+            if (!x.added.empty()) {
+              ESP_LOGI("FileManager", "  Added: %zu files", x.added.size());
+            }
+            if (!x.deleted.empty()) {
+              ESP_LOGI("FileManager", "  Deleted: %zu files", x.deleted.size());
+            }
+
+            // Send updated complete file list to picture_viewer
+            id(picture_viewer_id)->update_directory_files(x.path, x.files);
+
+    - id: photo_monitor_2
+      watch_directory: /usb2/jpg
+      patterns: ["*.jpg", "*.jpeg"]
+      on_directory_changed:
+        - lambda: |-
+            // Log changes for debugging
+            ESP_LOGI("FileManager", "Directory changed: %zu files total", x.files.size());
+            if (!x.added.empty()) {
+              ESP_LOGI("FileManager", "  Added: %zu files", x.added.size());
+            }
+            if (!x.deleted.empty()) {
+              ESP_LOGI("FileManager", "  Deleted: %zu files", x.deleted.size());
+            }
+
+            // Send updated complete file list to picture_viewer
+            id(picture_viewer_id)->update_directory_files(x.path, x.files);
+      
+
+picture_viewer:
+  id: picture_viewer_id
+  file_manager_id: photo_monitor
+  canvas_id: photo_canvas
+  display_id: dsi_display
+  thumbnail_container_id: thumb_list
+  thumbnail_slide_enabled: true
+  thumbnail_style_id: thumbnail_style
+  thumbnail_active_style_id: thumbnail_active_style
+  thumbnail_container_style_id: thumbnail_container_style
+  
+  
+  # Directories to monitor
+  directories:
+    - path: /usb/jpg
+      jpeg_rgb_order: RGB
+      jpeg_color_space: BT601
+      jpeg_output_format: RGB565
+    - path: /usb2/jpg
+      jpeg_rgb_order: RGB
+      jpeg_color_space: BT601
+      jpeg_output_format: RGB565
+  
+  # Slideshow settings
+  slideshow_interval: 5s
+  fit_mode: SCALE_TO_FIT
+  
+  # Thumbnail settings
+  enable_thumbnails: true
+  thumbnail_width: 224
+  thumbnail_height: 140
+  thumbnail_max_count: 20
+  thumbnail_decode_work_buffer_size: 2097152  # 2MB work buffer
+  thumbnail_lazy_load: true
+  thumbnail_preload_count: 10
+  
+  # Layout: VERTICAL (for side strip) | HORIZONTAL (for bottom strip) | GRID (for gallery)
+  thumbnail_layout: VERTICAL
+  thumbnail_spacing: 0
+  thumbnail_grid_columns: 3  # Only used for GRID layout
+  
+  # NEW: Overlay icon settings
+  overlay_icon_size: 128        # Size of play/pause icon (32-256 pixels)
+  overlay_icon_color: 0xFFFFFF  # White color (RGB hex)
+  overlay_duration: 1500 
+
+image:
+  - file: 'images/Apollo.png'
+    byte_order: little_endian
+    id: boot_logo
+    resize: 300x300
+    type: RGB565
+    transparency: alpha_channel
+
+lvgl:
+  displays:
+    - dsi_display
+  
+  touchscreens:
+    - touchscreen_id
+  
+
+  # Theme configuration
+  theme:
+    obj:
+      text_font: nunito_24
+      bg_color: color_black
+      text_color: color_white
+
+  style_definitions:
+    - id: main_page_style
+      width: 100%
+      height: 85%
+      align: CENTER
+    - id: header_footer
+      radius: 0
+      pad_all: 0
+      pad_row: 0
+      pad_column: 0
+      border_width: 0
+      text_color: color_white
+      width: 100%
+      height: 7.5%
+      bg_color: color_black
+    - id: thumb_active_style
+      border_width: 0
+      bg_opa: 100%
+    - id: floating_controls_style
+      bg_color: color_black
+      bg_opa: 100%
+      border_width: 0
+    - id: thumb_button_style
+      bg_color: color_black
+      bg_opa: 100%
+      border_width: 0
+      pad_row: 0
+      text_font: nunito_24
+    - id: no_scrollbar_style
+      scrollbar_mode: "OFF"
+    - id: thumbnail_style
+      scrollbar_mode: "OFF"
+      bg_opa: TRANSP
+      bg_color: color_black
+      border_width: 0
+      radius: 0
+      pad_all: 0
+    - id: thumbnail_active_style
+      scrollbar_mode: "OFF"
+      bg_opa: TRANSP
+      bg_color: color_black
+      border_width: 0
+      radius: 0
+      pad_all: 0
+    - id: thumbnail_container_style
+      scrollbar_mode: "OFF"
+      bg_opa: TRANSP
+      bg_color: color_black
+      border_width: 0
+      radius: 0
+      pad_all: 0
+
+  top_layer:
+    widgets:
+      - obj:
+          id: header
+          align: TOP_MID
+          styles: header_footer
+          widgets:
+            - label:
+                text_font: nunito_24 # set all your labels to use your custom defined font
+                id: time_label
+                text: "Time"
+                align: top_left
+                text_align: left
+            - label:
+                text_font: nunito_24
+                text: "Tab10-Demo"
+                align: CENTER
+                text_align: CENTER
+            - label:
+                text: "\U000F0119"
+                text_font: mdi24
+                id: lbl_hastatus
+                hidden: true
+                align: top_right
+                text_align: right
+      - buttonmatrix:
+          text_font: mdi24
+          align: bottom_mid
+          styles: header_footer
+          pad_all: 0
+          outline_width: 0
+          id: navigation_footer
+          items:
+            styles: header_footer
+          rows:
+            - buttons:
+                - id: page_prev
+                  text: "\U000F0BB2"
+                  on_press:
+                    then:
+                    - lvgl.page.previous:
+                        animation: NONE
+                - id: page_home
+                  text: "\U000F02DC"
+                  on_press:
+                    then:
+                      lvgl.page.show: main_page
+                - id: sleep_button
+                  text: "\U000F0425"
+                  on_release:
+                    then:
+                      - logger.log: "LVGL is idle"
+                      - light.turn_off: backlight
+                      - lvgl.pause:
+                          show_snow: true
+                - id: page_next
+                  text: "\U000F0BB0"
+                  on_press:
+                    then:
+                      - lvgl.page.next:
+                          animation: NONE
+      - obj:
+          id: boot_screen
+          x: 0
+          y: 0
+          width: 100%
+          height: 100%
+          bg_color: color_black
+          radius: 0
+          pad_all: 0
+          border_width: 0
+          widgets:
+            - image:
+                align: CENTER
+                src: boot_logo
+                y: -40
+            - spinner:
+                align: CENTER
+                y: 95
+                height: 50
+                width: 50
+                spin_time: 1s
+                arc_length: 60deg
+                arc_width: 8
+                indicator:
+                  arc_color: color_steel_blue
+                  arc_width: 8
+          on_press:
+            - lvgl.widget.hide: boot_screen
+
+  # Pages
+  pages:
+    - id: main_page
+      on_load:
+        then:
+          - globals.set:
+              id: current_lvgl_page
+              value: '"main"'
+      scrollbar_mode: "OFF"
+      bg_color: color_black
+    # ==================== Settings Page ====================
+    - id: settings_page
+      on_load:
+        then:
+          - globals.set:
+              id: current_lvgl_page
+              value: '"settings"'
+      scrollbar_mode: "OFF"
+      widgets:
+        # Header
+        - obj:
+            id: settings_header
+            width: 100%
+            height: 60
+            align: TOP_MID
+            bg_color: color_black
+            text_color: color_white
+            border_width: 0
+            pad_all: 10
+            widgets:
+              - label:
+                  text: "Settings"
+                  align: CENTER
+        
+        # Main content container
+        - obj:
+            width: 100%
+            height: SIZE_CONTENT
+            align: CENTER
+            layout:
+              type: FLEX
+              flex_flow: COLUMN
+              flex_align_main: START
+              flex_align_cross: CENTER
+              pad_row: 20
+            widgets:
+              # backlight:
+              - obj:
+                  id: backlight_bg
+                  x: 20
+                  y: 140
+                  width: 750
+                  height: 200
+                  align: TOP_LEFT
+                  pad_all: 0
+                  border_width: 0
+                  widgets:
+      
+                    - label:
+                        id: display_backlight_label
+                        x: 20
+                        align: LEFT_MID
+                        text_font: nunito_24
+                        text: "Backlight"
+      
+                    - slider:
+                        id: display_backlight_brightness_slider
+                        x: -80
+                        radius: 10
+                        align: RIGHT_MID
+                        width: 520
+                        height: 120
+                        min_value: 20
+                        max_value: 100
+                        value: 100
+                        indicator:
+                          radius: 20
+                        on_release:
+                          then:
+                            - light.turn_on:
+                                id: backlight
+                                brightness: !lambda return int(x)/ 100.0;
+              # sleep mode:
+              - obj:
+                  id: sleep_mode_bg
+                  x: 20
+                  y: 380
+                  width: 750
+                  height: 200
+                  align: TOP_LEFT
+                  pad_all: 0
+                  border_width: 0
+                  radius: 4
+                  widgets:
+                    - label:
+                        id: display_timeout_label
+                        x: 20
+                        align: LEFT_MID
+                        text_font: nunito_24
+                        text: "Sleep mode"
+      
+                    - dropdown:
+                        id: display_timeout_dropdown
+                        x: 440
+                        width: 400
+                        align: LEFT_MID
+                        selected_index: !lambda return id(display_timeout);
+                        options:
+                          - Never
+                          - 1 minute
+                          - 5 minutes
+                          - 10 minutes
+                          - 30 minutes
+                          - 1 hour
+                          - 6 hours
+                          - 12 hours
+                        dropdown_list:
+                          align: CENTER
+                          pad_all: 8
+                          max_height: 360
+                          selected:
+                            checked:
+                              bg_opa: 20%
+                            pressed:
+                              bg_opa: TRANSP
+                        indicator:
+                          text_opa: TRANSP
+                        on_value:
+                            then:
+                              - number.set:
+                                  id: display_timeout_number
+                                  value: !lambda |-
+                                    static const int backlight_time[] = {-1, 1, 5, 10, 30, 60, 360, 720};
+                                    return backlight_time[x];
+                              - globals.set:
+                                  id: display_timeout
+                                  value: !lambda return x;
+              # system info:
+              - obj:
+                  id: system_info_container
+                  x: -20
+                  y: 60
+                  width: 440
+                  height: 340
+                  align: TOP_RIGHT
+                  pad_all: 0
+                  bg_opa: 20%
+                  border_opa: TRANSP
+                  radius: 10
+                  widgets:
+                    # SRAM memory (show used from total)
+                    - obj:
+                        y: 10
+                        width: 400
+                        height: 50
+                        align: TOP_MID
+                        bg_opa: TRANSP
+                        pad_all: 0
+                        border_opa: TRANSP
+                        widgets:
+                          - label:
+                              align: TOP_LEFT
+                              text: "SRAM Used:"
+                              text_font: nunito_24
+                          - label:
+                              id: sram_memory_label
+                              align: TOP_RIGHT
+                              text: "0/512 KB"
+                              text_font: nunito_24
+                              text_color: color_white
+                          - bar:
+                              id: sram_memory_bar
+                              y: 30
+                              width: 390
+                              height: 12
+                              align: TOP_MID
+                              pad_all: 0
+                              min_value: 0
+                              max_value: 100
+                              value: 0
+                              bg_color: color_black
+                              indicator:
+                                bg_color: color_blue
+      
+                    # PSRAM memory (show used from total)
+                    - obj:
+                        y: 70
+                        width: 400
+                        height: 50
+                        align: TOP_MID
+                        pad_all: 0
+                        border_opa: TRANSP
+                        widgets:
+                          - label:
+                              align: TOP_LEFT
+                              text: "PSRAM Used:"
+                              text_font: nunito_24
+                          - label:
+                              id: psram_memory_label
+                              align: TOP_RIGHT
+                              text: "0/8 MB"
+                              text_font: nunito_24
+                              text_color: color_blue
+                          - bar:
+                              id: psram_memory_bar
+                              y: 30
+                              width: 390
+                              height: 12
+                              align: TOP_MID
+                              pad_all: 0
+                              min_value: 0
+                              max_value: 100
+                              value: 0
+                              bg_color: color_black
+                              indicator:
+                                bg_color: color_blue
+      
+                    # Chip temperature
+                    - obj:
+                        y: 130
+                        width: 400
+                        height: 30
+                        align: TOP_MID
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              align: LEFT_MID
+                              text: "CPU Temperature:"
+                              text_font: nunito_24
+                          - label:
+                              id: chip_temperature_label
+                              align: RIGHT_MID
+                              text: "0°C"
+                              text_font: nunito_24
+                              text_color: 0xFFFFFF
+      
+                    # WiFi signal
+                    - obj:
+                        y: 170
+                        width: 400
+                        height: 30
+                        align: TOP_MID
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              align: LEFT_MID
+                              text: "WiFi Signal:"
+                              text_font: nunito_24
+                          - label:
+                              id: wifi_signal_label
+                              align: RIGHT_MID
+                              text: "0 dBm"
+                              text_font: nunito_24
+      
+                    # IP Address
+                    - obj:
+                        y: 210
+                        width: 400
+                        height: 30
+                        align: TOP_MID
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              align: LEFT_MID
+                              text: "IP Address:"
+                              text_font: nunito_24
+                          - label:
+                              id: ip_address_label
+                              align: RIGHT_MID
+                              text: "192.168.3.3"
+                              text_font: nunito_24
+      
+                    # MAC Address
+                    - obj:
+                        y: 250
+                        width: 400
+                        height: 30
+                        align: TOP_MID
+                        pad_all: 0
+                        border_width: 0
+                        widgets:
+                          - label:
+                              align: LEFT_MID
+                              text: "MAC Address:"
+                              text_font: nunito_24
+                          - label:
+                              id: wifi_mac_label
+                              align: RIGHT_MID
+                              text: "11:22:A1:B2:C3:D4"
+                              text_font: nunito_24
+      
+                    # ESPHome version
+                    - obj:
+                        y: 290
+                        width: 400
+                        height: 30
+                        align: TOP_MID
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              align: LEFT_MID
+                              text: "ESPHome Version:"
+                              text_font: nunito_24
+                          - label:
+                              id: esphome_version_label
+                              align: RIGHT_MID
+                              text: "2020.0.0"
+                              text_font: nunito_24
+    
+    # ==================== Camera Page ====================
+    - id: camera_page
+      on_load:
+        then:
+          - globals.set:
+              id: current_lvgl_page
+              value: '"camera"'
+      scrollbar_mode: "OFF"
+      widgets:
+        # Header
+        - obj:
+            id: camera_header
+            width: 100%
+            height: 60
+            align: TOP_MID
+            bg_color: color_black
+            text_color: color_white
+            border_width: 0
+            pad_all: 10
+            widgets:
+              - label:
+                  text: "Camera View"
+                  align: CENTER
+        
+        # Camera canvas (full screen minus header)
+        - canvas:
+            id: camera_canvas
+            width: 1280
+            height: 740
+            y: 60
+            align: TOP_MID
+            text_font: nunito_24
+    
+    # ==================== Photo Viewer Page ====================
+    - id: gallery_page
+      scrollbar_mode: "OFF"
+      scrollable: false
+      width: 1280
+      height: 800
+      x: 0
+      y: 0
+      border_width: 0
+      border_color: 0
+      bg_color: color_black
+      bg_opa: TRANSP
+      widgets:
+        # Main content container
+        - obj:
+            id: main_container
+            width: 100%
+            height: 100%
+            x: 0
+            y: 0
+            scrollbar_mode: "OFF"
+            scrollable: false
+            border_width: 0
+            border_color: 0
+            bg_color: color_black
+            bg_opa: TRANSP
+            #layout:
+            #  type: flex
+            #  flex_flow: row
+            widgets:
+              # Main image canvas with gesture controls
+              - canvas:
+                  id: photo_canvas
+                  width: 1280
+                  height: 800
+                  x: 0
+                  y: 0
+                  border_width: 0
+                  scrollable: false
+                  scrollbar_mode: "OFF"
+                  pad_all: 0
+                  clickable: true
+              # Thumbnail strip (right)
+              - obj:
+                  id: thumbnail_strip
+                  x: 1056
+                  y: 60
+                  width: 224
+                  height: 680
+                  scrollable: false
+                  scrollbar_mode: "OFF"
+                  bg_color: color_black
+                  bg_opa: 100%
+                  border_width: 0
+                  border_color: color_black
+                  pad_all: 0
+                  radius: 0
+                  widgets:
+                    # Thumbnail list
+                    - obj:
+                        id: thumb_list
+                        x: 0
+                        y: 0
+                        width: 224
+                        height: 680
+                        scrollable: true
+                        clickable: true
+                        scrollbar_mode: "OFF"
+                        bg_color: color_black
+                        border_width: 0
+                        border_color: color_black
+                        pad_all: 0
+                        radius: 0
+                        layout:
+                          type: FLEX
+                          flex_flow: COLUMN
+                          flex_align_main: START
+                          flex_align_cross: CENTER
+                        widgets: []
+
+  # On-idle actions
+  on_idle:
+    timeout: 3s
+    then:
+      # Auto-hide header and footer after 3 seconds of inactivity
+      - lvgl.widget.hide: header
+
+webdav_server:
+  id: webdav_sdcard
+  storage_host_id: storage_host_id
+  root_path: "/"
+  url_prefix: "/"
+  port: 81
+  username: "admin"
+  password: "123456"
+
+http_file_server:
+  storage_host_id: storage_host_id
+  url_prefix: "/files"
+  root_path: "/"
+  auth_enabled: true
+  username: "admin"
+  password: "123456"
+  enable_upload: true
+  enable_download: true
+  enable_deletion: true
+
+switch:
+  - platform: gpio
+    pin: GPIO53 #PA-CTRL
+    name: "Speaker enable"
+    restore_mode: ALWAYS_OFF
+    id: speaker_enable_switch
+    inverted: False
+  - platform: template
+    name: "Ring Timer"
+    id: timer_ringing
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_off:
+        # Stop playing the alarm
+        - media_player.stop:
+            announcement: true
+    on_turn_on:
+        - while:
+            condition:
+                switch.is_on: timer_ringing
+            then:
+                # Play the alarm sound as an announcement
+                - media_player.speaker.play_on_device_media_file:
+                    media_file: alarm_sound
+                    announcement: true
+                # Wait until the alarm sound starts playing
+                - wait_until:
+                    media_player.is_announcing:
+                # Wait until the alarm sound stops playing
+                - wait_until:
+                    not:
+                      media_player.is_announcing:
+
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    i2c_id: i2c_bus_a
+    address: 0x18
+    bits_per_sample: 16bit
+    sample_rate: 44100
+    use_mclk: True
+    use_microphone: True
+    microphone_type: analog
+    mic_gain: 24DB
+
+i2s_audio:
+  - id: i2s_output
+    i2s_lrclk_pin: GPIO10
+    i2s_bclk_pin: GPIO12
+    i2s_mclk_pin: GPIO13
+
+microphone:
+  - platform: i2s_audio
+    id: external_mic
+    i2s_audio_id: i2s_output
+    i2s_mode: primary
+    adc_type: external
+    i2s_din_pin: GPIO11
+    sample_rate: 16000
+    bits_per_channel: 16bit
+    channel: stereo
+
+speaker:
+  - platform: i2s_audio
+    i2s_audio_id: i2s_output
+    id: speaker_id
+    i2s_dout_pin: GPIO09
+    dac_type: external
+    sample_rate: 44100
+    bits_per_sample: 16bit
+    channel: left
+    audio_dac: es8311_codec
+    buffer_duration: 1000ms
+    i2s_mode: primary
+  - platform: mixer
+    id: mixer_speaker_id
+    output_speaker: speaker_id
+    num_channels: 1
+    task_stack_in_psram: True
+    source_speakers:
+      - id: announcement_spk_mixer_input
+      - id: media_spk_mixer_input
+  - platform: resampler
+    id: media_spk_resampling_input
+    output_speaker: media_spk_mixer_input
+  - platform: resampler
+    id: announcement_spk_resampling_input
+    output_speaker: announcement_spk_mixer_input
+
+media_player:
+  - platform: speaker
+    name: "Speaker Media Player"
+    id: speaker_media_player_id
+    task_stack_in_psram: True
+    buffer_size: 1000000
+    codec_support_enabled: True
+    volume_initial: 70%
+    volume_max: 70%
+    announcement_pipeline:
+        speaker: announcement_spk_resampling_input
+        sample_rate: 44100
+        num_channels: 1
+    files:
+      - id: alarm_sound
+        file: 'sounds/testsound.flac'
+      - id: wake_sound_file
+        file: 'sounds/timer_finished.flac'
+    on_announcement:
+      - if:
+          condition:
+            - microphone.is_capturing:
+                id: external_mic
+          then:
+            - micro_wake_word.stop: {}
+    on_idle:
+      - if:
+          condition:
+            - not:
+                voice_assistant.is_running: {}
+          then:
+            - micro_wake_word.start: {}
+
+micro_wake_word:
+  id: mww
+  microphone: external_mic
+  models:
+    - okay_nabu
+    - hey_jarvis
+  on_wake_word_detected:
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+voice_assistant:
+  id: va
+  microphone: external_mic
+  media_player: speaker_media_player_id
+  micro_wake_word: mww
+  on_end:
+    - wait_until:
+        condition:
+          - media_player.is_announcing:
+        timeout: 0.5s
+    - wait_until:
+        - and:
+            - not:
+                media_player.is_announcing:
+            - not:
+                media_player.is_playing:
+    - micro_wake_word.start:
+  on_client_connected:
+    - micro_wake_word.start:
+  on_client_disconnected:
+    - micro_wake_word.stop:
+
+tab5_camera:
+  id: picam
+  name: "PiCam"
+  i2c_id: i2c_bus_a
+  external_clock_pin: GPIO36
+  resolution: SVGA
+  frequency: 24000000
+  framerate: 50             
+  jpeg_quality: 10      
+
+lvgl_camera_display:
+  id: camera_display
+  camera_id: picam
+  canvas_id: camera_canvas
+  update_interval: 40ms

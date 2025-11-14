@@ -1,0 +1,68 @@
+esphome:
+  name: apollo-tab-1
+  friendly_name: Apollo TAB-1
+  comment: Apollo TAB-1
+  name_add_mac_suffix: true
+  min_version: 2025.8.0    
+  platformio_options:
+    board_build.flash_mode: dio
+    build_flags:
+      - -D LV_MEMCPY_MEMSET_STD=1
+      - -D LV_ATTRIBUTE_FAST_MEM_USE_IRAM=1
+
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
+
+  on_boot:
+    - priority: 850.0
+      then:
+        - lambda: |-
+            const char* TAG = "Display I2C";
+            ESP_LOGI(TAG, "Initializing display power");
+            id(display_i2c).write_byte(0x95,0x11);
+            return;
+        - lambda: |-
+            id(display_i2c).write_byte(0x95,0x17);
+            return;
+        - lambda: |-
+            id(display_i2c).write_byte(0x96,0x00);
+            return;
+        - delay: 100ms
+        - lambda: |-
+            id(display_i2c).write_byte(0x96,0xFF);
+            return;
+        - delay: 1s
+
+dashboard_import:
+  package_import_url: github://ApolloAutomation/TAB-1/Integrations/ESPHome/TAB-1.yaml
+  import_full_config: false
+
+
+ota:
+  - platform: esphome
+    id: ota_esphome
+  - platform: http_request
+    id: ota_managed
+
+
+http_request:
+  verify_ssl: true
+
+safe_mode:
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: Firmware Update
+    source: https://apolloautomation.github.io/TAB-1/artifact/manifest.json
+
+wifi:
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+logger:
+
+packages:
+  core: !include Core.yaml
+  display: !include Display.yaml
