@@ -1,68 +1,69 @@
-esphome:
+# ============================================================================
+#  Apollo TAB-1 · Home Assistant touch dashboard
+#  Waveshare ESP32-P4-NANO + 10.1" DSI LCD (JD9365, 1280×800)
+#
+#  Flash THIS file. It pulls in two packages:
+#     Core.yaml     — board, PSRAM, WiFi (via C6), power rails, I²C
+#     Display.yaml  — DSI panel, GT911 touch, and the LVGL dashboard
+#
+#  Everything is mainline ESPHome (2025.11+). No external components, no forks.
+# ============================================================================
+
+substitutions:
   name: apollo-tab-1
   friendly_name: Apollo TAB-1
-  comment: Apollo TAB-1
+  version: "26.07.24.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
   name_add_mac_suffix: true
-  min_version: 2025.8.0    
+  min_version: 2025.11.0
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
   platformio_options:
     board_build.flash_mode: dio
     build_flags:
       - -D LV_MEMCPY_MEMSET_STD=1
-      - -D LV_ATTRIBUTE_FAST_MEM_USE_IRAM=1
-
-  project:
-    name: "ApolloAutomation.TAB-1"
-    version: "${version}"
-
+  # Power up the panel rail + backlight. The 0x45 chip on i2c_bus_a gates both;
+  # this must run before the display initialises (priority > display's 790).
   on_boot:
     - priority: 850.0
       then:
-        - lambda: |-
-            const char* TAG = "Display I2C";
-            ESP_LOGI(TAG, "Initializing display power");
-            id(display_i2c).write_byte(0x95,0x11);
-            return;
-        - lambda: |-
-            id(display_i2c).write_byte(0x95,0x17);
-            return;
-        - lambda: |-
-            id(display_i2c).write_byte(0x96,0x00);
-            return;
+        - lambda: id(display_i2c).write_byte(0x95, 0x11);
+        - lambda: id(display_i2c).write_byte(0x95, 0x17);
+        - lambda: id(display_i2c).write_byte(0x96, 0x00);
         - delay: 100ms
-        - lambda: |-
-            id(display_i2c).write_byte(0x96,0xFF);
-            return;
+        - lambda: id(display_i2c).write_byte(0x96, 0xFF);
         - delay: 1s
-
-dashboard_import:
-  package_import_url: github://ApolloAutomation/TAB-1/Integrations/ESPHome/TAB-1.yaml
-  import_full_config: false
-
-
-ota:
-  - platform: esphome
-    id: ota_esphome
-  - platform: http_request
-    id: ota_managed
-
-
-http_request:
-  verify_ssl: true
-
-safe_mode:
-
-update:
-  - platform: http_request
-    id: firmware_update
-    name: Firmware Update
-    source: https://apolloautomation.github.io/TAB-1/artifact/manifest.json
-
-wifi:
-  ap:
-    ssid: "Apollo TAB1 Hotspot"
-
-logger:
 
 packages:
   core: !include Core.yaml
   display: !include Display.yaml
+
+# --- Connectivity -----------------------------------------------------------
+# WiFi credentials are provided at flash time (secrets.yaml / dashboard) or via
+# the "Apollo TAB1 Hotspot" captive-portal fallback below.
+wifi:
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+captive_portal:
+
+api:
+  # Recommended: add an encryption key so Home Assistant can pair securely.
+  # In HA the key is shown when you add the device; paste it here:
+  # encryption:
+  #   key: "PUT-YOUR-32-BYTE-BASE64-KEY-HERE=="
+
+ota:
+  - platform: esphome
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+# Browser access + on-device controls. Change/remove the login as you wish.
+web_server:
+  version: 3

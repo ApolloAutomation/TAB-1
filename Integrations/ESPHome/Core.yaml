@@ -1,464 +1,75 @@
-substitutions:
-  name: apollo-tab-1
-  version: "25.11.13.1"
-  device_description: ${name} made by Apollo Automation - version ${version}.
-  brightness_icon:           "\U0000e900"
-  saturation_icon:           "\U0000e901"
-  exit_icon:                 "\U0000e902"
+# ============================================================================
+#  Core.yaml — board + system for the Waveshare ESP32-P4-NANO
+#  Pulled in as a package by TAB-1.yaml. 100% mainline ESPHome (2025.11+).
+#
+#  WiFi on the ESP32-P4 has no radio of its own — it talks to the on-board
+#  ESP32-C6 co-processor over SDIO (the `esp32_hosted` block below).
+# ============================================================================
+
 esp32:
   variant: ESP32P4
   flash_size: 16MB
   cpu_frequency: 360MHz
   framework:
     type: esp-idf
-    version: 5.5.1
+    # No pinned version — use ESPHome's recommended IDF for this release.
     advanced:
-      enable_idf_experimental_features: yes
+      enable_idf_experimental_features: true
     sdkconfig_options:
-      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
-      CONFIG_SPIRAM_RODATA: y
-      CONFIG_COMPILER_OPTIMIZATION_PERF: y
-      CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1: y
-      CONFIG_SDMMC_HOST_DEFAULT: "y"
-      CONFIG_USB_TRANSFER_FLAG_ZERO_PACK: "y"
-      CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE: "1024"
-      CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED: "y"
-      CONFIG_USB_HOST_HW_BUFFER_BIAS_IN: "n"
-      CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT: "n"
-      CONFIG_COMPILER_CXX_EXCEPTIONS: "n"
-      CONFIG_ESP32_SPIRAM_SUPPORT: "y"
-      CONFIG_SPIRAM_USE_MALLOC: "y"
-      CONFIG_FATFS_LFN_STACK: "y"
-      CONFIG_LWIP_SO_RCVBUF: "y"
-      CONFIG_LWIP_MAX_SOCKETS: "16"
+      # A roomier main-task stack keeps LVGL happy. Everything else the
+      # display/psram/wifi need is injected automatically by their components.
       CONFIG_ESP_MAIN_TASK_STACK_SIZE: "16384"
-      CONFIG_ESP_TIMER_TASK_STACK_SIZE: "4096"
-      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "60"
-      CONFIG_ESP_TASK_LOOP_STACK_SIZE: "16384"
-      CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED: "y"
-      CONFIG_IDF_TARGET: "esp32p4"
-      CONFIG_ESPTOOLPY_FLASHSIZE_16MB: "y"
-      CONFIG_PARTITION_TABLE_CUSTOM: "y"
-      CONFIG_ESP32_P4_EV_BOARD: "y"
-      CONFIG_HTTPD_MAX_REQ_HDR_LEN: "800"
-      CONFIG_HTTPD_WS_SUPPORT: "y"
-      CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=: "n"
-      CONFIG_ESP_WIFI_SLP_IRAM_OPT: "n"
-      CONFIG_FATFS_LFN_HEAP: "y"
       CONFIG_FREERTOS_HZ: "1000"
-      CONFIG_USB_TASK_STACK_SIZE: "16384"
-      CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM: "y"
-      CONFIG_SLAVE_IDF_TARGET_ESP32C6: "y"
-      DCONFIG_USE_AUDIO_AAC_SUPPORT: "y"
-      DCONFIG_ESP_JPG_DECODE_ENABLE: "y"
-      DCONFIG_ESPHOME_ENABLE_PNGLE: "1"
 
+# 32 MB PSRAM (octal / "hex" mode). Required — the DSI framebuffer lives here.
 psram:
   mode: hex
-  speed: "200MHz"
+  speed: 200MHz
 
-preferences:
-  flash_write_interval: never
-
+# Internal LDO that powers the MIPI-DSI PHY (channel 3 → 2.5 V).
 esp_ldo:
   - channel: 3
-    id: dsi_power_phy1_pwr
-    adjustable: False
+    id: dsi_phy_ldo
+    adjustable: false
     voltage: 2.5V
-  - channel: 4
-    id: sd_power
-    adjustable: False
-    voltage: 2.7V
 
-debug:
-  id: debugger
-  update_interval: 5s
-
+# WiFi co-processor: on-board ESP32-C6 reached over 4-bit SDIO.
 esp32_hosted:
-  active_high: true
   variant: ESP32C6
+  active_high: true
   reset_pin: GPIO54
-  cmd_pin: GPIO19
   clk_pin: GPIO18
+  cmd_pin: GPIO19
   d0_pin: GPIO14
   d1_pin: GPIO15
   d2_pin: GPIO16
   d3_pin: GPIO17
 
-api:
-  reboot_timeout: 0s
-  homeassistant_services: true
-  encryption:
-  on_client_connected:
-    - if:
-        condition:
-          lambda: 'return (0 == client_info.find("Home Assistant "));'
-        then:
-          - lvgl.widget.show: lbl_hastatus
-          - lvgl.widget.hide: boot_screen
-  on_client_disconnected:
-    - if:
-        condition:
-          lambda: 'return (0 == client_info.find("Home Assistant "));'
-        then:
-          - lvgl.widget.hide: lbl_hastatus
-  services:
-    - service: show_image
-      variables:
-        index: int
-      then:
-        - lambda: id(picture_viewer_id)->show_image(index);
-    
-    - service: start_slideshow
-      then:
-        - lambda: id(picture_viewer_id)->start_slideshow();
-    
-    - service: stop_slideshow
-      then:
-        - lambda: id(picture_viewer_id)->stop_slideshow();
-
-logger:
-  level: DEBUG
-  hardware_uart: USB_SERIAL_JTAG
-  baud_rate: 115200
-  logs: 
-    usb_host: DEBUG
-    usb_client: DEBUG
-    usb_device: DEBUG
-    usb_uart: INFO
-    sd_mmc_card: DEBUG
-    storage_host: DEBUG
-    picture_viewer: DEBUG
-
-globals:
-  - id: cycleCounter
-    type: int
-    restore_value: no
-    initial_value: '0'
-  - id: button_press_timestamp
-    restore_value: no
-    type: uint32_t
-    initial_value: '0'
-  - id: last_touch_millis
-    type: int
-    restore_value: no
-    initial_value: '0'
-  - id: display_timeout
-    type: int
-    restore_value: true
-    initial_value: "1"
-  - id: ui_visible
-    type: bool
-    initial_value: 'true'
-  - id: ui_hide_timer
-    type: int
-    initial_value: '0'
-  - id: photo_hide_timer
-    type: int
-    initial_value: '0'
-  - id: slideshow_running
-    type: bool
-    initial_value: 'false'
-  - id: current_lvgl_page
-    type: std::string
-    initial_value: '"main"'
-
-captive_portal:
-
-web_server:
-  version: 3
-  auth:
-    username: 'trevor'
-    password: 'trevor'
-
-
+# Shared I²C bus: GT911 touch panel + display power/backlight chip (0x45).
 i2c:
   - id: i2c_bus_a
     sda: GPIO7
     scl: GPIO8
     frequency: 400kHz
-    scan: False
+    scan: false
 
-
-
-
-
-external_components:
-  - source: github://p1ngb4ck/esphome@dev
-    components: [audio, http_file_server, picture_viewer, uart, usb_host, usb_uart, usb_msc_host, sd_mmc_card, storage_host, transcoder, video_player, webdav_server]
-    refresh: 0s
-#  - source: github://p1ngb4ck/esphome@ch934-serial
-#    components: [usb_host, usb_uart]
-#    refresh: 0s
-#  - source: github://p1ngb4ck/webdavbox3@main
-#    components: [storage, webdavbox3]
-#    refresh: 0s
-#  - source: github://p1ngb4ck/esphome_sd_card@main
-#    components: [sd_mmc_card]
-#    refresh: 0s
-  - source: github://pr#9879 # Enables backlight control
-    components: [mipi_dsi]
-    refresh: 0s
-  - source: github://NonaSuomy/esphome@es8311-analog-mic
-    components: [ es8311 ]
-    refresh: 0s
-  - source: github://p1ngb4ck/testov5647@main
-    components: [tab5_camera, lvgl_camera_display]
-    refresh: 0s
-  - source: github://p1ngb4ck/esphome-ble-remote@master
-    components: [ ble_client_hid ]
-    refresh: 0s
-
-text_sensor:
-  - platform: template
-    name: "Camera Status Info"
-    id: camera_status_info
-    internal: true
-    update_interval: never  # Désactivé par défaut
-    lambda: |-
-      static char buf[100];
-      snprintf(buf, sizeof(buf), "%dx%d | %s | Buffer: %d KB",
-        id(picam).get_image_width(),
-        id(picam).get_image_height(),
-        id(picam).is_streaming() ? "STREAMING" : "IDLE",
-        id(picam).get_image_size() / 1024);
-      return {buf};
-   # 5. IP address
-  - platform: wifi_info
-    ip_address:
-      name: "IP Address"
-      id: wifi_ip_address
-      on_value:
-        then:
-          - lvgl.label.update:
-              id: ip_address_label
-              text: !lambda return id(wifi_ip_address).state.c_str();
-  # 6. MAC address
-  - platform: wifi_info
-    mac_address:
-      name: "WiFi MAC"
-      id: wifi_mac_address
-      on_value:
-        then:
-          - lvgl.label.update:
-              id: wifi_mac_label
-              text: !lambda return id(wifi_mac_address).state.c_str();
-  # 7. ESPHome version with compilation date
-  - platform: template
-    name: "ESPHome Version"
-    id: esphome_version
-    lambda: |-
-      return {ESPHOME_VERSION};
-    on_value:
-      then:
-        - lvgl.label.update:
-            id: esphome_version_label
-            text: !lambda "return id(esphome_version).state;"
-
+# ---------------------------------------------------------------------------
+#  Handy diagnostics, exposed to Home Assistant (optional — trim if you like).
+# ---------------------------------------------------------------------------
 sensor:
-  - platform: ble_client_hid
-    type: battery
-    ble_client_hid_id: ble_client_hid_1
-    name: "Remote Battery"
-  - platform: ble_client_hid
-    type: last_event_value
-    name: "Last Event Value"
-    on_raw_value:
-      then:
-        - lambda: |-
-            static const char *const TAG = "ble_hid_test";
-            ESP_LOGI(TAG, "%d", x);
-            return;
-  - platform: template
-    name: "Camera Frame Update"
-    id: camera_frame_sensor
-    internal: true
-    update_interval: never  # Désactivé par défaut
-    lambda: |-
-      static int frame_count = 0;
-      if (id(picam).is_streaming()) {
-        frame_count++;
-      }
-      return (float)frame_count;
-  # 1. Total SRAM memory usage
-  - platform: template
-    name: "SRAM Usage"
-    id: sram_usage
-    icon: mdi:memory
-    unit_of_measurement: "KB"
-    device_class: data_size
-    state_class: measurement
-    accuracy_decimals: 1
-    update_interval: 10s
-    lambda: |-
-      // Total SRAM size for ESP32-S3 = 512KB
-      const size_t total_sram = 512 * 1024;
-      size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-      size_t used_sram = total_sram - free_sram;
-      return used_sram / 1024.0; // Return used memory in KB
-    on_value:
-      then:
-        - lvgl.bar.update:
-            id: sram_memory_bar
-            value: !lambda |-
-              const size_t total_sram = 512 * 1024; // 512KB for ESP32-S3
-              size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-              size_t used_sram = total_sram - free_sram;
-              return (int)(((double)used_sram / total_sram) * 100);
-        - lvgl.label.update:
-            id: sram_memory_label
-            text: !lambda |-
-              const size_t total_sram = 512 * 1024;
-              size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-              size_t used_sram = total_sram - free_sram;
-              static char sram_buf[32];
-              snprintf(sram_buf, sizeof(sram_buf), "%.1f/%.0f KB", 
-                      used_sram/1024.0, total_sram/1024.0);
-              return sram_buf;
-  # 2. Total PSRAM memory usage
-  - platform: template
-    name: "PSRAM Usage"
-    id: psram_usage
-    icon: mdi:memory
-    unit_of_measurement: "MB"
-    device_class: data_size
-    state_class: measurement
-    accuracy_decimals: 1
-    update_interval: 10s
-    lambda: |-
-      // Total PSRAM size = 32MB
-      const size_t total_psram = 32768 * 1024;
-      size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-
-      // If PSRAM is not available, return 0
-      if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
-        return 0.0;
-      }
-
-      size_t used_psram = total_psram - free_psram;
-      return used_psram / (1024.0 * 1024.0); // Return used memory in MB
-    on_value:
-      then:
-        - lvgl.bar.update:
-            id: psram_memory_bar
-            value: !lambda |-
-              const size_t total_psram = 32768 * 1024; // 8MB
-              size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-
-              if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) return 0;
-
-              size_t used_psram = total_psram - free_psram;
-              return (int)(((double)used_psram / total_psram) * 100);
-        - lvgl.label.update:
-            id: psram_memory_label
-            text: !lambda |-
-              const size_t total_psram = 32768 * 1024;
-              size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-              static char psram_buf[32];
-
-              if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
-                snprintf(psram_buf, sizeof(psram_buf), "No PSRAM");
-              } else {
-                size_t used_psram = total_psram - free_psram;
-                snprintf(psram_buf, sizeof(psram_buf), "%.1f/%.0f MB", 
-                        used_psram/(1024.0*1024.0), total_psram/(1024.0*1024.0));
-              }
-              return psram_buf;
-  # 3. Chip temperature
-  - platform: internal_temperature
-    name: "ESP32 Internal Temperature"
-    id: esp32_temperature
-    update_interval: 30s
-    on_value:
-      then:
-        - lvgl.label.update:
-            id: chip_temperature_label
-            text:
-              format: "%.1f°C"
-              args: [id(esp32_temperature).state]
-  # 4. WiFi Signal Strength in dBm
   - platform: wifi_signal
     name: "WiFi Signal"
     id: wifi_signal_db
-    update_interval: 30s
-    unit_of_measurement: "dBm"
-    on_value:
-      then:
-        - lvgl.label.update:
-            id: wifi_signal_label
-            text:
-              format: "%.0f dBm"
-              args: [id(wifi_signal_db).state]
+    update_interval: 60s
+  - platform: internal_temperature
+    name: "CPU Temperature"
+    update_interval: 60s
 
-time:
-  - platform: host
-    id: host_time
-    timezone: Europe/Berlin
-  - platform: sntp
-    id: sntp_time
-    timezone: Europe/Berlin
-    servers:
-      - 0.pool.ntp.org
-      - 1.pool.ntp.org
-      - 2.pool.ntp.org
-    update_interval: 3h
-  - platform: homeassistant
-    id: timestamp
-    on_time:
-      - seconds: '*'
-        then:
-          - lvgl.label.update:
-              id: time_label
-              text: 
-                time_format: "%T"
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
 
 button:
-  - platform: template
-    name: "Play Test Sound 0"
-    on_press:
-      - media_player.speaker.play_on_device_media_file:
-          id: speaker_media_player_id
-          media_file: wake_sound_file
-
-number:
-  - platform: template
-    id: display_timeout_number
-    name: LVGL screen timeout
-    optimistic: true
-    unit_of_measurement: "m"
-    initial_value: 10
-    restore_value: true
-    min_value: -1
-    max_value: 720
-    step: 1
-    mode: box
-
-script:
-  # Show UI elements on touch
-  - id: toggle_ui
-    then:
-      - lvgl.widget.show: header
-      - lvgl.widget.show: navigation_footer
-      - delay: 3s
-      - lvgl.widget.hide: header
-      - lvgl.widget.hide: navigation_footer
-
-  # Reset Picture UI timer (called on any interaction)
-  - id: reset_ui_timer
-    mode: restart
-    then:
-      - lambda: |-
-          id(ui_hide_timer) = 3;  // 3 seconds until hide
-          // Show UI if hidden
-          if (!id(ui_visible)) {
-            lv_obj_clear_flag(id(header), LV_OBJ_FLAG_HIDDEN);
-            id(ui_visible) = true;
-          }
-
-  # Hide UI elements
-  - id: hide_ui
-    mode: single
-    then:
-      - lambda: |-
-          lv_obj_add_flag(id(header), LV_OBJ_FLAG_HIDDEN);
-          id(ui_visible) = false;
+  - platform: restart
+    name: "Restart"
