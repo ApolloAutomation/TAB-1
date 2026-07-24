@@ -1,0 +1,1245 @@
+# ============================================================================
+#  Display.yaml — DSI panel, GT911 touch, and a CONFIGURABLE tile dashboard.
+#  Pulled in as a package by TAB-1.yaml.
+#
+#  HOW IT WORKS
+#   - The main page is a 4x3 grid of 12 configurable tiles.
+#   - Each tile's Home Assistant entity is set from a text box (they appear in
+#     HA as "Tile N entity"). Type the entity_id, then RESTART the device and
+#     it subscribes to that entity. (Re-bind needs a restart by design.)
+#   - Long-press any tile to change its TYPE (Value / Switch / Dimmer / Button /
+#     Scene / Cover / Climate) via an on-screen picker. Type changes are live.
+#   - Swipe LEFT for the Settings page (screen brightness).
+#
+#  Tile behaviour lives in tiles.h (included from TAB-1.yaml).
+# ============================================================================
+
+color:
+  - id: bg_dark
+    hex: "0F1420"
+  - id: card_bg
+    hex: "1B2233"
+  - id: accent
+    hex: "3FA7F3"
+  - id: on_color
+    hex: "F4A900"
+  - id: text_primary
+    hex: "F2F4F8"
+  - id: text_muted
+    hex: "8A93A6"
+
+# --- Display power/backlight chip on the shared I2C bus (address 0x45) -------
+i2c_device:
+  - id: display_i2c
+    address: 0x45
+    i2c_id: i2c_bus_a
+
+# --- Capacitive touch panel -------------------------------------------------
+touchscreen:
+  - platform: gt911
+    id: touchscreen_id
+    i2c_id: i2c_bus_a
+    update_interval: 50ms
+    # If touch is mirrored/swapped on your unit, add e.g.:
+    #   transform: { swap_xy: true, mirror_x: true, mirror_y: false }
+
+# --- 10.1" MIPI-DSI panel (rotation lives in the LVGL block) -----------------
+display:
+  - platform: mipi_dsi
+    id: dsi_display
+    model: WAVESHARE-P4-NANO-10.1
+    auto_clear_enabled: false
+    update_interval: never
+
+# --- Clock (from Home Assistant) --------------------------------------------
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - then:
+          - lvgl.label.update:
+              id: lbl_time
+              text: { time_format: "%H:%M", time: ha_time }
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+          - lvgl.label.update:
+              id: lbl_time
+              text: { time_format: "%H:%M", time: ha_time }
+
+# --- Header HA-connection indicator -----------------------------------------
+binary_sensor:
+  - platform: status
+    id: sys_status
+    on_state:
+      - lvgl.label.update:
+          id: lbl_ha_status
+          text: !lambda 'return std::string(x ? "Connected" : "Offline");'
+
+# ============================================================================
+#  Per-tile entity boxes (editable in Home Assistant, persisted across reboots)
+#  >>> Type an entity_id into each, then RESTART the device. <<<
+# ============================================================================
+text:
+  - platform: template
+    id: t0_entity
+    name: "Tile 1 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t1_entity
+    name: "Tile 2 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t2_entity
+    name: "Tile 3 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t3_entity
+    name: "Tile 4 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t4_entity
+    name: "Tile 5 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t5_entity
+    name: "Tile 6 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t6_entity
+    name: "Tile 7 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t7_entity
+    name: "Tile 8 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t8_entity
+    name: "Tile 9 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t9_entity
+    name: "Tile 10 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t10_entity
+    name: "Tile 11 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t11_entity
+    name: "Tile 12 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+
+globals:
+  # Tile type per slot (index into tiles::TileType). Persisted; changed on-device.
+  - id: tile_types
+    type: 'std::array<int8_t, 12>'
+    restore_value: true
+    initial_value: 'std::array<int8_t, 12>{}'
+  # Tile size per slot: 0=removed, 1=Small(1x1), 2=Wide(2x1), 3=Tall(1x2), 4=Big(2x2).
+  # Default: all Small (a full 4x3 grid of 12 tiles).
+  - id: tile_sizes
+    type: 'std::array<int8_t, 12>'
+    restore_value: true
+    initial_value: 'std::array<int8_t, 12>{1,1,1,1,1,1,1,1,1,1,1,1}'
+  # Which tile a long-press is currently editing.
+  - id: active_tile
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+script:
+  # Repaint every tile's name / type-badge / slider from current state.
+  - id: render_tiles
+    then:
+      - lambda: |-
+          lv_obj_t *names_[12]   = { id(tn0), id(tn1), id(tn2), id(tn3), id(tn4), id(tn5), id(tn6), id(tn7), id(tn8), id(tn9), id(tn10), id(tn11) };
+          lv_obj_t *badges_[12]  = { id(tt0), id(tt1), id(tt2), id(tt3), id(tt4), id(tt5), id(tt6), id(tt7), id(tt8), id(tt9), id(tt10), id(tt11) };
+          lv_obj_t *sliders_[12] = { id(ts0), id(ts1), id(ts2), id(ts3), id(ts4), id(ts5), id(ts6), id(ts7), id(ts8), id(ts9), id(ts10), id(ts11) };
+          std::string ents_[12]  = { id(t0_entity).state, id(t1_entity).state, id(t2_entity).state, id(t3_entity).state, id(t4_entity).state, id(t5_entity).state, id(t6_entity).state, id(t7_entity).state, id(t8_entity).state, id(t9_entity).state, id(t10_entity).state, id(t11_entity).state };
+          for (int i = 0; i < 12; i++) {
+            int ty = id(tile_types)[i];
+            lv_label_set_text(names_[i], tiles::friendly_name(ents_[i]).c_str());
+            lv_label_set_text(badges_[i], tiles::type_name(ty));
+            if (tiles::wants_slider(ty)) {
+              lv_obj_clear_flag(sliders_[i], LV_OBJ_FLAG_HIDDEN);
+              lv_slider_set_range(sliders_[i], ty == tiles::TT_CLIMATE ? 15 : 0,
+                                               ty == tiles::TT_CLIMATE ? 30 : 100);
+            } else {
+              lv_obj_add_flag(sliders_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+          }
+
+  # Pack the tiles into the 4x3 grid according to their size, and position them.
+  - id: layout_tiles
+    then:
+      - lambda: |-
+          static tiles::TileRect rects[12];
+          tiles::layout(id(tile_sizes).data(), 12, rects, 1232, 700, 16);
+          lv_obj_t *tw_[12] = { id(tile0), id(tile1), id(tile2), id(tile3), id(tile4), id(tile5), id(tile6), id(tile7), id(tile8), id(tile9), id(tile10), id(tile11) };
+          for (int i = 0; i < 12; i++) {
+            if (rects[i].shown) {
+              lv_obj_clear_flag(tw_[i], LV_OBJ_FLAG_HIDDEN);
+              lv_obj_set_pos(tw_[i], rects[i].x, rects[i].y);
+              lv_obj_set_size(tw_[i], rects[i].w, rects[i].h);
+            } else {
+              lv_obj_add_flag(tw_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+          }
+
+  # Subscribe each configured entity to its tile (called once at boot).
+  - id: subscribe_ha
+    then:
+      - lambda: |-
+          std::string e0 = id(t0_entity).state;
+          if (!e0.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e0, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv0), tiles::format_state(id(tile_types)[0], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile0), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile0), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e1 = id(t1_entity).state;
+          if (!e1.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e1, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv1), tiles::format_state(id(tile_types)[1], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile1), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile1), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e2 = id(t2_entity).state;
+          if (!e2.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e2, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv2), tiles::format_state(id(tile_types)[2], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile2), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile2), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e3 = id(t3_entity).state;
+          if (!e3.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e3, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv3), tiles::format_state(id(tile_types)[3], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile3), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile3), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e4 = id(t4_entity).state;
+          if (!e4.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e4, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv4), tiles::format_state(id(tile_types)[4], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile4), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile4), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e5 = id(t5_entity).state;
+          if (!e5.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e5, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv5), tiles::format_state(id(tile_types)[5], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile5), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile5), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e6 = id(t6_entity).state;
+          if (!e6.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e6, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv6), tiles::format_state(id(tile_types)[6], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile6), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile6), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e7 = id(t7_entity).state;
+          if (!e7.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e7, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv7), tiles::format_state(id(tile_types)[7], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile7), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile7), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e8 = id(t8_entity).state;
+          if (!e8.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e8, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv8), tiles::format_state(id(tile_types)[8], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile8), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile8), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e9 = id(t9_entity).state;
+          if (!e9.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e9, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv9), tiles::format_state(id(tile_types)[9], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile9), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile9), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e10 = id(t10_entity).state;
+          if (!e10.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e10, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv10), tiles::format_state(id(tile_types)[10], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile10), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile10), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e11 = id(t11_entity).state;
+          if (!e11.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e11, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              lv_label_set_text(id(tv11), tiles::format_state(id(tile_types)[11], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile11), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile11), LV_STATE_CHECKED);
+            }));
+          }
+
+# ============================================================================
+#  The dashboard
+# ============================================================================
+lvgl:
+  displays:
+    - dsi_display
+  touchscreens:
+    - touchscreen_id
+  rotation: 270°
+  default_font: montserrat_20
+  bg_color: bg_dark
+
+  theme:
+    label:
+      text_color: text_primary
+
+  style_definitions:
+    - id: card
+      bg_color: card_bg
+      bg_opa: COVER
+      radius: 16
+      border_width: 0
+      pad_all: 18
+      text_color: text_primary
+    - id: card_title
+      text_color: text_muted
+      text_font: montserrat_20
+    - id: tile_card
+      bg_color: card_bg
+      bg_opa: COVER
+      radius: 16
+      border_width: 0
+      pad_all: 14
+      text_color: text_primary
+    - id: tile_name
+      text_color: text_primary
+      text_font: montserrat_20
+    - id: tile_badge
+      text_color: text_muted
+      text_font: montserrat_16
+    - id: tile_value
+      text_color: accent
+      text_font: montserrat_36
+
+  # ---- Long-press tile editor: type + size (floats above everything) -------
+  top_layer:
+    widgets:
+      - obj:
+          id: type_picker
+          hidden: true
+          align: CENTER
+          width: 680
+          height: 560
+          bg_color: card_bg
+          bg_opa: COVER
+          radius: 18
+          border_width: 0
+          widgets:
+            - label: { text: "Edit tile", styles: card_title, align: TOP_MID, y: 16 }
+            - label: { text: "Type", styles: card_title, align: TOP_LEFT, x: 78, y: 56 }
+            - label: { text: "Size", styles: card_title, align: TOP_RIGHT, x: -86, y: 56 }
+            - roller:
+                id: type_roller
+                align: CENTER
+                x: -160
+                y: -18
+                width: 280
+                options: ["Value", "Switch", "Dimmer", "Button", "Scene", "Cover", "Climate"]
+                visible_row_count: 5
+            - roller:
+                id: size_roller
+                align: CENTER
+                x: 160
+                y: -18
+                width: 280
+                options: ["Small", "Wide", "Tall", "Big"]
+                visible_row_count: 5
+            - button:
+                align: BOTTOM_LEFT
+                x: 18
+                y: -18
+                width: 200
+                height: 62
+                bg_color: accent
+                widgets:
+                  - label: { text: "Set", align: CENTER, text_color: bg_dark }
+                on_click:
+                  - lambda: |-
+                      int i = id(active_tile);
+                      id(tile_types)[i] = (int8_t) id(type_roller)->get_selected_index();
+                      id(tile_sizes)[i] = (int8_t) (id(size_roller)->get_selected_index() + 1);
+                  - lvgl.widget.hide: type_picker
+                  - script.execute: render_tiles
+                  - script.execute: layout_tiles
+            - button:
+                align: BOTTOM_MID
+                y: -18
+                width: 200
+                height: 62
+                widgets:
+                  - label: { text: "Remove", align: CENTER }
+                on_click:
+                  - lambda: 'id(tile_sizes)[id(active_tile)] = 0;'
+                  - lvgl.widget.hide: type_picker
+                  - script.execute: layout_tiles
+            - button:
+                align: BOTTOM_RIGHT
+                x: -18
+                y: -18
+                width: 200
+                height: 62
+                widgets:
+                  - label: { text: "Cancel", align: CENTER }
+                on_click:
+                  - lvgl.widget.hide: type_picker
+
+  pages:
+    # ==================== Main: the tile grid =============================
+    - id: main_page
+      bg_color: bg_dark
+      scrollbar_mode: "OFF"
+      pad_all: 0
+      on_swipe_left:
+        - lvgl.page.show: { id: settings_page, animation: MOVE_LEFT, time: 250ms }
+      widgets:
+        # Header
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 1280
+            height: 64
+            bg_color: bg_dark
+            bg_opa: COVER
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label: { id: lbl_time, text: "--:--", text_font: montserrat_28, align: LEFT_MID, x: 24 }
+              - label: { text: "Home", text_font: montserrat_28, align: CENTER }
+              - label: { id: lbl_ha_status, text: "Offline", text_color: text_muted, align: RIGHT_MID, x: -24 }
+        # Tile grid (tiles are positioned/sized at runtime by layout_tiles)
+        - obj:
+            align: TOP_MID
+            y: 72
+            width: 1232
+            height: 700
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            scrollbar_mode: "OFF"
+            widgets:
+              - obj:
+                  id: tile0
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn0, text: "Tile 1", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt0, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv0, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts0
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[0] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t0_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[0] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t0_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[0]) && !id(t0_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[0], id(t0_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t0_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 0;
+                        id(type_roller)->set_selected_index(id(tile_types)[0], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[0];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile1
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn1, text: "Tile 2", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt1, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv1, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts1
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[1] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t1_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[1] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t1_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[1]) && !id(t1_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[1], id(t1_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t1_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 1;
+                        id(type_roller)->set_selected_index(id(tile_types)[1], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[1];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile2
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn2, text: "Tile 3", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt2, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv2, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts2
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[2] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t2_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[2] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t2_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[2]) && !id(t2_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[2], id(t2_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t2_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 2;
+                        id(type_roller)->set_selected_index(id(tile_types)[2], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[2];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile3
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn3, text: "Tile 4", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt3, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv3, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts3
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[3] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t3_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[3] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t3_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[3]) && !id(t3_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[3], id(t3_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t3_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 3;
+                        id(type_roller)->set_selected_index(id(tile_types)[3], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[3];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile4
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn4, text: "Tile 5", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt4, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv4, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts4
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[4] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t4_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[4] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t4_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[4]) && !id(t4_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[4], id(t4_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t4_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 4;
+                        id(type_roller)->set_selected_index(id(tile_types)[4], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[4];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile5
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn5, text: "Tile 6", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt5, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv5, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts5
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[5] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t5_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[5] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t5_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[5]) && !id(t5_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[5], id(t5_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t5_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 5;
+                        id(type_roller)->set_selected_index(id(tile_types)[5], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[5];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile6
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn6, text: "Tile 7", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt6, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv6, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts6
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[6] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t6_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[6] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t6_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[6]) && !id(t6_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[6], id(t6_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t6_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 6;
+                        id(type_roller)->set_selected_index(id(tile_types)[6], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[6];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile7
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn7, text: "Tile 8", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt7, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv7, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts7
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[7] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t7_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[7] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t7_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[7]) && !id(t7_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[7], id(t7_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t7_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 7;
+                        id(type_roller)->set_selected_index(id(tile_types)[7], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[7];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile8
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn8, text: "Tile 9", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt8, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv8, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts8
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[8] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t8_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[8] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t8_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[8]) && !id(t8_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[8], id(t8_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t8_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 8;
+                        id(type_roller)->set_selected_index(id(tile_types)[8], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[8];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile9
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn9, text: "Tile 10", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt9, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv9, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts9
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[9] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t9_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[9] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t9_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[9]) && !id(t9_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[9], id(t9_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t9_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 9;
+                        id(type_roller)->set_selected_index(id(tile_types)[9], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[9];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile10
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn10, text: "Tile 11", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt10, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv10, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts10
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[10] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t10_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[10] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t10_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[10]) && !id(t10_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[10], id(t10_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t10_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 10;
+                        id(type_roller)->set_selected_index(id(tile_types)[10], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[10];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile11
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn11, text: "Tile 12", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt11, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv11, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - slider:
+                        id: ts11
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 18
+                        radius: 9
+                        indicator: { radius: 9 }
+                        knob: { pad_all: 6, radius: 9 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[11] == tiles::TT_DIMMER;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data:
+                                      entity_id: !lambda 'return id(t11_entity).state;'
+                                      brightness_pct: !lambda 'return (int) x;'
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[11] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data:
+                                      entity_id: !lambda 'return id(t11_entity).state;'
+                                      temperature: !lambda 'return x;'
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return tiles::tap_fires(id(tile_types)[11]) && !id(t11_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[11], id(t11_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t11_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 11;
+                        id(type_roller)->set_selected_index(id(tile_types)[11], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[11];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+
+    # ==================== Settings (swipe left to reach) ==================
+    - id: settings_page
+      bg_color: bg_dark
+      scrollbar_mode: "OFF"
+      on_swipe_right:
+        - lvgl.page.show: { id: main_page, animation: MOVE_RIGHT, time: 250ms }
+      widgets:
+        - label: { text: "Settings", text_font: montserrat_28, align: TOP_MID, y: 24 }
+        - obj:
+            align: CENTER
+            width: 900
+            height: 170
+            styles: card
+            widgets:
+              - label: { text: "Screen Brightness", styles: card_title, align: TOP_LEFT }
+              - slider:
+                  id: sld_backlight
+                  align: BOTTOM_MID
+                  width: 100%
+                  height: 28
+                  radius: 14
+                  min_value: 10
+                  max_value: 100
+                  value: 100
+                  indicator: { radius: 14 }
+                  knob: { pad_all: 8, radius: 14 }
+                  on_value:
+                    - lambda: |-
+                        uint8_t duty = (uint8_t) roundf(x * 2.55f);
+                        if (duty < 12) duty = 12;
+                        id(display_i2c).write_byte(0x96, duty);
+        - button:
+            align: CENTER
+            y: 150
+            width: 320
+            height: 64
+            bg_color: accent
+            widgets:
+              - label: { text: "+ Add tile", align: CENTER, text_color: bg_dark }
+            on_click:
+              # Bring back the first removed slot as a Small tile.
+              - lambda: |-
+                  for (int i = 0; i < 12; i++) {
+                    if (id(tile_sizes)[i] == 0) { id(tile_sizes)[i] = 1; break; }
+                  }
+              - script.execute: layout_tiles
+        - label: { text: "Long-press a tile to change its type or size. Swipe right to go back.", styles: card_title, align: BOTTOM_MID, y: -18 }

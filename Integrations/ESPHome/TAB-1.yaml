@@ -19,6 +19,8 @@ esphome:
   friendly_name: ${friendly_name}
   name_add_mac_suffix: true
   min_version: 2025.11.0
+  includes:
+    - tiles.h
   project:
     name: "ApolloAutomation.TAB-1"
     version: "${version}"
@@ -37,6 +39,13 @@ esphome:
         - delay: 100ms
         - lambda: id(display_i2c).write_byte(0x96, 0xFF);
         - delay: 1s
+    # After components are up: paint the tiles and subscribe to the HA entities
+    # named in the per-tile text boxes.
+    - priority: 100.0
+      then:
+        - script.execute: render_tiles
+        - script.execute: layout_tiles
+        - script.execute: subscribe_ha
 
 packages:
   core: !include Core.yaml
@@ -52,6 +61,10 @@ wifi:
 captive_portal:
 
 api:
+  # The tiles both call HA actions and subscribe to HA entity states at runtime,
+  # so enable both explicitly (no static homeassistant.* entities are defined).
+  homeassistant_services: true
+  homeassistant_states: true
   # Recommended: add an encryption key so Home Assistant can pair securely.
   # In HA the key is shown when you add the device; paste it here:
   # encryption:
