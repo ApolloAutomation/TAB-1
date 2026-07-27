@@ -70,6 +70,11 @@ api:
   # encryption:
   #   key: "PUT-YOUR-32-BYTE-BASE64-KEY-HERE=="
 
+# Used by online_image to fetch Picture / Camera tile images.
+http_request:
+  timeout: 10s
+  verify_ssl: false
+
 ota:
   - platform: esphome
 
