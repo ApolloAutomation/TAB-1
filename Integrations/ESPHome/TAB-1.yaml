@@ -1,12 +1,15 @@
 # ============================================================================
 #  Apollo TAB-1 · Home Assistant touch dashboard
-#  Waveshare ESP32-P4-NANO + 10.1" DSI LCD (JD9365, 1280×800)
+#  ESP32-P4 + C6 · 10.1" 800×1280 MIPI-DSI touch panel
 #
-#  Flash THIS file. It pulls in two packages:
-#     Core.yaml     — board, PSRAM, WiFi (via C6), power rails, I²C
-#     Display.yaml  — DSI panel, GT911 touch, and the LVGL dashboard
+#  Flash THIS file. It pulls in three packages:
+#     Core.yaml          — SoC, PSRAM, WiFi (via C6), DSI PHY LDO, I²C bus
+#     boards/<board>.yaml — panel, touch controller, backlight (pick one below)
+#     Display.yaml       — the LVGL tile dashboard
 #
-#  Everything is mainline ESPHome (2025.11+). No external components, no forks.
+#  Everything is mainline ESPHome (2026.10+). No external components, no forks;
+#  tiles.h (tile logic) and fast_display.h (fast landscape flush) are plain
+#  local includes.
 # ============================================================================
 
 substitutions:
@@ -18,37 +21,35 @@ esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: true
-  min_version: 2025.11.0
+  min_version: 2026.10.0
+  # Run the main loop every 2 ms instead of 16 ms. The touch interrupt doesn't
+  # wake the loop, so this cuts up to ~14 ms off every touch-to-screen step.
+  loop_interval: 2ms
   includes:
     - tiles.h
+    - fast_display.h
   project:
     name: "ApolloAutomation.TAB-1"
     version: "${version}"
   platformio_options:
-    board_build.flash_mode: dio
     build_flags:
       - -D LV_MEMCPY_MEMSET_STD=1
-  # Power up the panel rail + backlight. The 0x45 chip on i2c_bus_a gates both;
-  # this must run before the display initialises (priority > display's 790).
   on_boot:
-    - priority: 850.0
-      then:
-        - lambda: id(display_i2c).write_byte(0x95, 0x11);
-        - lambda: id(display_i2c).write_byte(0x95, 0x17);
-        - lambda: id(display_i2c).write_byte(0x96, 0x00);
-        - delay: 100ms
-        - lambda: id(display_i2c).write_byte(0x96, 0xFF);
-        - delay: 1s
     # After components are up: paint the tiles and subscribe to the HA entities
     # named in the per-tile text boxes.
     - priority: 100.0
       then:
+        # Faster landscape flush + snappier swipe detection (see fast_display.h).
+        - lambda: fast_display::setup(id(dsi_display));
         - script.execute: render_tiles
         - script.execute: layout_tiles
         - script.execute: subscribe_ha
 
 packages:
   core: !include Core.yaml
+  # Hardware: uncomment exactly ONE board.
+  board: !include boards/guition-jc8012p4a1.yaml
+  # board: !include boards/waveshare-p4-nano-10.yaml
   display: !include Display.yaml
 
 # --- Connectivity -----------------------------------------------------------

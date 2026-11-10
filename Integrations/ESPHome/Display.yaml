@@ -1,5 +1,6 @@
 # ============================================================================
-#  Display.yaml — GENERATED. DSI panel, GT911 touch, and the tile dashboard.
+#  Display.yaml — GENERATED. The tile dashboard UI. Board hardware (panel,
+#  touch, backlight) lives in boards/*.yaml, selected in TAB-1.yaml.
 #  Behaviour lives in tiles.h (included from TAB-1.yaml).
 #
 #   - Main page: up to 12 configurable tiles in a 4x3 cell grid.
@@ -14,6 +15,8 @@ color:
     hex: "0F1420"
   - id: card_bg
     hex: "1B2233"
+  - id: card_pressed       # instant tap feedback, before Home Assistant answers
+    hex: "2A3550"
   - id: accent
     hex: "3FA7F3"
   - id: on_color
@@ -22,25 +25,6 @@ color:
     hex: "F2F4F8"
   - id: text_muted
     hex: "8A93A6"
-
-i2c_device:
-  - id: display_i2c
-    address: 0x45
-    i2c_id: i2c_bus_a
-
-touchscreen:
-  - platform: gt911
-    id: touchscreen_id
-    i2c_id: i2c_bus_a
-    update_interval: 50ms
-    # If touch is mirrored/swapped: transform: { swap_xy: true, mirror_x: true }
-
-display:
-  - platform: mipi_dsi
-    id: dsi_display
-    model: WAVESHARE-P4-NANO-10.1
-    auto_clear_enabled: false
-    update_interval: never
 
 time:
   - platform: homeassistant
@@ -609,6 +593,7 @@ lvgl:
     - touchscreen_id: touchscreen_id
       long_press_time: 900ms      # longer hold so swipes don't open the editor
   rotation: 270°
+  buffer_size: 12%   # 1/8 screen → fits internal SRAM; much faster than a PSRAM buffer
   default_font: montserrat_20
   bg_color: bg_dark
 
@@ -793,7 +778,10 @@ lvgl:
       scrollbar_mode: "OFF"
       pad_all: 0
       on_swipe_left:
-        - lvgl.page.show: { id: settings_page, animation: MOVE_LEFT, time: 250ms }
+        # The release that ends a swipe would also "click" the tile under the
+        # finger (toggling it); wait_release swallows it.
+        - lambda: 'lv_indev_wait_release(lv_indev_active());'
+        - lvgl.page.show: { id: settings_page, animation: NONE }
       widgets:
         - obj:
             align: TOP_MID
@@ -805,6 +793,7 @@ lvgl:
             border_width: 0
             radius: 0
             pad_all: 0
+            scrollable: false
             widgets:
               - label: { id: lbl_time, text: "--:--", text_font: montserrat_28, align: LEFT_MID, x: 24 }
               - label: { text: "Home", text_font: montserrat_28, align: CENTER }
@@ -818,6 +807,7 @@ lvgl:
             border_width: 0
             pad_all: 0
             scrollbar_mode: "OFF"
+            scrollable: false
             widgets:
               - obj:
                   id: tile0
@@ -825,6 +815,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -846,35 +839,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g0_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g0_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts0
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -922,6 +918,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -943,35 +942,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g1_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g1_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts1
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1019,6 +1021,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1040,35 +1045,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g2_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g2_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts2
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1116,6 +1124,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1137,35 +1148,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g3_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g3_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts3
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1213,6 +1227,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1234,35 +1251,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g4_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g4_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts4
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1310,6 +1330,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1331,35 +1354,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g5_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g5_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts5
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1407,6 +1433,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1428,35 +1457,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g6_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g6_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts6
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1504,6 +1536,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1525,35 +1560,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g7_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g7_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts7
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1601,6 +1639,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1622,35 +1663,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g8_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g8_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts8
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1698,6 +1742,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1719,35 +1766,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g9_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g9_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts9
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1795,6 +1845,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1816,35 +1869,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g10_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g10_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts10
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1892,6 +1948,9 @@ lvgl:
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -1913,35 +1972,38 @@ lvgl:
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: { type: flex, flex_flow: ROW, pad_column: 2 }
                         widgets:
-                          - bar: { id: g11_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
-                          - bar: { id: g11_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_0, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_1, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_2, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_3, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_4, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_5, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_6, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_7, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_8, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_9, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_10, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_11, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_12, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_13, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_14, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_15, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_16, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_17, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_18, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_19, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_20, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_21, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_22, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_23, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: { bg_color: accent } }
                     - slider:
                         id: ts11
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -1989,7 +2051,8 @@ lvgl:
       bg_color: bg_dark
       scrollbar_mode: "OFF"
       on_swipe_right:
-        - lvgl.page.show: { id: main_page, animation: MOVE_RIGHT, time: 250ms }
+        - lambda: 'lv_indev_wait_release(lv_indev_active());'
+        - lvgl.page.show: { id: main_page, animation: NONE }
       widgets:
         - label: { text: "Settings", text_font: montserrat_28, align: TOP_MID, y: 24 }
         - obj:
@@ -2002,6 +2065,7 @@ lvgl:
               - label: { text: "Screen Brightness", styles: card_title, align: TOP_LEFT }
               - slider:
                   id: sld_backlight
+                  gesture_bubble: false
                   align: BOTTOM_MID
                   width: 100%
                   height: 28
@@ -2012,10 +2076,9 @@ lvgl:
                   indicator: { radius: 14 }
                   knob: { pad_all: 8, radius: 14 }
                   on_value:
-                    - lambda: |-
-                        uint8_t duty = (uint8_t) roundf(x * 2.55f);
-                        if (duty < 12) duty = 12;
-                        id(display_i2c).write_byte(0x96, duty);
+                    - script.execute:
+                        id: set_backlight
+                        percent: !lambda 'return x;'
         - obj:
             align: TOP_MID
             y: 260
