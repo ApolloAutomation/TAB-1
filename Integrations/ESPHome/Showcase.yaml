@@ -1,0 +1,135 @@
+# ============================================================================
+#  Showcase.yaml — fonts, images and LVGL setup for the showcase firmware.
+#  Pulled in as a package by TAB-1-showcase.yaml. The pages themselves are
+#  built at runtime by showcase.h; this file only provides what that code
+#  needs from ESPHome: icon fonts, the pre-rendered images, the LVGL widget
+#  types and font sizes to compile in, the clock, and the start-up call.
+# ============================================================================
+
+# Real time once Home Assistant is connected; until then showcase.h runs its
+# own free-running clock.
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# Material Design Icons at the three sizes the cards use. The glyph list must
+# match the IC_* defines in showcase.h.
+font:
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: sc_icons_28
+    size: 28
+    bpp: 4
+    glyphs: &sc_glyphs [
+      "\U000F02DC", "\U000F04B9", "\U000F0A70", "\U000F02E3", "\U000F0F54", "\U000F0388",
+      "\U000F068A", "\U000F03D8", "\U000F0150", "\U000F0335", "\U000F0336", "\U000F1253",
+      "\U000F033E", "\U000F033F", "\U000F099E", "\U000F099D", "\U000F050F", "\U000F0D85",
+      "\U000F0D80", "\U000F081A", "\U000F1239", "\U000F09A0", "\U000F0142", "\U000F0769",
+      "\U000F08DD", "\U000F1051", "\U000F091D", "\U000F06B5", "\U000F0502", "\U000F058E",
+      "\U000F0FCE", "\U000F0CD1", "\U000F0425", "\U000F0415", "\U000F0374", "\U000F040A",
+      "\U000F03E4", "\U000F04AD", "\U000F04AE", "\U000F0238", "\U000F0717", "\U000F032A",
+      "\U000F0210", "\U000F109F", "\U000F0AAC", "\U000F028F", "\U000F04DE", "\U000F0241",
+      "\U000F065A", "\U000F00AC", "\U000F1011", "\U000F005D", "\U000F0045", "\U000F04DB",
+      "\U000F0594", "\U000F05A8", "\U000F00BE", "\U000F0020", "\U000F0595", "\U000F0590",
+      "\U000F0599", "\U000F0597", "\U000F07E4", "\U000F0A72", "\U000F04C3", "\U000F057E",
+      "\U000F07AE", "\U000F06D9", "\U000F06DA", "\U000F012C", "\U000F05E0", "\U000F0156",
+      "\U000F00DF", "\U000F0521", "\U000F0522", "\U000F06A5",
+      ]
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: sc_icons_40
+    size: 40
+    bpp: 4
+    glyphs: *sc_glyphs
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: sc_icons_64
+    size: 64
+    bpp: 4
+    glyphs: *sc_glyphs
+
+# Made by tools/gen_showcase_assets.py. The wallpaper is already dithered to
+# exact RGB565 colours; the clock digits are 8-bit coverage masks that LVGL
+# tints at draw time.
+image:
+  - platform: file
+    file: "images/showcase_wall.png"
+    id: sc_wall
+    type: RGB565
+  - { platform: file, file: "images/showcase_d0.png", id: sc_d0, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d1.png", id: sc_d1, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d2.png", id: sc_d2, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d3.png", id: sc_d3, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d4.png", id: sc_d4, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d5.png", id: sc_d5, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d6.png", id: sc_d6, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d7.png", id: sc_d7, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d8.png", id: sc_d8, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_d9.png", id: sc_d9, type: GRAYSCALE, transparency: alpha_channel }
+  - { platform: file, file: "images/showcase_dc.png", id: sc_dc, type: GRAYSCALE, transparency: alpha_channel }
+
+script:
+  # Hands the ESPHome-owned fonts and images to showcase.h and builds the UI.
+  - id: showcase_start
+    then:
+      - lambda: |-
+          static showcase::Assets a;
+          a.icons_28 = id(sc_icons_28)->get_lv_font();
+          a.icons_40 = id(sc_icons_40)->get_lv_font();
+          a.icons_64 = id(sc_icons_64)->get_lv_font();
+          a.wallpaper = id(sc_wall)->get_lv_image_dsc();
+          image::Image *digits[11] = {id(sc_d0), id(sc_d1), id(sc_d2), id(sc_d3), id(sc_d4), id(sc_d5),
+                                      id(sc_d6), id(sc_d7), id(sc_d8), id(sc_d9), id(sc_dc)};
+          for (int i = 0; i < 11; i++)
+            a.digits[i] = digits[i]->get_lv_image_dsc();
+          a.now_us = []() -> uint32_t { return micros(); };
+          a.log = [](const char *line) { ESP_LOGI("showcase", "%s", line); };
+          a.set_backlight = [](int percent) { id(set_backlight).execute((float) percent); };
+          showcase::build(lv_screen_active(), a);
+          ESP_LOGI("showcase", "free heap after build: internal %u bytes, PSRAM %u bytes",
+                   (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                   (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+
+interval:
+  # Keep the on-screen clock on real time whenever Home Assistant has set it.
+  - interval: 5s
+    then:
+      - lambda: |-
+          auto t = id(ha_time).now();
+          if (t.is_valid())
+            showcase::set_clock(t.year, t.month, t.day_of_month, t.day_of_week, t.hour, t.minute, t.second);
+
+lvgl:
+  displays:
+    - dsi_display
+  touchscreens:
+    - touchscreen_id: touchscreen_id
+      long_press_time: 900ms
+  rotation: 270°
+  buffer_size: 12%   # 1/8 screen → fits internal SRAM; much faster than a PSRAM buffer
+  default_font: montserrat_20
+  bg_color: 0x000000
+
+  # ESPHome only compiles in the LVGL widget types, built-in font sizes and
+  # image formats that appear in YAML. showcase.h creates its widgets in C++,
+  # so this hidden container names everything it uses. Nothing here is shown.
+  widgets:
+    - obj:
+        id: sc_enable
+        hidden: true
+        x: 0
+        y: 0
+        width: 4
+        height: 4
+        widgets:
+          - label: { text: " ", text_font: montserrat_16 }
+          - label: { text: " ", text_font: montserrat_20 }
+          - label: { text: " ", text_font: montserrat_28 }
+          - label: { text: " ", text_font: montserrat_36 }
+          - label: { text: " ", text_font: montserrat_48 }
+          - label: { text: " ", text_font: sc_icons_28 }
+          - label: { text: " ", text_font: sc_icons_40 }
+          - label: { text: " ", text_font: sc_icons_64 }
+          - image: { src: sc_wall }      # RGB565 image drawing
+          - image: { src: sc_d0 }        # 8-bit mask (A8) image drawing
+          - line: { points: [ "0, 0", "1, 1" ] }
+          - arc: { value: 0 }
+          - slider: { value: 0 }
+          - bar: { value: 0 }
