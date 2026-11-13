@@ -27,8 +27,9 @@ on:
 jobs:
   build-and-publish:
     # Needs Workflows #36 or later: older versions build releases with
-    # esphome/workflows that rejects the ESP32-P4.
-    uses: ApolloAutomation/Workflows/.github/workflows/build.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    # esphome/workflows that rejects the ESP32-P4. #37 gives each job of
+    # the shared build only the access it uses.
+    uses: ApolloAutomation/Workflows/.github/workflows/build.yml@a4f37688fcaeb0e00c61192f78d608eed061d17d # main 2026-11-13
     permissions:
       contents: write
       pages: write
