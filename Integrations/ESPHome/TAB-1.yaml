@@ -1,0 +1,88 @@
+# ============================================================================
+#  Apollo TAB-1 · Home Assistant touch dashboard
+#  ESP32-P4 + C6 · 10.1" 800×1280 MIPI-DSI touch panel
+#
+#  Flash THIS file. It pulls in three packages:
+#     Core.yaml          — SoC, PSRAM, WiFi (via C6), DSI PHY LDO, I²C bus
+#     boards/<board>.yaml — panel, touch controller, backlight (pick one below)
+#     Display.yaml       — the LVGL tile dashboard
+#
+#  Everything is mainline ESPHome (2026.10+). No external components, no forks;
+#  tiles.h (tile logic) and fast_display.h (fast landscape flush) are plain
+#  local includes.
+# ============================================================================
+
+substitutions:
+  name: apollo-tab-1
+  friendly_name: Apollo TAB-1
+  version: "26.07.24.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  min_version: 2026.10.0
+  # Run the main loop every 2 ms instead of 16 ms. The touch interrupt doesn't
+  # wake the loop, so this cuts up to ~14 ms off every touch-to-screen step.
+  loop_interval: 2ms
+  includes:
+    - tiles.h
+    - fast_display.h
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
+  platformio_options:
+    build_flags:
+      - -D LV_MEMCPY_MEMSET_STD=1
+  on_boot:
+    # After components are up: paint the tiles and subscribe to the HA entities
+    # named in the per-tile text boxes.
+    - priority: 100.0
+      then:
+        # Faster landscape flush + snappier swipe detection (see fast_display.h).
+        - lambda: fast_display::setup(id(dsi_display));
+        - script.execute: render_tiles
+        - script.execute: layout_tiles
+        - script.execute: subscribe_ha
+
+packages:
+  core: !include Core.yaml
+  # Hardware: uncomment exactly ONE board.
+  board: !include boards/guition-jc8012p4a1.yaml
+  # board: !include boards/waveshare-p4-nano-10.yaml
+  display: !include Display.yaml
+
+# --- Connectivity -----------------------------------------------------------
+# WiFi credentials are provided at flash time (secrets.yaml / dashboard) or via
+# the "Apollo TAB1 Hotspot" captive-portal fallback below.
+wifi:
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+captive_portal:
+
+api:
+  # The tiles both call HA actions and subscribe to HA entity states at runtime,
+  # so enable both explicitly (no static homeassistant.* entities are defined).
+  homeassistant_services: true
+  homeassistant_states: true
+  # Recommended: add an encryption key so Home Assistant can pair securely.
+  # In HA the key is shown when you add the device; paste it here:
+  # encryption:
+  #   key: "PUT-YOUR-32-BYTE-BASE64-KEY-HERE=="
+
+# Used by online_image to fetch Picture / Camera tile images.
+http_request:
+  timeout: 10s
+  verify_ssl: false
+
+ota:
+  - platform: esphome
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+# Browser access + on-device controls. Change/remove the login as you wish.
+web_server:
+  version: 3

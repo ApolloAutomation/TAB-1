@@ -1,0 +1,79 @@
+# ============================================================================
+#  Apollo TAB-1 · Showcase firmware
+#  ESP32-P4 + C6 · 10.1" 800×1280 MIPI-DSI touch panel, shown as 1280×800
+#
+#  A self-contained demo: nine swipeable pages of cards in six visual styles,
+#  driven by simulated data. It needs no Home Assistant connection, but keeps
+#  Wi-Fi, the API and OTA so the tablet stays reachable.
+#
+#  Flash THIS file for the demo; flash TAB-1.yaml to return to the dashboard.
+#  Same device name as TAB-1.yaml, so Wi-Fi settings and identity carry over.
+#
+#     Core.yaml           — SoC, PSRAM, WiFi (via C6), DSI PHY LDO, I²C bus
+#     boards/<board>.yaml — panel, touch controller, backlight
+#     Showcase.yaml       — fonts, images and the LVGL setup for the demo
+#     showcase.h          — the demo itself (plain LVGL, also builds on a PC)
+#
+#  Before the first build, generate the images:
+#     python3 tools/gen_showcase_assets.py
+# ============================================================================
+
+substitutions:
+  name: apollo-tab-1
+  friendly_name: Apollo TAB-1
+  version: "26.11.10.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  min_version: 2026.10.0
+  # Run the main loop every 2 ms instead of 16 ms. The touch interrupt doesn't
+  # wake the loop, so this cuts up to ~14 ms off every touch-to-screen step.
+  loop_interval: 2ms
+  includes:
+    - fast_display.h
+    - showcase.h
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
+  build_flags:
+    - -DLV_MEMCPY_MEMSET_STD=1
+  on_boot:
+    - priority: 100.0
+      then:
+        # Faster landscape flush and 5 ms touch reads (see fast_display.h).
+        - lambda: fast_display::setup(id(dsi_display));
+        - script.execute: showcase_start
+
+packages:
+  core: !include Core.yaml
+  # Hardware: uncomment exactly ONE board.
+  board: !include boards/guition-jc8012p4a1.yaml
+  # board: !include boards/waveshare-p4-nano-10.yaml
+  showcase: !include Showcase.yaml
+
+# --- Connectivity -----------------------------------------------------------
+# reboot_timeout 0s on wifi and api: the demo is meant to run for hours with
+# no network and no Home Assistant, so never restart for lack of either.
+wifi:
+  reboot_timeout: 0s
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+captive_portal:
+
+# The demo calls no Home Assistant actions; the API is kept for time sync,
+# logs and the Backlight / Restart entities.
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+web_server:
+  version: 3
