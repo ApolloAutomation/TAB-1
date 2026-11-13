@@ -1,0 +1,2038 @@
+# ============================================================================
+#  Display.yaml — GENERATED. DSI panel, GT911 touch, and the tile dashboard.
+#  Behaviour lives in tiles.h (included from TAB-1.yaml).
+#
+#   - Main page: up to 12 configurable tiles in a 4x3 cell grid.
+#   - Long-press a tile to edit its TYPE and SIZE, or Remove it.
+#   - Each tile binds to a Home Assistant entity via its "Tile N entity" text
+#     box (editable in HA, saved to flash). Bind takes effect on restart.
+#   - Swipe LEFT for Settings (brightness, demo mode, add tile).
+# ============================================================================
+
+color:
+  - id: bg_dark
+    hex: "0F1420"
+  - id: card_bg
+    hex: "1B2233"
+  - id: accent
+    hex: "3FA7F3"
+  - id: on_color
+    hex: "F4A900"
+  - id: text_primary
+    hex: "F2F4F8"
+  - id: text_muted
+    hex: "8A93A6"
+
+i2c_device:
+  - id: display_i2c
+    address: 0x45
+    i2c_id: i2c_bus_a
+
+touchscreen:
+  - platform: gt911
+    id: touchscreen_id
+    i2c_id: i2c_bus_a
+    update_interval: 50ms
+    # If touch is mirrored/swapped: transform: { swap_xy: true, mirror_x: true }
+
+display:
+  - platform: mipi_dsi
+    id: dsi_display
+    model: WAVESHARE-P4-NANO-10.1
+    auto_clear_enabled: false
+    update_interval: never
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      - then:
+          - lvgl.label.update: { id: lbl_time, text: { time_format: "%H:%M", time: ha_time } }
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+          - lvgl.label.update: { id: lbl_time, text: { time_format: "%H:%M", time: ha_time } }
+
+binary_sensor:
+  - platform: status
+    id: sys_status
+    on_state:
+      - lvgl.label.update:
+          id: lbl_ha_status
+          text: !lambda 'return std::string(x ? "Connected" : "Offline");'
+
+# ============================================================================
+#  Per-tile entity boxes (editable in Home Assistant, saved across reboots).
+# ============================================================================
+text:
+  - platform: template
+    id: t0_entity
+    name: "Tile 1 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t1_entity
+    name: "Tile 2 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t2_entity
+    name: "Tile 3 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t3_entity
+    name: "Tile 4 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t4_entity
+    name: "Tile 5 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t5_entity
+    name: "Tile 6 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t6_entity
+    name: "Tile 7 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t7_entity
+    name: "Tile 8 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t8_entity
+    name: "Tile 9 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t9_entity
+    name: "Tile 10 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t10_entity
+    name: "Tile 11 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+  - platform: template
+    id: t11_entity
+    name: "Tile 12 entity"
+    optimistic: true
+    restore_value: true
+    mode: text
+    icon: "mdi:tag-outline"
+    entity_category: config
+    max_length: 64
+
+# --- Image sources for Picture / Camera tiles (URL set at runtime) ---
+online_image:
+  - id: oi0
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi1
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi2
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi3
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi4
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi5
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi6
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi7
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi8
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi9
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi10
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+  - id: oi11
+    url: "http://127.0.0.1/"
+    type: RGB565
+    resize: 240x150
+    buffer_size: 32768
+    update_interval: never
+
+globals:
+  # Tile type per slot (tiles::TileType). Saved; changed on-device via long-press.
+  - id: tile_types
+    type: 'std::array<int8_t, 12>'
+    restore_value: true
+    initial_value: 'std::array<int8_t, 12>{}'
+  # Tile size per slot: 0=removed 1=Small 2=Wide 3=Tall 4=Big. Saved. Default all Small.
+  - id: tile_sizes
+    type: 'std::array<int8_t, 12>'
+    restore_value: true
+    initial_value: 'std::array<int8_t, 12>{1,1,1,1,1,1,1,1,1,1,1,1}'
+  # Latest numeric value per tile (for Graph tiles). Runtime only.
+  - id: tile_reading
+    type: 'std::array<float, 12>'
+    restore_value: false
+    initial_value: 'std::array<float, 12>{}'
+  # Graph history: 12 tiles x 24 samples, flattened. Runtime only.
+  - id: graph_hist
+    type: 'std::array<float, 288>'
+    restore_value: false
+    initial_value: 'std::array<float, 288>{}'
+  # Demo mode shows dummy examples of every type. Runtime only (off at boot).
+  - id: demo_mode
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Which tile the long-press editor is currently editing.
+  - id: active_tile
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+script:
+  # ---- Repaint each tile's name / badge / value / slider / graph visibility --
+  - id: render_tiles
+    then:
+      - lambda: |-
+          lv_obj_t *names_[12]   = { id(tn0), id(tn1), id(tn2), id(tn3), id(tn4), id(tn5), id(tn6), id(tn7), id(tn8), id(tn9), id(tn10), id(tn11) };
+          lv_obj_t *badges_[12]  = { id(tt0), id(tt1), id(tt2), id(tt3), id(tt4), id(tt5), id(tt6), id(tt7), id(tt8), id(tt9), id(tt10), id(tt11) };
+          lv_obj_t *vals_[12]    = { id(tv0), id(tv1), id(tv2), id(tv3), id(tv4), id(tv5), id(tv6), id(tv7), id(tv8), id(tv9), id(tv10), id(tv11) };
+          lv_obj_t *sliders_[12] = { id(ts0), id(ts1), id(ts2), id(ts3), id(ts4), id(ts5), id(ts6), id(ts7), id(ts8), id(ts9), id(ts10), id(ts11) };
+          lv_obj_t *graphs_[12]  = { id(graphc0), id(graphc1), id(graphc2), id(graphc3), id(graphc4), id(graphc5), id(graphc6), id(graphc7), id(graphc8), id(graphc9), id(graphc10), id(graphc11) };
+          lv_obj_t *images_[12]  = { id(tim0), id(tim1), id(tim2), id(tim3), id(tim4), id(tim5), id(tim6), id(tim7), id(tim8), id(tim9), id(tim10), id(tim11) };
+          online_image::OnlineImage *ois_[12] = { id(oi0), id(oi1), id(oi2), id(oi3), id(oi4), id(oi5), id(oi6), id(oi7), id(oi8), id(oi9), id(oi10), id(oi11) };
+          std::string ents_[12]  = { id(t0_entity).state, id(t1_entity).state, id(t2_entity).state, id(t3_entity).state, id(t4_entity).state, id(t5_entity).state, id(t6_entity).state, id(t7_entity).state, id(t8_entity).state, id(t9_entity).state, id(t10_entity).state, id(t11_entity).state };
+          for (int i = 0; i < 12; i++) {
+            int ty = id(demo_mode) ? tiles::demo_type(i) : id(tile_types)[i];
+            std::string nm = id(demo_mode) ? tiles::demo_name(i)
+                                           : tiles::friendly_name(ents_[i]);
+            lv_label_set_text(names_[i], nm.c_str());
+            lv_label_set_text(badges_[i], tiles::type_name(ty));
+            if (id(demo_mode))
+              lv_label_set_text(vals_[i], tiles::demo_value(i).c_str());
+            // Slider: shown for Light / Fan / Climate.
+            if (tiles::has_slider(ty)) {
+              lv_obj_clear_flag(sliders_[i], LV_OBJ_FLAG_HIDDEN);
+              lv_slider_set_range(sliders_[i], tiles::slider_min(ty), tiles::slider_max(ty));
+            } else {
+              lv_obj_add_flag(sliders_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            // Graph tiles show bars instead of the big value label.
+            if (tiles::shows_graph(ty)) {
+              lv_obj_clear_flag(graphs_[i], LV_OBJ_FLAG_HIDDEN);
+              lv_obj_add_flag(vals_[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+              lv_obj_add_flag(graphs_[i], LV_OBJ_FLAG_HIDDEN);
+              if (tiles::shows_image(ty)) lv_obj_add_flag(vals_[i], LV_OBJ_FLAG_HIDDEN);
+              else lv_obj_clear_flag(vals_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            // Image tiles (Picture / Camera): show the image and (re)load its URL.
+            if (tiles::shows_image(ty)) {
+              lv_obj_clear_flag(images_[i], LV_OBJ_FLAG_HIDDEN);
+              if (!id(demo_mode) && !ents_[i].empty()) {
+                ois_[i]->set_url(ents_[i]);
+                ois_[i]->update();
+              }
+            } else {
+              lv_obj_add_flag(images_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+          }
+      - script.execute: paint_graphs
+
+  # ---- Pack tiles into the 4x3 grid and position them absolutely ------------
+  - id: layout_tiles
+    then:
+      - lambda: |-
+          static tiles::TileRect rects[12];
+          int8_t sz[12];
+          for (int i = 0; i < 12; i++)
+            sz[i] = id(demo_mode) ? tiles::demo_size(i) : id(tile_sizes)[i];
+          tiles::layout(sz, 12, rects, 1232, 700, 16);
+          lv_obj_t *tw_[12] = { id(tile0), id(tile1), id(tile2), id(tile3), id(tile4), id(tile5), id(tile6), id(tile7), id(tile8), id(tile9), id(tile10), id(tile11) };
+          for (int i = 0; i < 12; i++) {
+            if (rects[i].shown) {
+              lv_obj_clear_flag(tw_[i], LV_OBJ_FLAG_HIDDEN);
+              lv_obj_set_pos(tw_[i], rects[i].x, rects[i].y);
+              lv_obj_set_size(tw_[i], rects[i].w, rects[i].h);
+            } else {
+              lv_obj_add_flag(tw_[i], LV_OBJ_FLAG_HIDDEN);
+            }
+          }
+
+  # ---- Repaint the sparkline bars of every Graph tile -----------------------
+  - id: paint_graphs
+    then:
+      - lambda: |-
+          lv_obj_t *gb[12][24] = {
+            { id(g0_0), id(g0_1), id(g0_2), id(g0_3), id(g0_4), id(g0_5), id(g0_6), id(g0_7), id(g0_8), id(g0_9), id(g0_10), id(g0_11), id(g0_12), id(g0_13), id(g0_14), id(g0_15), id(g0_16), id(g0_17), id(g0_18), id(g0_19), id(g0_20), id(g0_21), id(g0_22), id(g0_23) },
+            { id(g1_0), id(g1_1), id(g1_2), id(g1_3), id(g1_4), id(g1_5), id(g1_6), id(g1_7), id(g1_8), id(g1_9), id(g1_10), id(g1_11), id(g1_12), id(g1_13), id(g1_14), id(g1_15), id(g1_16), id(g1_17), id(g1_18), id(g1_19), id(g1_20), id(g1_21), id(g1_22), id(g1_23) },
+            { id(g2_0), id(g2_1), id(g2_2), id(g2_3), id(g2_4), id(g2_5), id(g2_6), id(g2_7), id(g2_8), id(g2_9), id(g2_10), id(g2_11), id(g2_12), id(g2_13), id(g2_14), id(g2_15), id(g2_16), id(g2_17), id(g2_18), id(g2_19), id(g2_20), id(g2_21), id(g2_22), id(g2_23) },
+            { id(g3_0), id(g3_1), id(g3_2), id(g3_3), id(g3_4), id(g3_5), id(g3_6), id(g3_7), id(g3_8), id(g3_9), id(g3_10), id(g3_11), id(g3_12), id(g3_13), id(g3_14), id(g3_15), id(g3_16), id(g3_17), id(g3_18), id(g3_19), id(g3_20), id(g3_21), id(g3_22), id(g3_23) },
+            { id(g4_0), id(g4_1), id(g4_2), id(g4_3), id(g4_4), id(g4_5), id(g4_6), id(g4_7), id(g4_8), id(g4_9), id(g4_10), id(g4_11), id(g4_12), id(g4_13), id(g4_14), id(g4_15), id(g4_16), id(g4_17), id(g4_18), id(g4_19), id(g4_20), id(g4_21), id(g4_22), id(g4_23) },
+            { id(g5_0), id(g5_1), id(g5_2), id(g5_3), id(g5_4), id(g5_5), id(g5_6), id(g5_7), id(g5_8), id(g5_9), id(g5_10), id(g5_11), id(g5_12), id(g5_13), id(g5_14), id(g5_15), id(g5_16), id(g5_17), id(g5_18), id(g5_19), id(g5_20), id(g5_21), id(g5_22), id(g5_23) },
+            { id(g6_0), id(g6_1), id(g6_2), id(g6_3), id(g6_4), id(g6_5), id(g6_6), id(g6_7), id(g6_8), id(g6_9), id(g6_10), id(g6_11), id(g6_12), id(g6_13), id(g6_14), id(g6_15), id(g6_16), id(g6_17), id(g6_18), id(g6_19), id(g6_20), id(g6_21), id(g6_22), id(g6_23) },
+            { id(g7_0), id(g7_1), id(g7_2), id(g7_3), id(g7_4), id(g7_5), id(g7_6), id(g7_7), id(g7_8), id(g7_9), id(g7_10), id(g7_11), id(g7_12), id(g7_13), id(g7_14), id(g7_15), id(g7_16), id(g7_17), id(g7_18), id(g7_19), id(g7_20), id(g7_21), id(g7_22), id(g7_23) },
+            { id(g8_0), id(g8_1), id(g8_2), id(g8_3), id(g8_4), id(g8_5), id(g8_6), id(g8_7), id(g8_8), id(g8_9), id(g8_10), id(g8_11), id(g8_12), id(g8_13), id(g8_14), id(g8_15), id(g8_16), id(g8_17), id(g8_18), id(g8_19), id(g8_20), id(g8_21), id(g8_22), id(g8_23) },
+            { id(g9_0), id(g9_1), id(g9_2), id(g9_3), id(g9_4), id(g9_5), id(g9_6), id(g9_7), id(g9_8), id(g9_9), id(g9_10), id(g9_11), id(g9_12), id(g9_13), id(g9_14), id(g9_15), id(g9_16), id(g9_17), id(g9_18), id(g9_19), id(g9_20), id(g9_21), id(g9_22), id(g9_23) },
+            { id(g10_0), id(g10_1), id(g10_2), id(g10_3), id(g10_4), id(g10_5), id(g10_6), id(g10_7), id(g10_8), id(g10_9), id(g10_10), id(g10_11), id(g10_12), id(g10_13), id(g10_14), id(g10_15), id(g10_16), id(g10_17), id(g10_18), id(g10_19), id(g10_20), id(g10_21), id(g10_22), id(g10_23) },
+            { id(g11_0), id(g11_1), id(g11_2), id(g11_3), id(g11_4), id(g11_5), id(g11_6), id(g11_7), id(g11_8), id(g11_9), id(g11_10), id(g11_11), id(g11_12), id(g11_13), id(g11_14), id(g11_15), id(g11_16), id(g11_17), id(g11_18), id(g11_19), id(g11_20), id(g11_21), id(g11_22), id(g11_23) }
+          };
+          for (int i = 0; i < 12; i++) {
+            int ty = id(demo_mode) ? tiles::demo_type(i) : id(tile_types)[i];
+            if (!tiles::shows_graph(ty)) continue;
+            float *h = &id(graph_hist)[i * 24];
+            for (int j = 0; j < 24; j++)
+              lv_bar_set_value(gb[i][j], tiles::history_bar_pct(h, 24, j), LV_ANIM_OFF);
+          }
+
+  # ---- Subscribe every configured entity to its tile (called at boot) -------
+  - id: subscribe_ha
+    then:
+      - lambda: |-
+          std::string e0 = id(t0_entity).state;
+          if (!e0.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e0, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[0] = tiles::parse_number(s);
+              lv_label_set_text(id(tv0), tiles::format_state(id(tile_types)[0], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile0), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile0), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e1 = id(t1_entity).state;
+          if (!e1.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e1, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[1] = tiles::parse_number(s);
+              lv_label_set_text(id(tv1), tiles::format_state(id(tile_types)[1], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile1), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile1), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e2 = id(t2_entity).state;
+          if (!e2.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e2, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[2] = tiles::parse_number(s);
+              lv_label_set_text(id(tv2), tiles::format_state(id(tile_types)[2], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile2), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile2), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e3 = id(t3_entity).state;
+          if (!e3.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e3, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[3] = tiles::parse_number(s);
+              lv_label_set_text(id(tv3), tiles::format_state(id(tile_types)[3], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile3), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile3), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e4 = id(t4_entity).state;
+          if (!e4.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e4, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[4] = tiles::parse_number(s);
+              lv_label_set_text(id(tv4), tiles::format_state(id(tile_types)[4], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile4), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile4), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e5 = id(t5_entity).state;
+          if (!e5.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e5, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[5] = tiles::parse_number(s);
+              lv_label_set_text(id(tv5), tiles::format_state(id(tile_types)[5], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile5), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile5), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e6 = id(t6_entity).state;
+          if (!e6.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e6, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[6] = tiles::parse_number(s);
+              lv_label_set_text(id(tv6), tiles::format_state(id(tile_types)[6], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile6), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile6), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e7 = id(t7_entity).state;
+          if (!e7.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e7, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[7] = tiles::parse_number(s);
+              lv_label_set_text(id(tv7), tiles::format_state(id(tile_types)[7], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile7), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile7), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e8 = id(t8_entity).state;
+          if (!e8.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e8, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[8] = tiles::parse_number(s);
+              lv_label_set_text(id(tv8), tiles::format_state(id(tile_types)[8], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile8), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile8), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e9 = id(t9_entity).state;
+          if (!e9.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e9, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[9] = tiles::parse_number(s);
+              lv_label_set_text(id(tv9), tiles::format_state(id(tile_types)[9], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile9), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile9), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e10 = id(t10_entity).state;
+          if (!e10.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e10, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[10] = tiles::parse_number(s);
+              lv_label_set_text(id(tv10), tiles::format_state(id(tile_types)[10], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile10), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile10), LV_STATE_CHECKED);
+            }));
+          }
+      - lambda: |-
+          std::string e11 = id(t11_entity).state;
+          if (!e11.empty()) {
+            api::global_api_server->subscribe_home_assistant_state(
+                e11, optional<std::string>(),
+                std::function<void(const std::string &)>([](const std::string &s) {
+              if (id(demo_mode)) return;
+              id(tile_reading)[11] = tiles::parse_number(s);
+              lv_label_set_text(id(tv11), tiles::format_state(id(tile_types)[11], s).c_str());
+              if (tiles::state_is_active(s)) lv_obj_add_state(id(tile11), LV_STATE_CHECKED);
+              else lv_obj_clear_state(id(tile11), LV_STATE_CHECKED);
+            }));
+          }
+
+  # ---- Demo mode ------------------------------------------------------------
+  - id: enter_demo
+    then:
+      - lambda: |-
+          id(demo_mode) = true;
+          for (int i = 0; i < 12; i++) {
+            if (tiles::demo_type(i) == tiles::TT_GRAPH)
+              for (int j = 0; j < 24; j++)
+                id(graph_hist)[i * 24 + j] = 50.0f + 40.0f * sinf(j * 0.7f);
+          }
+      - script.execute: render_tiles
+      - script.execute: layout_tiles
+  - id: exit_demo
+    then:
+      - lambda: 'id(demo_mode) = false;'
+      - script.execute: render_tiles
+      - script.execute: layout_tiles
+
+  # ---- Save the on-screen keyboard's text into the active tile's entity box -
+  - id: save_entity
+    then:
+      - lambda: |-
+          text::Text *boxes[12] = { id(t0_entity), id(t1_entity), id(t2_entity), id(t3_entity), id(t4_entity), id(t5_entity), id(t6_entity), id(t7_entity), id(t8_entity), id(t9_entity), id(t10_entity), id(t11_entity) };
+          std::string v = std::string(lv_textarea_get_text(id(entity_input)));
+          boxes[id(active_tile)]->make_call().set_value(v).perform();
+      - script.execute: subscribe_ha
+      - script.execute: render_tiles
+
+# ---- Feed the Graph tiles from their latest value, every 30s ---------------
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          if (id(demo_mode)) return;
+          for (int i = 0; i < 12; i++)
+            if (tiles::shows_graph(id(tile_types)[i]) && !isnan(id(tile_reading)[i]))
+              tiles::history_push(&id(graph_hist)[i * 24], 24, id(tile_reading)[i]);
+      - script.execute: paint_graphs
+
+  # ---- Re-fetch Camera tiles every 5s (Picture tiles load once) -------------
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(demo_mode)) return;
+          online_image::OnlineImage *ois_[12] = { id(oi0), id(oi1), id(oi2), id(oi3), id(oi4), id(oi5), id(oi6), id(oi7), id(oi8), id(oi9), id(oi10), id(oi11) };
+          std::string ents_[12] = { id(t0_entity).state, id(t1_entity).state, id(t2_entity).state, id(t3_entity).state, id(t4_entity).state, id(t5_entity).state, id(t6_entity).state, id(t7_entity).state, id(t8_entity).state, id(t9_entity).state, id(t10_entity).state, id(t11_entity).state };
+          for (int i = 0; i < 12; i++)
+            if (tiles::is_camera(id(tile_types)[i]) && !ents_[i].empty())
+              ois_[i]->update();
+# ============================================================================
+#  The dashboard UI
+# ============================================================================
+lvgl:
+  displays:
+    - dsi_display
+  touchscreens:
+    - touchscreen_id: touchscreen_id
+      long_press_time: 900ms      # longer hold so swipes don't open the editor
+  rotation: 270°
+  default_font: montserrat_20
+  bg_color: bg_dark
+
+  theme:
+    label:
+      text_color: text_primary
+
+  style_definitions:
+    - id: card
+      bg_color: card_bg
+      bg_opa: COVER
+      radius: 16
+      border_width: 0
+      pad_all: 18
+      text_color: text_primary
+    - id: card_title
+      text_color: text_muted
+      text_font: montserrat_20
+    - id: tile_card
+      bg_color: card_bg
+      bg_opa: COVER
+      radius: 16
+      border_width: 0
+      pad_all: 12
+      text_color: text_primary
+    - id: tile_name
+      text_color: text_primary
+      text_font: montserrat_20
+    - id: tile_badge
+      text_color: text_muted
+      text_font: montserrat_16
+    - id: tile_value
+      text_color: accent
+      text_font: montserrat_36
+    - id: spark_bar
+      bg_color: bg_dark
+      bg_opa: COVER
+      radius: 1
+      border_width: 0
+      pad_all: 0
+
+  # ---- Long-press tile editor: type + size ---------------------------------
+  top_layer:
+    widgets:
+      - obj:
+          id: type_picker
+          hidden: true
+          align: CENTER
+          width: 680
+          height: 620
+          bg_color: card_bg
+          bg_opa: COVER
+          radius: 18
+          border_width: 0
+          widgets:
+            - label: { text: "Edit tile", styles: card_title, align: TOP_MID, y: 14 }
+            - button:
+                align: TOP_MID
+                y: 44
+                width: 360
+                height: 50
+                widgets:
+                  - label: { text: "Set entity ID", align: CENTER }
+                on_click:
+                  - lambda: |-
+                      text::Text *boxes[12] = { id(t0_entity), id(t1_entity), id(t2_entity), id(t3_entity), id(t4_entity), id(t5_entity), id(t6_entity), id(t7_entity), id(t8_entity), id(t9_entity), id(t10_entity), id(t11_entity) };
+                      lv_textarea_set_text(id(entity_input), boxes[id(active_tile)]->state.c_str());
+                  - lvgl.widget.show: entity_editor
+            - label: { text: "Type", styles: card_title, align: TOP_LEFT, x: 78, y: 112 }
+            - label: { text: "Size", styles: card_title, align: TOP_RIGHT, x: -86, y: 112 }
+            - roller:
+                id: type_roller
+                align: CENTER
+                x: -160
+                y: 16
+                width: 280
+                options: ['Value', 'Switch', 'Light', 'Button', 'Scene', 'Cover', 'Climate', 'Lock', 'Fan', 'Media', 'Graph', 'Picture', 'Camera']
+                visible_row_count: 5
+            - roller:
+                id: size_roller
+                align: CENTER
+                x: 160
+                y: 16
+                width: 280
+                options: ["Small", "Wide", "Tall", "Big"]
+                visible_row_count: 5
+            - button:
+                align: BOTTOM_LEFT
+                x: 18
+                y: -18
+                width: 200
+                height: 62
+                bg_color: accent
+                widgets:
+                  - label: { text: "Set", align: CENTER, text_color: bg_dark }
+                on_click:
+                  - lambda: |-
+                      int i = id(active_tile);
+                      id(tile_types)[i] = (int8_t) id(type_roller)->get_selected_index();
+                      id(tile_sizes)[i] = (int8_t) (id(size_roller)->get_selected_index() + 1);
+                  - lvgl.widget.hide: type_picker
+                  - script.execute: render_tiles
+                  - script.execute: layout_tiles
+            - button:
+                align: BOTTOM_MID
+                y: -18
+                width: 200
+                height: 62
+                widgets:
+                  - label: { text: "Remove", align: CENTER }
+                on_click:
+                  - lambda: 'id(tile_sizes)[id(active_tile)] = 0;'
+                  - lvgl.widget.hide: type_picker
+                  - script.execute: layout_tiles
+            - button:
+                align: BOTTOM_RIGHT
+                x: -18
+                y: -18
+                width: 200
+                height: 62
+                widgets:
+                  - label: { text: "Cancel", align: CENTER }
+                on_click:
+                  - lvgl.widget.hide: type_picker
+
+      # ---- On-screen keyboard to type a tile's entity_id -------------------
+      - obj:
+          id: entity_editor
+          hidden: true
+          align: CENTER
+          width: 1180
+          height: 720
+          bg_color: card_bg
+          bg_opa: COVER
+          radius: 12
+          border_width: 0
+          widgets:
+            - label: { text: "Entity ID", styles: card_title, align: TOP_LEFT, x: 24, y: 18 }
+            - textarea:
+                id: entity_input
+                align: TOP_MID
+                y: 48
+                width: 92%
+                height: 58
+                one_line: true
+                max_length: 64
+                placeholder_text: "sensor.living_room_temperature"
+            - button:
+                align: TOP_LEFT
+                x: 24
+                y: 118
+                width: 190
+                height: 54
+                widgets:
+                  - label: { text: "Cancel", align: CENTER }
+                on_click:
+                  - lvgl.widget.hide: entity_editor
+            - button:
+                align: TOP_RIGHT
+                x: -24
+                y: 118
+                width: 190
+                height: 54
+                bg_color: accent
+                widgets:
+                  - label: { text: "Save", align: CENTER, text_color: bg_dark }
+                on_click:
+                  - script.execute: save_entity
+                  - lvgl.widget.hide: entity_editor
+                  - lvgl.widget.hide: type_picker
+            - keyboard:
+                id: kb
+                textarea: entity_input
+                align: BOTTOM_MID
+                width: 100%
+                height: 430
+
+  pages:
+    # ==================== Main: the tile grid =============================
+    - id: main_page
+      bg_color: bg_dark
+      scrollbar_mode: "OFF"
+      pad_all: 0
+      on_swipe_left:
+        - lvgl.page.show: { id: settings_page, animation: MOVE_LEFT, time: 250ms }
+      widgets:
+        - obj:
+            align: TOP_MID
+            y: 0
+            width: 1280
+            height: 64
+            bg_color: bg_dark
+            bg_opa: COVER
+            border_width: 0
+            radius: 0
+            pad_all: 0
+            widgets:
+              - label: { id: lbl_time, text: "--:--", text_font: montserrat_28, align: LEFT_MID, x: 24 }
+              - label: { text: "Home", text_font: montserrat_28, align: CENTER }
+              - label: { id: lbl_ha_status, text: "Offline", text_color: text_muted, align: RIGHT_MID, x: -24 }
+        - obj:
+            align: TOP_MID
+            y: 72
+            width: 1232
+            height: 700
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            scrollbar_mode: "OFF"
+            widgets:
+              - obj:
+                  id: tile0
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn0, text: "Tile 1", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt0, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv0, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim0
+                        hidden: true
+                        src: oi0
+                        align: CENTER
+                    - obj:
+                        id: graphc0
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g0_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g0_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts0
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[0] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t0_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[0] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t0_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[0] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t0_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[0]) && !id(t0_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[0], id(t0_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t0_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 0;
+                        id(type_roller)->set_selected_index(id(tile_types)[0], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[0];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile1
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn1, text: "Tile 2", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt1, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv1, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim1
+                        hidden: true
+                        src: oi1
+                        align: CENTER
+                    - obj:
+                        id: graphc1
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g1_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g1_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts1
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[1] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t1_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[1] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t1_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[1] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t1_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[1]) && !id(t1_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[1], id(t1_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t1_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 1;
+                        id(type_roller)->set_selected_index(id(tile_types)[1], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[1];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile2
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn2, text: "Tile 3", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt2, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv2, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim2
+                        hidden: true
+                        src: oi2
+                        align: CENTER
+                    - obj:
+                        id: graphc2
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g2_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g2_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts2
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[2] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t2_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[2] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t2_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[2] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t2_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[2]) && !id(t2_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[2], id(t2_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t2_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 2;
+                        id(type_roller)->set_selected_index(id(tile_types)[2], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[2];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile3
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn3, text: "Tile 4", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt3, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv3, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim3
+                        hidden: true
+                        src: oi3
+                        align: CENTER
+                    - obj:
+                        id: graphc3
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g3_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g3_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts3
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[3] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t3_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[3] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t3_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[3] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t3_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[3]) && !id(t3_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[3], id(t3_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t3_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 3;
+                        id(type_roller)->set_selected_index(id(tile_types)[3], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[3];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile4
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn4, text: "Tile 5", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt4, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv4, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim4
+                        hidden: true
+                        src: oi4
+                        align: CENTER
+                    - obj:
+                        id: graphc4
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g4_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g4_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts4
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[4] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t4_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[4] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t4_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[4] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t4_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[4]) && !id(t4_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[4], id(t4_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t4_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 4;
+                        id(type_roller)->set_selected_index(id(tile_types)[4], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[4];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile5
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn5, text: "Tile 6", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt5, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv5, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim5
+                        hidden: true
+                        src: oi5
+                        align: CENTER
+                    - obj:
+                        id: graphc5
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g5_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g5_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts5
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[5] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t5_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[5] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t5_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[5] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t5_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[5]) && !id(t5_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[5], id(t5_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t5_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 5;
+                        id(type_roller)->set_selected_index(id(tile_types)[5], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[5];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile6
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn6, text: "Tile 7", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt6, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv6, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim6
+                        hidden: true
+                        src: oi6
+                        align: CENTER
+                    - obj:
+                        id: graphc6
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g6_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g6_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts6
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[6] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t6_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[6] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t6_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[6] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t6_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[6]) && !id(t6_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[6], id(t6_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t6_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 6;
+                        id(type_roller)->set_selected_index(id(tile_types)[6], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[6];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile7
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn7, text: "Tile 8", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt7, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv7, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim7
+                        hidden: true
+                        src: oi7
+                        align: CENTER
+                    - obj:
+                        id: graphc7
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g7_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g7_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts7
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[7] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t7_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[7] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t7_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[7] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t7_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[7]) && !id(t7_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[7], id(t7_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t7_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 7;
+                        id(type_roller)->set_selected_index(id(tile_types)[7], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[7];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile8
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn8, text: "Tile 9", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt8, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv8, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim8
+                        hidden: true
+                        src: oi8
+                        align: CENTER
+                    - obj:
+                        id: graphc8
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g8_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g8_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts8
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[8] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t8_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[8] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t8_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[8] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t8_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[8]) && !id(t8_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[8], id(t8_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t8_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 8;
+                        id(type_roller)->set_selected_index(id(tile_types)[8], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[8];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile9
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn9, text: "Tile 10", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt9, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv9, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim9
+                        hidden: true
+                        src: oi9
+                        align: CENTER
+                    - obj:
+                        id: graphc9
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g9_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g9_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts9
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[9] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t9_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[9] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t9_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[9] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t9_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[9]) && !id(t9_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[9], id(t9_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t9_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 9;
+                        id(type_roller)->set_selected_index(id(tile_types)[9], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[9];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile10
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn10, text: "Tile 11", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt10, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv10, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim10
+                        hidden: true
+                        src: oi10
+                        align: CENTER
+                    - obj:
+                        id: graphc10
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g10_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g10_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts10
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[10] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t10_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[10] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t10_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[10] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t10_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[10]) && !id(t10_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[10], id(t10_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t10_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 10;
+                        id(type_roller)->set_selected_index(id(tile_types)[10], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[10];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+              - obj:
+                  id: tile11
+                  width: 296
+                  height: 216
+                  styles: tile_card
+                  clickable: true
+                  checked:
+                    border_width: 3
+                    border_color: on_color
+                  widgets:
+                    - label: { id: tn11, text: "Tile 12", styles: tile_name, align: TOP_LEFT }
+                    - label: { id: tt11, text: "Value", styles: tile_badge, align: TOP_RIGHT }
+                    - label: { id: tv11, text: "--", styles: tile_value, align: CENTER, y: 6 }
+                    - image:
+                        id: tim11
+                        hidden: true
+                        src: oi11
+                        align: CENTER
+                    - obj:
+                        id: graphc11
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 55%
+                        bg_opa: TRANSP
+                        border_width: 0
+                        pad_all: 0
+                        layout: { type: flex, flex_flow: ROW, pad_column: 2 }
+                        widgets:
+                          - bar: { id: g11_0, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_1, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_2, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_3, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_4, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_5, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_6, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_7, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_8, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_9, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_10, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_11, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_12, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_13, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_14, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_15, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_16, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_17, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_18, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_19, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_20, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_21, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_22, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                          - bar: { id: g11_23, flex_grow: 1, height: 100%, styles: spark_bar, indicator: { bg_color: accent } }
+                    - slider:
+                        id: ts11
+                        hidden: true
+                        align: BOTTOM_MID
+                        width: 100%
+                        height: 26
+                        radius: 13
+                        indicator: { radius: 13 }
+                        knob: { pad_all: 8, radius: 13 }
+                        on_release:
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[11] == tiles::TT_LIGHT;' }
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_on
+                                    data: { entity_id: !lambda 'return id(t11_entity).state;', brightness_pct: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[11] == tiles::TT_FAN;' }
+                              then:
+                                - homeassistant.action:
+                                    action: fan.set_percentage
+                                    data: { entity_id: !lambda 'return id(t11_entity).state;', percentage: !lambda 'return (int) x;' }
+                          - if:
+                              condition: { lambda: 'return id(tile_types)[11] == tiles::TT_CLIMATE;' }
+                              then:
+                                - homeassistant.action:
+                                    action: climate.set_temperature
+                                    data: { entity_id: !lambda 'return id(t11_entity).state;', temperature: !lambda 'return x;' }
+                  on_click:
+                    - if:
+                        condition:
+                          lambda: 'return !id(demo_mode) && tiles::taps_act(id(tile_types)[11]) && !id(t11_entity).state.empty();'
+                        then:
+                          - homeassistant.action:
+                              action: !lambda 'return tiles::tap_service(id(tile_types)[11], id(t11_entity).state);'
+                              data:
+                                entity_id: !lambda 'return id(t11_entity).state;'
+                  on_long_press:
+                    - lambda: |-
+                        id(active_tile) = 11;
+                        id(type_roller)->set_selected_index(id(tile_types)[11], LV_ANIM_OFF);
+                        int sc = id(tile_sizes)[11];
+                        id(size_roller)->set_selected_index(sc < 1 ? 0 : sc - 1, LV_ANIM_OFF);
+                    - lvgl.widget.show: type_picker
+
+    # ==================== Settings (swipe left to reach) ==================
+    - id: settings_page
+      bg_color: bg_dark
+      scrollbar_mode: "OFF"
+      on_swipe_right:
+        - lvgl.page.show: { id: main_page, animation: MOVE_RIGHT, time: 250ms }
+      widgets:
+        - label: { text: "Settings", text_font: montserrat_28, align: TOP_MID, y: 24 }
+        - obj:
+            align: TOP_MID
+            y: 90
+            width: 900
+            height: 150
+            styles: card
+            widgets:
+              - label: { text: "Screen Brightness", styles: card_title, align: TOP_LEFT }
+              - slider:
+                  id: sld_backlight
+                  align: BOTTOM_MID
+                  width: 100%
+                  height: 28
+                  radius: 14
+                  min_value: 10
+                  max_value: 100
+                  value: 100
+                  indicator: { radius: 14 }
+                  knob: { pad_all: 8, radius: 14 }
+                  on_value:
+                    - lambda: |-
+                        uint8_t duty = (uint8_t) roundf(x * 2.55f);
+                        if (duty < 12) duty = 12;
+                        id(display_i2c).write_byte(0x96, duty);
+        - obj:
+            align: TOP_MID
+            y: 260
+            width: 900
+            height: 92
+            styles: card
+            widgets:
+              - label: { text: "Demo mode (show every tile type)", align: LEFT_MID }
+              - switch:
+                  id: demo_switch
+                  align: RIGHT_MID
+                  on_value:
+                    - if:
+                        condition: { lambda: 'return x;' }
+                        then:
+                          - script.execute: enter_demo
+                        else:
+                          - script.execute: exit_demo
+        - button:
+            align: TOP_MID
+            y: 380
+            width: 320
+            height: 64
+            bg_color: accent
+            widgets:
+              - label: { text: "+ Add tile", align: CENTER, text_color: bg_dark }
+            on_click:
+              - lambda: |-
+                  for (int i = 0; i < 12; i++)
+                    if (id(tile_sizes)[i] == 0) { id(tile_sizes)[i] = 1; break; }
+              - script.execute: layout_tiles
+        - label: { text: "Long-press a tile to change type/size. Swipe right to go back.", styles: card_title, align: BOTTOM_MID, y: -18 }

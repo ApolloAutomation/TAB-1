@@ -1,0 +1,116 @@
+# ============================================================================
+#  Apollo TAB-1 · Dashboard firmware, bench build
+#  ESP32-P4 + C6 · 10.1" 800×1280 MIPI-DSI touch panel, shown as 1280×800
+#
+#  The same firmware as TAB-1-engine.yaml with a fixed API encryption key from
+#  secrets.yaml. With it, `esphome logs` works over the network (opening the
+#  USB port resets the chip), and the tablet always comes back with a key you
+#  know after switching firmware. It also keeps the web page (without
+#  firmware upload) and has no update channel.
+#
+#  Before the first build, add this to secrets.yaml next to this file:
+#     tab1_api_key: "<32 random bytes, base64>"     (openssl rand -base64 32)
+#  Home Assistant asks for the same key when it adds the tablet. Updates over
+#  the network are encrypted with that key; nothing else is accepted.
+#
+#  Keep everything else equal to TAB-1-engine.yaml;
+#  tools/check_engine_package.py checks that.
+# ============================================================================
+
+substitutions:
+  name: apollo-tab-1
+  friendly_name: Apollo TAB-1
+  version: "26.11.12.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  # ota_lock.h relies on ESPHome internals checked against 2026.10.2, the
+  # version .github/workflows/build.yml builds releases with. Raise both
+  # together, after tools/check_engine_package.py --compile passes on the new one.
+  min_version: 2026.10.2
+  # Run the main loop every 2 ms instead of 16 ms. The touch interrupt doesn't
+  # wake the loop, so this cuts up to ~14 ms off every touch-to-screen step.
+  loop_interval: 2ms
+  includes:
+    - fast_display.h
+    - ota_lock.h
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
+  build_flags:
+    - -DLV_MEMCPY_MEMSET_STD=1
+  on_boot:
+    # Before Wi-Fi and the update doors start (ota_lock.h): a tablet that
+    # already has its key takes no plaintext firmware, not even at boot.
+    - priority: 700.0
+      then:
+        - lambda: tab_lock::boot(id(ota_main));
+    - priority: 100.0
+      then:
+        # Faster landscape flush and 5 ms touch reads (see fast_display.h),
+        # then the engine: stored dashboard or the waiting screen.
+        - lambda: fast_display::setup(id(dsi_display));
+        - script.execute: tab_engine_start
+  # Locks updates the moment Home Assistant provisions the key, or when the
+  # set-up window closes without one. Restarts once when the key is cleared.
+  on_loop:
+    - lambda: tab_lock::poll(id(ota_main));
+
+packages:
+  core: !include Core.yaml
+  # Hardware: uncomment exactly ONE board.
+  board: !include boards/guition-jc8012p4a1.yaml
+  # board: !include boards/waveshare-p4-nano-10.yaml
+  engine: !include Engine.yaml
+
+# --- Connectivity -----------------------------------------------------------
+# reboot_timeout 0s on wifi and api: without Home Assistant the tablet keeps
+# showing the last dashboard and its last values, so it must never restart
+# for lack of either.
+#
+# The hotspot is open, so anyone nearby can set the tablet's Wi-Fi during the
+# set-up window. It also comes back after 90 s without Wi-Fi on a tablet that
+# is set up and was on Wi-Fi since it was turned on, so a changed Wi-Fi
+# password can be fixed from a phone. A tablet that found no Wi-Fi in its
+# first 15 minutes shows no hotspot until it is turned off and on again.
+wifi:
+  reboot_timeout: 0s
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+captive_portal:
+
+# The set-up window: 15 minutes after each power-on.
+provisioning:
+  timeout: 15min
+  on_timeout:
+    - lambda: tab_glue::setup_window_closed();
+
+api:
+  reboot_timeout: 0s
+  # Fixed key for the bench. A key in YAML always wins over a stored one.
+  encryption:
+    key: !secret tab1_api_key
+
+# Updates are encrypted with the API key above; nothing else is accepted.
+# The hotspot's set-up page answers 403 to firmware uploads (ota_lock.h).
+ota:
+  - platform: esphome
+    id: ota_main
+    encryption:
+
+# Safe mode runs no on_boot and no on_loop, so it locks here.
+safe_mode:
+  on_safe_mode:
+    - lambda: tab_lock::safe_mode(id(ota_main));
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+# The web page for the bench, with no firmware upload.
+web_server:
+  version: 3
+  ota: false

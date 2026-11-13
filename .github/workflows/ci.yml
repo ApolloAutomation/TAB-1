@@ -7,23 +7,39 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    name: Building ${{ matrix.file }}
+    name: CI
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    with:
+      yaml-files: |
+        Integrations/ESPHome/TAB-1.yaml
+
+  engine:
+    name: CI (dashboard engine)
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    with:
+      yaml-files: |
+        Integrations/ESPHome/TAB-1-engine.yaml
+      # Pinned like the release build (build.yml): the update lock in
+      # ota_lock.h relies on ESPHome internals checked against this version.
+      esphome-versions: |
+        2026.10.2
+
+  engine-checks:
+    name: Dashboard engine package checks
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        file: # TODO: Rename
-          - Integrations/ESPHome/PLT-1.yaml
-          - Integrations/ESPHome/PLT-1_BLE.yaml
-        esphome-version:
-          - stable
-          - beta
-          - dev
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4.1.7
-      - name: Build ESPHome firmware to verify configuration
-        uses: esphome/build-action@v3.1.0
+        uses: actions/checkout@v6
         with:
-          yaml_file: ${{ matrix.file }}
+          persist-credentials: false
+      # Static checks only (standard library, no network): the update lock's
+      # settings, no secrets in the shipped file, and that every changed
+      # engine file has a higher files number (engine/tab_files.h).
+      - name: Check the engine package
+        working-directory: Integrations/ESPHome
+        run: python3 -B tools/check_engine_package.py

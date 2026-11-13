@@ -1,26 +1,93 @@
-substitutions:
-  name: apollo-plt-1 # TODO: Rename
-  version: "24.8.7.2"
-  device_description: ${name} made by Apollo Automation - version ${version}.
+# ============================================================================
+#  Core.yaml — SoC + system for the ESP32-P4 TAB-1 boards
+#  Pulled in as a package by TAB-1.yaml. 100% mainline ESPHome (2025.11+).
+#
+#  WiFi on the ESP32-P4 has no radio of its own — it talks to the on-board
+#  ESP32-C6 co-processor over SDIO (the `esp32_hosted` block below).
+# ============================================================================
 
 esp32:
-  board: esp32-c3-devkitm-1
+  variant: ESP32P4
+  # Early P4 dev boards ship pre-rev3 silicon (the Guition unit here is v1.3).
+  # ESP-IDF 5.5+ defaults to rev3 and the bootloader faults instantly on older
+  # chips ("Illegal instruction" at entry). Remove for rev3 production modules.
+  engineering_sample: true
+  flash_size: 16MB
+  # Match Guition's factory firmware: quad-I/O flash at 80 MHz (default is DIO 40 MHz).
+  flash_mode: qio
+  flash_frequency: 80MHz
+  cpu_frequency: 360MHz
   framework:
     type: esp-idf
+    # No pinned version — use ESPHome's recommended IDF for this release.
+    advanced:
+      enable_idf_experimental_features: true
+      # -O2 instead of -Os: LVGL's software renderer is the hot path.
+      compiler_optimization: PERF
+      # Copy code + rodata to PSRAM at boot and run from there (as the factory
+      # firmware does): far faster cache refills than flash, and NVS/OTA writes
+      # no longer stall the UI.
+      execute_from_psram: true
+    sdkconfig_options:
+      # A roomier main-task stack keeps LVGL happy. Everything else the
+      # display/psram/wifi need is injected automatically by their components.
+      CONFIG_ESP_MAIN_TASK_STACK_SIZE: "16384"
+      CONFIG_FREERTOS_HZ: "1000"
+      # With engineering_sample the minimum revision defaults to v0.0, and IDF
+      # then refuses 80 MHz flash. Our chips are v1.x, so require v1.0.
+      # (Drop this together with engineering_sample on rev3 modules.)
+      CONFIG_ESP32P4_REV_MIN_100: "y"
 
-api:
+# 32 MB PSRAM (octal / "hex" mode). Required — the DSI framebuffer lives here.
+psram:
+  mode: hex
+  speed: 200MHz
 
-globals:
-  - id: cycleCounter
-    type: int
-    restore_value: no
-    initial_value: '0'
-  - id: button_press_timestamp
-    restore_value: no
-    type: uint32_t
-    initial_value: '0'
+# Internal LDO that powers the MIPI-DSI PHY (channel 3 → 2.5 V).
+esp_ldo:
+  - channel: 3
+    id: dsi_phy_ldo
+    adjustable: false
+    voltage: 2.5V
 
-captive_portal:
+# WiFi co-processor: on-board ESP32-C6 reached over 4-bit SDIO.
+esp32_hosted:
+  variant: ESP32C6
+  active_high: true
+  reset_pin: GPIO54
+  clk_pin: GPIO18
+  cmd_pin: GPIO19
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
 
-web_server:
-  port: 80
+# Shared I²C bus (same pins on both supported boards): audio codec, touch
+# controller, and any panel power chip — see boards/*.yaml for what sits here.
+i2c:
+  - id: i2c_bus_a
+    sda: GPIO7
+    scl: GPIO8
+    frequency: 400kHz
+    scan: false
+
+# ---------------------------------------------------------------------------
+#  Handy diagnostics, exposed to Home Assistant (optional — trim if you like).
+# ---------------------------------------------------------------------------
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_db
+    update_interval: 60s
+  - platform: internal_temperature
+    name: "CPU Temperature"
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+
+button:
+  - platform: restart
+    name: "Restart"
