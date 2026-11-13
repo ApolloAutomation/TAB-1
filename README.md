@@ -1,23 +1,61 @@
 # Apollo TAB-1
 
-![Pen no dust](https://github.com/ApolloAutomation/TAB-1/assets/24777085/183af36d-4611-4cb3-af1e-43b84d4d201a)
+TAB-1 is a Home Assistant touch tablet from Apollo Automation, running
+ESPHome firmware.
 
+- ESP32-P4. Its Wi-Fi comes from an ESP32-C6 on the same board, which the P4
+  talks to over SDIO.
+- A 10.1-inch MIPI-DSI touch panel, 800x1280, shown landscape at 1280x800.
 
-Key Features of the TAB-1 Sensor:
+The firmware has a board file for the Guition JC8012P4A1 (the default) and
+one for the Waveshare ESP32-P4-NANO with its 10.1-inch DSI TOUCH-A panel
+(`Integrations/ESPHome/boards/`). Pick one in the `packages:` block of the
+file you flash.
 
-MiCS-4514 Below have individual gas % readout: CO, C2H5OH (Alcohol), H2, NO2, and NH3
+## Firmware
 
-SCD40: CO2 and includes temperature and humidity sensing capabilities. 
+The files are in `Integrations/ESPHome`.
 
-SEN55: Particulate matter (PM1, PM2.5, PM10), VOCs, NOx, humidity, and temperature. 
+| File | What it is |
+|---|---|
+| `TAB-1-engine.yaml` | The dashboard engine, for tablets in use. It shows the dashboards you make in the [Apollo TAB Dashboard](https://github.com/ApolloAutomation/TAB-Dashboard) integration in Home Assistant. Home Assistant sends each dashboard while the tablet runs, so a new or changed dashboard needs no reflash. New releases are published to GitHub Pages, and the tablet installs one when you use its "Firmware Update" in Home Assistant. |
+| `TAB-1-engine-bench.yaml` | The same engine with a fixed key from `secrets.yaml`, for bench work. |
+| `TAB-1.yaml` | Earlier firmware: 12 tiles you set up on the tablet. |
+| `TAB-1-showcase.yaml` | Earlier firmware: a swipeable demo with simulated data. |
 
-DPS310: Barometric air pressure and temperature.
+All of them use the same device name, so Wi-Fi settings and the Home
+Assistant device carry over when you switch.
 
-Dimensions & Design:
+[`Integrations/ESPHome/docs/engine.md`](Integrations/ESPHome/docs/engine.md)
+explains the engine: set-up, updates, erasing a tablet, switching firmware,
+and the checks.
 
-The TAB-1 measures just 61mm x 61mm x 30mm, and we have focused on efficient heat management within this small package to maintain sensor accuracy. This includes a thoughtful PCB layout and case design, incorporating ventilation and strategic component placement.
+## Set up a new tablet
 
-Links: \
-Discord (Support/feedback/discussion/future products): [https://discord.gg/8PpS4yUaUh](https://discord.gg/mMNgQPyF94) \
-Shop: [https://apolloautomation.com](https://apolloautomation.com/products/tab-1)https://apolloautomation.com/products/tab-1 \
-Wiki: [https://wiki.apolloautomation.com](https://wiki.apolloautomation.com/)https://wiki.apolloautomation.com/
+1. Flash `TAB-1-engine.yaml` over USB (or install it from ESPHome Web).
+2. Within 15 minutes of power-on, join the open Wi-Fi "Apollo TAB1 Hotspot"
+   from a phone and pick the home's Wi-Fi on the page that opens.
+3. Add the tablet in Home Assistant when it shows up in Settings > Devices &
+   services. Home Assistant gives it its own key on that first connection.
+4. In TAB-1 in Home Assistant's sidebar (the Apollo TAB Dashboard
+   integration), an admin turns the tablet on once with its dashboard.
+
+## More documents
+
+- [`Integrations/ESPHome/engine_tests/contract/CONTRACT.md`](Integrations/ESPHome/engine_tests/contract/CONTRACT.md):
+  the protocol between the tablet and Home Assistant.
+- [`docs/runtime-dashboards-design.md`](docs/runtime-dashboards-design.md):
+  the design proposal written before the engine, kept for history.
+
+## Links
+
+- Discord (support, feedback, discussion, future products): [dsc.gg/ApolloAutomation](https://dsc.gg/ApolloAutomation)
+- Shop: [apolloautomation.com](https://apolloautomation.com)
+- Wiki: [wiki.apolloautomation.com](https://wiki.apolloautomation.com/)
+
+## Licence
+
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International. See
+[License.md](License.md). The Montserrat font is under the SIL Open Font
+License 1.1
+([`Integrations/ESPHome/fonts/Montserrat-OFL.txt`](Integrations/ESPHome/fonts/Montserrat-OFL.txt)).

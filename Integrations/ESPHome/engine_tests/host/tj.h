@@ -1,6 +1,7 @@
 #pragma once
 // A small JSON reader for the test program, to read the contract fixtures and
 // to check the engine's JSON answers. Independent of the engine's parser.
+// It reads only inside [p, e): the text needs no NUL after it.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -63,13 +64,61 @@ struct Parser {
       out += (char) (0x80 | (cp & 0x3F));
     }
   }
-  uint32_t hex4() {
+  static bool digit(char c) { return c >= '0' && c <= '9'; }
+  // The four hex digits of a \u escape. False when fewer than four are left
+  // or one is not a hex digit.
+  bool hex4(uint32_t *out) {
+    if (e - p < 4) return false;
     uint32_t v = 0;
-    for (int i = 0; i < 4 && p < e; i++, p++) {
+    for (int i = 0; i < 4; i++, p++) {
       const char c = *p;
-      v = v * 16 + (uint32_t) (c <= '9' ? c - '0' : (c | 32) - 'a' + 10);
+      uint32_t d;
+      if (digit(c))
+        d = (uint32_t) (c - '0');
+      else if (c >= 'a' && c <= 'f')
+        d = (uint32_t) (c - 'a' + 10);
+      else if (c >= 'A' && c <= 'F')
+        d = (uint32_t) (c - 'A' + 10);
+      else
+        return false;
+      v = v * 16 + d;
     }
-    return v;
+    *out = v;
+    return true;
+  }
+  // The literal w (n bytes), only when all of it is left.
+  bool lit(const char *w, size_t n) {
+    if ((size_t) (e - p) < n || memcmp(p, w, n) != 0) return false;
+    p += n;
+    return true;
+  }
+  // A number in the JSON grammar: -? (0 | [1-9][0-9]*) (.[0-9]+)? ([eE][+-]?[0-9]+)?
+  // strtod must then read the whole token.
+  bool num(Value &v) {
+    const char *s = p;
+    if (p < e && *p == '-') p++;
+    if (p >= e || !digit(*p)) return false;
+    if (*p == '0') {
+      p++;
+    } else {
+      while (p < e && digit(*p)) p++;
+    }
+    if (p < e && *p == '.') {
+      p++;
+      if (p >= e || !digit(*p)) return false;
+      while (p < e && digit(*p)) p++;
+    }
+    if (p < e && (*p == 'e' || *p == 'E')) {
+      p++;
+      if (p < e && (*p == '+' || *p == '-')) p++;
+      if (p >= e || !digit(*p)) return false;
+      while (p < e && digit(*p)) p++;
+    }
+    v.t = Value::NUM;
+    v.s.assign(s, p);
+    char *end = nullptr;
+    v.n = strtod(v.s.c_str(), &end);
+    return end == v.s.c_str() + v.s.size();
   }
   bool str(std::string &out) {
     if (p >= e || *p != '"') return ok = false;
@@ -80,6 +129,7 @@ struct Parser {
         continue;
       }
       p++;
+      if (p >= e) return ok = false;  // the text ends after the backslash
       const char c = *p++;
       switch (c) {
         case 'n': out += '\n'; break;
@@ -88,10 +138,12 @@ struct Parser {
         case 'b': out += '\b'; break;
         case 'f': out += '\f'; break;
         case 'u': {
-          uint32_t cp = hex4();
-          if (cp >= 0xD800 && cp <= 0xDBFF && p + 1 < e && p[0] == '\\' && p[1] == 'u') {
+          uint32_t cp = 0;
+          if (!hex4(&cp)) return ok = false;
+          if (cp >= 0xD800 && cp <= 0xDBFF && e - p >= 2 && p[0] == '\\' && p[1] == 'u') {
             p += 2;
-            const uint32_t lo = hex4();
+            uint32_t lo = 0;
+            if (!hex4(&lo)) return ok = false;
             cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
           }
           put(out, cp);
@@ -165,22 +217,14 @@ struct Parser {
     } else if (*p == '"') {
       v.t = Value::STR;
       str(v.s);
-    } else if (!strncmp(p, "true", 4)) {
+    } else if (lit("true", 4)) {
       v.t = Value::BOOL;
       v.b = true;
-      p += 4;
-    } else if (!strncmp(p, "false", 5)) {
+    } else if (lit("false", 5)) {
       v.t = Value::BOOL;
-      p += 5;
-    } else if (!strncmp(p, "null", 4)) {
-      p += 4;
-    } else {
-      v.t = Value::NUM;
-      const char *s = p;
-      while (p < e && (strchr("+-0123456789.eE", *p) != nullptr)) p++;
-      v.s.assign(s, p);
-      v.n = strtod(v.s.c_str(), nullptr);
-      if (p == s) ok = false;
+    } else if (lit("null", 4)) {
+    } else if (!num(v)) {
+      ok = false;
     }
     return v;
   }

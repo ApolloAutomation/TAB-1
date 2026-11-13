@@ -1,5 +1,12 @@
 # TAB-1 runtime dashboards: architecture and design (rev 2)
 
+**Status: historical.** This is the design proposal of 2026-11-10, written
+before the dashboard engine was built. It is kept for its reasoning, not as a
+spec. The protocol the firmware implements is
+[`Integrations/ESPHome/engine_tests/contract/CONTRACT.md`](../Integrations/ESPHome/engine_tests/contract/CONTRACT.md);
+where the two differ, CONTRACT.md wins. The firmware overview is
+[`Integrations/ESPHome/docs/engine.md`](../Integrations/ESPHome/docs/engine.md).
+
 Tags: **[V]** verified in research, **[L]** likely, **[S]** speculative, **[R]** a reviewer's source citation that I accepted but did not re-check. No new measurements were made in this revision.
 
 ## 1. Recommendation
@@ -244,6 +251,6 @@ Assumed team **[S]**: two engineers (firmware, HA/Python with light TypeScript) 
 - **Roadmap:** durations, team, exit criteria, wall-panel essentials, Marketplace distribution, MIT licence.
 - **Not addressed in depth:** localisation of panel strings, and template sharing across panels.
 
-Research and reviews: `research.json` and `critiques.json` in the session scratchpad.
+The research notes, the reviews and the benchmark source were working files and are not in this repository.
 
-Relevant paths: `/Users/tschirmer/Code/ApolloAutomation/TAB-1/Integrations/ESPHome/` (`Display.yaml`, `tiles.h`, `fast_display.h`, `tools/gen_display.py`, `TAB-1.yaml`, `Core.yaml`); benchmark source `/private/tmp/claude-501/-Users-tschirmer-Code-ApolloAutomation-TAB-1/a1934439-7b3c-4d4d-b7e9-a13e72b67dcc/scratchpad/lvbench/bench.c`.
+Relevant paths: `Integrations/ESPHome/` (`Display.yaml`, `tiles.h`, `fast_display.h`, `tools/gen_display.py`, `TAB-1.yaml`, `Core.yaml`).
