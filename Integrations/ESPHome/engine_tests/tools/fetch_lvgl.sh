@@ -5,7 +5,6 @@
 # Sources, in this order:
 #   1. the folder named in TAB_LVGL_SRC
 #   2. the repo's ESPHome build: .esphome/build/apollo-tab-1/managed_components/lvgl__lvgl
-#   3. the showcase harness copy: <scratchpad>/showcase/host/lvgl
 #
 # The copy is made once. A later clean rebuild of the firmware cannot take it
 # away. Delete the folder to copy again.
@@ -42,14 +41,6 @@ for c in "${TAB_LVGL_SRC:-}" "$FW/.esphome/build/apollo-tab-1/managed_components
     break
   fi
 done
-if [ -z "$SRC" ]; then
-  for c in /private/tmp/*/*/*/scratchpad/showcase/host/lvgl; do
-    if [ -f "$c/lv_version.h" ] && [ -d "$c/src" ]; then
-      SRC="$c"
-      break
-    fi
-  done
-fi
 if [ -z "$SRC" ]; then
   echo "No LVGL sources found. Set TAB_LVGL_SRC to an LVGL 9.5.0 folder, or compile the firmware once." >&2
   exit 1

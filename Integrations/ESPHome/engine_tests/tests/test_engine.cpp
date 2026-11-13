@@ -480,6 +480,65 @@ TEST(json_parser) {
   CHECK(ld.c.slots == 3 && ld.slot_type_of(2) == 'b' && ld.slot_type_of(3) == 'n');
 }
 
+// The test program's own JSON reader (host/tj.h) checks the engine's answers,
+// so it must read only the bytes it is given, and only JSON. tj_exact copies
+// the text to a heap block of exactly its size with no NUL after it: a read
+// past the end is an error in the AddressSanitizer build.
+static bool tj_exact(const std::string &text, tj::Value *v) {
+  char *b = static_cast<char *>(malloc(text.empty() ? 1 : text.size()));
+  if (!text.empty()) memcpy(b, text.data(), text.size());
+  const bool ok = tj::parse(b, text.size(), v);
+  free(b);
+  return ok;
+}
+
+TEST(tj_reader_bounds) {
+  tj::Value v;
+  // Cut off in an escape, a \u escape or a literal: refused, nothing read past the end.
+  for (const char *bad : {"\"\\", "\"a\\", "[\"\\", "{\"k\\", "\"\\u", "\"\\u0", "\"\\u00", "\"\\u00f",
+                          "\"\\u00fc", "\"\\ud83d\\", "\"\\ud83d\\u", "\"\\ud83d\\ude0", "t", "tr", "tru", "f",
+                          "fa", "fal", "fals", "n", "nu", "nul", "[tru", "{\"a\":fals", "[1,nul"})
+    CHECK_MSG(!tj_exact(bad, &v), bad);
+  // A \u escape needs four hex digits.
+  for (const char *bad : {"\"\\u00zz\"", "\"\\u0g00\"", "\"\\u12\"", "\"\\u\"", "\"\\ud83d\\uzzzz\""})
+    CHECK_MSG(!tj_exact(bad, &v), bad);
+  // Whole ones still read, also with no NUL after them.
+  CHECK(tj_exact("true", &v) && v.t == tj::Value::BOOL && v.b);
+  CHECK(tj_exact("false", &v) && v.t == tj::Value::BOOL && !v.b);
+  CHECK(tj_exact("null", &v) && v.is_null());
+  CHECK(tj_exact("[true,false,null]", &v) && v.size() == 3 && v[0].b && !v[1].b && v[2].is_null());
+  CHECK(tj_exact("\"a\\n\\\"b\\\\\"", &v) && v.s == "a\n\"b\\");
+  CHECK(tj_exact("\"\\u00fc\\u00B0\"", &v) && v.s == "\xC3\xBC\xC2\xB0");
+  CHECK(tj_exact("\"\\ud83d\\ude00\"", &v) && v.s == "\xF0\x9F\x98\x80");
+  CHECK(tj_exact("{\"k\":\"\\u0041\"}", &v) && v["k"].s == "A");
+}
+
+TEST(tj_reader_numbers) {
+  tj::Value v;
+  // Only the JSON number grammar: -? (0 | [1-9][0-9]*) (.[0-9]+)? ([eE][+-]?[0-9]+)?
+  const std::vector<std::string> bad = {
+      "+", "1e", "1.2.3", "01", ".5", "1.", "--1", "1e+", "[1,+]", std::string("\0", 1),
+      std::string("1\0", 2), std::string("[1,\0]", 5), "-", "+1", "1e-", "1E", "1.e3", "-.5",
+      "00", "-01", "0x10", "1e2.5", "[1,-]", "{\"a\":1.}", "[.5]", "Infinity", "NaN", "1 2"};
+  for (const std::string &b : bad) {
+    std::string shown;
+    for (const char c : b) shown += c ? std::string(1, c) : std::string("\\0");
+    CHECK_MSG(!tj_exact(b, &v), shown);
+  }
+  const std::pair<const char *, double> good[] = {
+      {"0", 0},        {"-0", 0},         {"7", 7},        {"-12", -12},       {"10", 10},
+      {"1.5", 1.5},    {"-0.25", -0.25},  {"1e3", 1000},   {"1E3", 1000},      {"1e+3", 1000},
+      {"1e-3", 0.001}, {"2.5E-1", 0.25},  {"0.5e1", 5},    {"0e0", 0},         {" 42 ", 42},
+      {"123456789.125", 123456789.125}};
+  for (auto &g : good) {
+    const bool read = tj_exact(g.first, &v);
+    CHECK_MSG(read && v.t == tj::Value::NUM && v.n == g.second, g.first);
+  }
+  CHECK(tj_exact("1e+3", &v) && v.s == "1e+3");  // the raw text stays
+  CHECK(tj_exact("[1,-2,3.5e2]", &v) && v.size() == 3 && v[0].n == 1 && v[1].n == -2 && v[2].n == 350);
+  CHECK(tj_exact("{\"a\":-0.5,\"b\":0}", &v) && v["a"].n == -0.5 && v["b"].n == 0);
+}
+
 TEST(layout_shapes) {
   // Any key order, unknown keys and unknown widget kinds are fine (contract 4.1, 4.6).
   const char *dl =

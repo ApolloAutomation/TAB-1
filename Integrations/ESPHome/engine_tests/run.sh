@@ -37,6 +37,17 @@ ASAN_FLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-san
 
 hash_of() { if command -v md5 > /dev/null; then md5 -q "$@"; else md5sum "$@" | cut -d' ' -f1; fi; }
 hash_text() { if command -v md5 > /dev/null; then md5 -q; else md5sum | cut -d' ' -f1; fi; }
+# One hash of the contents of every LVGL source and header (with their paths),
+# so a file changed in place counts too, not only an added or removed one.
+hash_lvgl() {
+  if command -v md5 > /dev/null; then
+    find "$LV/src" "$LV/lvgl.h" "$LV/lv_version.h" -type f \( -name '*.c' -o -name '*.h' \) -exec md5 -r {} +
+  else
+    find "$LV/src" "$LV/lvgl.h" "$LV/lv_version.h" -type f \( -name '*.c' -o -name '*.h' \) -exec md5sum {} +
+  fi | LC_ALL=C sort | hash_text
+}
+# Which compiler: the CC command and what it says it is.
+hash_cc() { { echo "$CC"; $CC --version 2>&1; } | hash_text; }
 
 "$T/tools/fetch_lvgl.sh" "$LV" || exit 1
 for f in "$TEXT_TTF" "$ICON_TTF"; do
@@ -44,7 +55,11 @@ for f in "$TEXT_TTF" "$ICON_TTF"; do
 done
 mkdir -p "$WORK" "$OUT" "$SHOTS"
 
-# One static LVGL per flag set, rebuilt only when sources, lv_conf.h or flags change.
+# One static LVGL per flag set. It is built again when any of these change: the
+# flags, lv_conf.h, the list of LVGL files built, the contents of any LVGL
+# source or header, or the compiler.
+LV_SUM="$(hash_lvgl)"
+CC_SUM="$(hash_cc)"
 build_lib() {
   name="$1"; flags="$2"
   lib="$WORK/liblvgl_$name.a"; obj="$WORK/obj_$name"; stamp="$WORK/stamp_$name"; list="$WORK/files.txt"
@@ -57,7 +72,7 @@ build_lib() {
     ! -name 'lv_font_montserrat_*' ! -name 'lv_font_simsun*' ! -name 'lv_font_source*' \
     ! -name 'lv_font_dejavu*' ! -name 'lv_font_unscii*' | sort > "$list"
   echo "$LV/src/font/lv_font_montserrat_16.c" >> "$list"
-  want="$(echo "$flags $COMMON" | hash_text) $(hash_of "$T/host/lv_conf.h") $(hash_of "$list")"
+  want="$(echo "$flags $COMMON" | hash_text) $(hash_of "$T/host/lv_conf.h") $(hash_of "$list") $LV_SUM $CC_SUM"
   if [ -f "$lib" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
     echo "liblvgl_$name.a is up to date"
     return 0
