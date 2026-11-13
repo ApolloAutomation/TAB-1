@@ -1,0 +1,146 @@
+# ============================================================================
+#  Apollo TAB-1 · Dashboard firmware
+#  ESP32-P4 + C6 · 10.1" 800×1280 MIPI-DSI touch panel, shown as 1280×800
+#
+#  Flash THIS file to show dashboards made in the Apollo TAB Dashboard
+#  integration in Home Assistant. Home Assistant sends each dashboard to the
+#  tablet, so changing a dashboard needs no reflash.
+#
+#     Core.yaml           — SoC, PSRAM, WiFi (via C6), DSI PHY LDO, I²C bus
+#     boards/<board>.yaml — panel, touch controller, backlight
+#     Engine.yaml         — the dashboard engine (fonts, actions, LVGL setup)
+#     ota_lock.h          — locks updates to the API key once it exists
+#
+#  No shared secret ships in this file, so it builds as is. After each
+#  power-on the tablet has a 15-minute set-up window: an open hotspot for
+#  Wi-Fi, and Home Assistant gives the tablet its own API key the first time
+#  it connects. From then on only that key installs firmware over the
+#  network. For bench work with network logs and the web page, flash
+#  TAB-1-engine-bench.yaml instead (same firmware, fixed key).
+#
+#  Same device name as TAB-1.yaml, so Wi-Fi settings and identity carry over.
+#  docs/engine.md explains set-up, updates, erasing and switching firmware.
+# ============================================================================
+
+substitutions:
+  name: apollo-tab-1
+  friendly_name: Apollo TAB-1
+  version: "26.11.12.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  # ota_lock.h relies on ESPHome internals checked against 2026.10.2, the
+  # version .github/workflows/build.yml builds releases with. Raise both
+  # together, after tools/check_engine_package.py --compile passes on the new one.
+  min_version: 2026.10.2
+  # Run the main loop every 2 ms instead of 16 ms. The touch interrupt doesn't
+  # wake the loop, so this cuts up to ~14 ms off every touch-to-screen step.
+  loop_interval: 2ms
+  includes:
+    - fast_display.h
+    - ota_lock.h
+  project:
+    name: "ApolloAutomation.TAB-1"
+    version: "${version}"
+  build_flags:
+    - -DLV_MEMCPY_MEMSET_STD=1
+  on_boot:
+    # Before Wi-Fi and the update doors start (ota_lock.h): a tablet that
+    # already has its key takes no plaintext firmware, not even at boot.
+    - priority: 700.0
+      then:
+        - lambda: tab_lock::boot(id(ota_main));
+    - priority: 100.0
+      then:
+        # Faster landscape flush and 5 ms touch reads (see fast_display.h),
+        # then the engine: stored dashboard or the waiting screen.
+        - lambda: fast_display::setup(id(dsi_display));
+        - script.execute: tab_engine_start
+  # Locks updates the moment Home Assistant provisions the key, or when the
+  # set-up window closes without one. Restarts once when the key is cleared.
+  on_loop:
+    - lambda: tab_lock::poll(id(ota_main));
+
+# Adopting the tablet in ESPHome Builder pulls this file in as a package.
+dashboard_import:
+  package_import_url: github://ApolloAutomation/TAB-1/Integrations/ESPHome/TAB-1-engine.yaml
+  import_full_config: false
+
+packages:
+  core: !include Core.yaml
+  # Hardware: uncomment exactly ONE board.
+  board: !include boards/guition-jc8012p4a1.yaml
+  # board: !include boards/waveshare-p4-nano-10.yaml
+  engine: !include Engine.yaml
+
+# --- Connectivity -----------------------------------------------------------
+# reboot_timeout 0s on wifi and api: without Home Assistant the tablet keeps
+# showing the last dashboard and its last values, so it must never restart
+# for lack of either.
+#
+# The hotspot is open, so anyone nearby can set the tablet's Wi-Fi during the
+# set-up window. It also comes back after 90 s without Wi-Fi on a tablet that
+# is set up and was on Wi-Fi since it was turned on, so a changed Wi-Fi
+# password can be fixed from a phone. A tablet that found no Wi-Fi in its
+# first 15 minutes shows no hotspot until it is turned off and on again.
+wifi:
+  reboot_timeout: 0s
+  on_connect:
+    - component.update: update_http_request
+  ap:
+    ssid: "Apollo TAB1 Hotspot"
+
+captive_portal:
+
+# The set-up window: 15 minutes after each power-on. A tablet still without a
+# key then turns Home Assistant away until it is restarted, and says so on its
+# waiting screen, which then also covers a stored dashboard.
+provisioning:
+  timeout: 15min
+  on_timeout:
+    - lambda: tab_glue::setup_window_closed();
+
+api:
+  reboot_timeout: 0s
+  # No key: Home Assistant provisions one on first connect.
+  encryption:
+
+# Firmware on this tablet can read the key that signs its touches, so new
+# firmware must come from whoever holds the API key:
+#   - network updates (ota_main): plaintext only until the key exists or the
+#     set-up window closes; then ota_lock.h sets a random password nobody
+#     knows, and only updates encrypted with the API key get in;
+#   - the hotspot's set-up page answers 403 to firmware uploads from then on;
+#   - Apollo's releases (ota_managed): only when Home Assistant asks for the
+#     update, only from the address below, over checked HTTPS.
+ota:
+  - platform: esphome
+    id: ota_main
+    # Empty on purpose: it builds the password check, which ota_lock.h sets
+    # to a random value once the key exists. Encrypted updates skip it.
+    password: ""
+  - platform: http_request
+    id: ota_managed
+
+http_request:
+  verify_ssl: true
+  # Fits GitHub's redirect headers.
+  buffer_size_rx: 5120
+  buffer_size_tx: 2048
+
+update:
+  - platform: http_request
+    id: update_http_request
+    name: Firmware Update
+    source: https://apolloautomation.github.io/TAB-1/firmware/manifest.json
+
+# Safe mode runs no on_boot and no on_loop, so it locks here.
+safe_mode:
+  on_safe_mode:
+    - lambda: tab_lock::safe_mode(id(ota_main));
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG

@@ -1,0 +1,4 @@
+# Host build products of run.sh. Never committed.
+.lvgl/
+.build/
+out/
