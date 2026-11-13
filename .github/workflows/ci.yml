@@ -10,31 +10,10 @@ concurrency:
 permissions:
   contents: read
 
-# Same job as ApolloAutomation/Workflows esphome-ci.yml, but with a newer
-# esphome/build-action. The shared workflow uses build-action@v7, whose moving
-# tag still points at v7.2.0; its manifest step rejects the ESP32-P4
-# ("Unsupported chip family: ESP32P4"). v7.3.0 and later read chip names from
-# ESPHome itself. Go back to the shared workflow once it has moved past v7.2.0.
 jobs:
-  build:
-    name: Building ${{ matrix.file }} / ESPHome ${{ matrix.esphome-version }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        file:
-          - Integrations/ESPHome/TAB-1.yaml
-        esphome-version:
-          - stable
-          - beta
-          - dev
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Build ESPHome firmware to verify configuration
-        uses: esphome/build-action@ae5408cdbc4f70692bf8e345c4982bca05a93667 # v8.1.0
-        with:
-          yaml-file: ${{ matrix.file }}
-          version: ${{ matrix.esphome-version }}
+  ci:
+    name: CI
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    with:
+      yaml-files: |
+        Integrations/ESPHome/TAB-1.yaml
