@@ -1,0 +1,53 @@
+# ============================================================================
+#  Board: Waveshare ESP32-P4-NANO + 10.1" DSI TOUCH-A (JD9365, 800×1280)
+#  Selected in TAB-1.yaml under `packages: board:`. Everything here is
+#  mainline ESPHome (2025.11+).
+#
+#  I²C (i2c_bus_a, GPIO7/8): ES8311 codec @0x18, GT911 touch, and the panel's
+#  power/backlight chip @0x45 (reg 0x95 = rail enable, reg 0x96 = PWM).
+#
+#  Every board file must provide: `dsi_display`, `touchscreen_id`, and the
+#  `set_backlight(percent)` script used by the Settings brightness slider.
+# ============================================================================
+
+i2c_device:
+  - id: display_i2c
+    address: 0x45
+    i2c_id: i2c_bus_a
+
+esphome:
+  # Power up the panel rail + backlight. The 0x45 chip gates both; this must
+  # run before the display initialises (priority > display's 790).
+  on_boot:
+    - priority: 850.0
+      then:
+        - lambda: id(display_i2c).write_byte(0x95, 0x11);
+        - lambda: id(display_i2c).write_byte(0x95, 0x17);
+        - lambda: id(display_i2c).write_byte(0x96, 0x00);
+        - delay: 100ms
+        - lambda: id(display_i2c).write_byte(0x96, 0xFF);
+        - delay: 1s
+
+touchscreen:
+  - platform: gt911
+    id: touchscreen_id
+    i2c_id: i2c_bus_a
+    update_interval: 50ms
+    # If touch is mirrored/swapped: transform: { swap_xy: true, mirror_x: true }
+
+display:
+  - platform: mipi_dsi
+    id: dsi_display
+    model: WAVESHARE-P4-NANO-10.1
+    auto_clear_enabled: false
+    update_interval: never
+
+script:
+  - id: set_backlight
+    parameters:
+      percent: float
+    then:
+      - lambda: |-
+          uint8_t duty = (uint8_t) roundf(percent * 2.55f);
+          if (duty < 12) duty = 12;
+          id(display_i2c).write_byte(0x96, duty);

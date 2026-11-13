@@ -1,0 +1,55 @@
+name: Build and Publish
+
+# Builds the dashboard firmware (TAB-1-engine.yaml) and publishes it to
+# GitHub Pages at firmware/manifest.json, where the tablets' update entity
+# looks for new releases:
+#   https://apolloautomation.github.io/TAB-1/firmware/manifest.json
+# The version is the `version:` substitution in TAB-1-engine.yaml.
+# The file has no secrets, so it builds as is.
+#
+# Needs, once per repository (as in the other Apollo device repositories):
+#   - .github/release-drafter.yml on the default branch: the shared workflow
+#     drafts and publishes the release with release-drafter;
+#   - Settings > Pages > Source set to "GitHub Actions".
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      bypass-yaml-check:
+        description: 'Bypass YAML change check (force build/publish)'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  build-and-publish:
+    # Needs Workflows #36 or later: older versions build releases with
+    # esphome/workflows that rejects the ESP32-P4.
+    uses: ApolloAutomation/Workflows/.github/workflows/build.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+      pull-requests: write
+    with:
+      device-name: tab-1
+      yaml-files: |
+        Integrations/ESPHome/TAB-1-engine.yaml
+      # "engine" (the part of the file name after the last dash) goes to firmware/.
+      firmware-names: "engine:firmware"
+      core-yaml-path: Integrations/ESPHome/TAB-1-engine.yaml
+      # Pinned, not "stable": the update lock (ota_lock.h) relies on ESPHome
+      # internals checked against this version. Raise it only together with
+      # min_version in both engine files, after
+      # tools/check_engine_package.py --host --config --compile passes on it.
+      esphome-version: 2026.10.2
+      # Bypass check if manually triggered with bypass option
+      check-yaml-changes: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.bypass-yaml-check == 'true') }}
+      publish-to-pages: true
+      # No web installer is published with this firmware. The index.html at
+      # the repository root points at Integrations/ESPHome/manifest.json, which
+      # does not exist, so that installer does not work today either.
+      has-installer: false

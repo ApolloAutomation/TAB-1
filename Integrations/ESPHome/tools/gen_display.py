@@ -15,7 +15,8 @@ TYPE_OPTIONS = ["Value", "Switch", "Light", "Button", "Scene", "Cover",
 BOXES = ", ".join(f"id(t{i}_entity)" for i in range(N))
 
 HEADER = '''# ============================================================================
-#  Display.yaml — GENERATED. DSI panel, GT911 touch, and the tile dashboard.
+#  Display.yaml — GENERATED. The tile dashboard UI. Board hardware (panel,
+#  touch, backlight) lives in boards/*.yaml, selected in TAB-1.yaml.
 #  Behaviour lives in tiles.h (included from TAB-1.yaml).
 #
 #   - Main page: up to 12 configurable tiles in a 4x3 cell grid.
@@ -30,6 +31,8 @@ color:
     hex: "0F1420"
   - id: card_bg
     hex: "1B2233"
+  - id: card_pressed       # instant tap feedback, before Home Assistant answers
+    hex: "2A3550"
   - id: accent
     hex: "3FA7F3"
   - id: on_color
@@ -38,25 +41,6 @@ color:
     hex: "F2F4F8"
   - id: text_muted
     hex: "8A93A6"
-
-i2c_device:
-  - id: display_i2c
-    address: 0x45
-    i2c_id: i2c_bus_a
-
-touchscreen:
-  - platform: gt911
-    id: touchscreen_id
-    i2c_id: i2c_bus_a
-    update_interval: 50ms
-    # If touch is mirrored/swapped: transform: { swap_xy: true, mirror_x: true }
-
-display:
-  - platform: mipi_dsi
-    id: dsi_display
-    model: WAVESHARE-P4-NANO-10.1
-    auto_clear_enabled: false
-    update_interval: never
 
 time:
   - platform: homeassistant
@@ -339,6 +323,7 @@ lvgl:
     - touchscreen_id: touchscreen_id
       long_press_time: 900ms      # longer hold so swipes don't open the editor
   rotation: 270°
+  buffer_size: 12%   # 1/8 screen → fits internal SRAM; much faster than a PSRAM buffer
   default_font: montserrat_20
   bg_color: bg_dark
 
@@ -523,7 +508,10 @@ lvgl:
       scrollbar_mode: "OFF"
       pad_all: 0
       on_swipe_left:
-        - lvgl.page.show: {{ id: settings_page, animation: MOVE_LEFT, time: 250ms }}
+        # The release that ends a swipe would also "click" the tile under the
+        # finger (toggling it); wait_release swallows it.
+        - lambda: 'lv_indev_wait_release(lv_indev_active());'
+        - lvgl.page.show: {{ id: settings_page, animation: NONE }}
       widgets:
         - obj:
             align: TOP_MID
@@ -535,6 +523,7 @@ lvgl:
             border_width: 0
             radius: 0
             pad_all: 0
+            scrollable: false
             widgets:
               - label: {{ id: lbl_time, text: "--:--", text_font: montserrat_28, align: LEFT_MID, x: 24 }}
               - label: {{ text: "Home", text_font: montserrat_28, align: CENTER }}
@@ -548,13 +537,14 @@ lvgl:
             border_width: 0
             pad_all: 0
             scrollbar_mode: "OFF"
+            scrollable: false
             widgets:
 '''
 
 
 def tile_widget(i):
     bars = "\n".join(
-        f'''                          - bar: {{ id: g{i}_{j}, flex_grow: 1, height: 100%, styles: spark_bar, indicator: {{ bg_color: accent }} }}'''
+        f'''                          - bar: {{ id: g{i}_{j}, flex_grow: 1, height: 100%, clickable: false, styles: spark_bar, indicator: {{ bg_color: accent }} }}'''
         for j in range(BARS))
     return f'''              - obj:
                   id: tile{i}
@@ -562,6 +552,9 @@ def tile_widget(i):
                   height: 216
                   styles: tile_card
                   clickable: true
+                  scrollable: false
+                  pressed:
+                    bg_color: card_pressed
                   checked:
                     border_width: 3
                     border_color: on_color
@@ -583,12 +576,15 @@ def tile_widget(i):
                         bg_opa: TRANSP
                         border_width: 0
                         pad_all: 0
+                        scrollable: false
+                        clickable: false   # plain objs/bars are clickable by default and would eat the tile's taps
                         layout: {{ type: flex, flex_flow: ROW, pad_column: 2 }}
                         widgets:
 {bars}
                     - slider:
                         id: ts{i}
                         hidden: true
+                        gesture_bubble: false
                         align: BOTTOM_MID
                         width: 100%
                         height: 26
@@ -638,7 +634,8 @@ SETTINGS = '''
       bg_color: bg_dark
       scrollbar_mode: "OFF"
       on_swipe_right:
-        - lvgl.page.show: { id: main_page, animation: MOVE_RIGHT, time: 250ms }
+        - lambda: 'lv_indev_wait_release(lv_indev_active());'
+        - lvgl.page.show: { id: main_page, animation: NONE }
       widgets:
         - label: { text: "Settings", text_font: montserrat_28, align: TOP_MID, y: 24 }
         - obj:
@@ -651,6 +648,7 @@ SETTINGS = '''
               - label: { text: "Screen Brightness", styles: card_title, align: TOP_LEFT }
               - slider:
                   id: sld_backlight
+                  gesture_bubble: false
                   align: BOTTOM_MID
                   width: 100%
                   height: 28
@@ -661,10 +659,9 @@ SETTINGS = '''
                   indicator: { radius: 14 }
                   knob: { pad_all: 8, radius: 14 }
                   on_value:
-                    - lambda: |-
-                        uint8_t duty = (uint8_t) roundf(x * 2.55f);
-                        if (duty < 12) duty = 12;
-                        id(display_i2c).write_byte(0x96, duty);
+                    - script.execute:
+                        id: set_backlight
+                        percent: !lambda 'return x;'
         - obj:
             align: TOP_MID
             y: 260
