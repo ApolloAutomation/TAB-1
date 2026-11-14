@@ -634,25 +634,35 @@ inline bool finger_down() {
   return i && lv_indev_get_state(i) == LV_INDEV_STATE_PRESSED;
 }
 
-inline void build_tick() {
+// Returns true when it ran a build step.
+inline bool build_tick() {
   Layout *s = staged_layout();
-  if (!s || s->state != L_BUILDING) return;
+  if (!s || s->state != L_BUILDING) return false;
   // Free PSRAM is a number the heap keeps; its largest block would be a walk
   // of the whole heap on every tick. stage() checked the block once.
   if (g.pf.free_psram && g.pf.free_psram() < MEMORY_MARGIN + SLICE_OBJECTS * OBJECT_BYTES) {
     fail_build("memory");
-    return;
+    return false;
   }
   g.obj_fail = false;
   const bool done = build_step(*s, SLICE_MS);
   if (g.obj_fail) {
     fail_build("build");
-    return;
+    return true;
   }
   if (done) {
     s->state = L_READY;
     s->ready_at = now();
   }
+  return true;
+}
+
+// Widgets of the shown layout that changed while their page was not on
+// screen are painted here, a few a tick, never in a tick that ran a build
+// step (cards spec B.4, rule 1).
+inline void stale_tick(uint32_t tick_start) {
+  Layout *a = active_layout();
+  if (a && a->state == L_ACTIVE && a->stale) paint_stale(*a, tick_start);
 }
 
 // A slider still held when a forced swap retires its layout would lose the
@@ -981,8 +991,9 @@ inline void timer_cb(lv_timer_t *) {
   const uint32_t start = now();
   poll_connection();
   knock_tick();
-  build_tick();
+  const bool built = build_tick();
   swap_tick();
+  if (!built) stale_tick(start);
   delete_tick(start);
   feedback_tick();
   strip_tick();

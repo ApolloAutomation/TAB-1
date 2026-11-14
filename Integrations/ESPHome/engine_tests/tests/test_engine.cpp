@@ -13,6 +13,7 @@
 #include "tab_engine.h"
 #include "frames.h"
 #include "host_fonts.h"
+#include "src/core/lv_obj_private.h"  // repaint_cost reads whether a layout pass is due
 
 #include <algorithm>
 #include <array>
@@ -5888,4 +5889,466 @@ TEST(offscreen_costs_nothing) {
   fake::st.free = 28000000;
   CHECK_STR(status_build(), "memory");
   CHECK_STR(tab::active_hash(), "ef98088e1fda910d");
+}
+
+// ================================================================ colours and repaints (cards spec B.3, B.4)
+
+static uint32_t colour_of(const tj::Value &v) { return (uint32_t) v.n; }
+
+// A theme and a card style of maths.json (device form) as the engine holds them.
+static D::Theme maths_theme(const tj::Value &t) {
+  D::Theme th{};
+  for (int c = 0; c < D::C_COUNT; c++) th.c[c] = colour_of(t[D::THEME_KEYS[c]]);
+  th.dark = (uint8_t) t["dark"].n;
+  th.r = (int16_t) t["r"].n;
+  th.r2 = (int16_t) t["r2"].n;
+  th.bw = (int16_t) t["bw"].n;
+  return th;
+}
+
+static D::CardStyle maths_style(const tj::Value &s) {
+  D::CardStyle st{};
+  st.gd = -1;
+  for (int i = 0; i < D::S_COUNT; i++)
+    if (s.has(D::STYLE_KEYS[i])) {
+      st.c[i] = colour_of(s[D::STYLE_KEYS[i]]);
+      st.mask |= 1u << i;
+    }
+  return st;
+}
+
+static std::string hex6(uint32_t c) {
+  char b[16];
+  snprintf(b, sizeof b, "%06x", (unsigned) c);
+  return b;
+}
+
+// The colour rules of contract 4.7 against every vector of maths.json that
+// the colours cover: the table, mix (and every exact half), lum, contrast,
+// readable, legible, blend at 0.82 (also the pairs a fused multiply-add gets
+// wrong), the card colours for every lit with and without a tint, with the
+// tokens of each style, and the two colours of an image in each state. The
+// geometry of maths.json (label sizes, the clock, sliders, tracks, choice
+// cells, chart steps, bars, the image's box) comes with the packages that
+// draw those parts.
+TEST(maths_fixture) {
+  const tj::Value f = fixture("maths.json");
+  // The table, bit for bit.
+  CHECK(f["linear"].size() == 256);
+  int bad = 0;
+  for (int i = 0; i < 256; i++) {
+    const double want = f["linear"][i].n;
+    if (memcmp(&want, &D::LINEAR[i], sizeof want) != 0) bad++;
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " entries of LINEAR differ from maths.json");
+
+  bad = 0;
+  std::string first;
+  auto miss = [&](const std::string &what) {
+    if (!bad++) first = what;
+  };
+  CHECK(f["mix"].size() > 1000);
+  for (const tj::Value &v : f["mix"].a)
+    if (D::mix(colour_of(v[0]), colour_of(v[1]), (uint32_t) v[2].n) != colour_of(v[3]))
+      miss("mix " + v[0].s + " " + v[1].s + " " + v[2].s);
+  int halves = 0;
+  for (const auto &kv : f["mix_halves"].o) {
+    const uint32_t p = (uint32_t) atoi(kv.first.c_str());
+    for (const tj::Value &v : kv.second.a)
+      for (int shift = 0; shift <= 16; shift += 8) {
+        halves++;
+        if (D::mix(colour_of(v[0]) << shift, colour_of(v[1]) << shift, p) != colour_of(v[2]) << shift)
+          miss("mix half " + kv.first + " " + v[0].s + " " + v[1].s);
+      }
+  }
+  CHECK(halves > 300);
+  for (const tj::Value &v : f["lum"].a)
+    if (D::lum(colour_of(v[0])) != v[1].n) miss("lum " + v[0].s);
+  for (const tj::Value &v : f["contrast"].a)
+    if (D::contrast(colour_of(v[0]), colour_of(v[1])) != v[2].n) miss("contrast " + v[0].s + " " + v[1].s);
+  for (const tj::Value &v : f["readable"].a)
+    if (D::readable(colour_of(v[0])) != colour_of(v[1])) miss("readable " + v[0].s);
+  for (const tj::Value &v : f["legible"].a)
+    if (D::legible(colour_of(v[0]), colour_of(v[1]), colour_of(v[2])) != colour_of(v[3]))
+      miss("legible " + v[0].s + " " + v[1].s + " " + v[2].s);
+  const double t = f["blend"]["t"].n;
+  CHECK(t == 0.82);
+  for (const tj::Value &v : f["blend"]["cases"].a)
+    if (D::blend(colour_of(v[0]), colour_of(v[1]), t) != colour_of(v[2])) miss("blend " + v[0].s + " " + v[1].s);
+  for (const char *part : {"fused", "halves"}) {
+    CHECK(f["blend"][part].size() > 10);
+    for (const tj::Value &v : f["blend"][part].a)
+      for (int shift = 0; shift <= 16; shift += 8)
+        if (D::blend(colour_of(v[0]) << shift, colour_of(v[1]) << shift, t) != colour_of(v[2]) << shift)
+          miss(std::string("blend ") + part + " " + v[0].s + " " + v[1].s);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " colour vectors differ, the first: " + first);
+
+  // The card colours, with the tokens of the page theme and the style.
+  bad = 0;
+  CHECK(f["card"].size() >= 200);
+  for (const tj::Value &v : f["card"].a) {
+    const D::Theme th = maths_theme(f["themes"][v["theme"].s.c_str()]);
+    const D::CardStyle st = maths_style(f["styles"][v["style"].s.c_str()]);
+    const D::Tok tok = D::style_tokens(th, st.mask ? &st : nullptr);
+    const bool has_tint = !v["tint"].is_null();
+    const D::CardColours k = D::card_colours(tok, v["on"].n == 1, v["lit"].i(), has_tint, has_tint ? colour_of(v["tint"]) : 0);
+    const tj::Value &e = v["expect"];
+    const std::string what = v["theme"].s + "/" + v["style"].s + " on " + v["on"].s + " lit " + v["lit"].s + " tint " +
+                             (has_tint ? v["tint"].s : "none");
+    const struct {
+      const char *key;
+      uint32_t got;
+    } fields[] = {{"A", k.A},
+                  {"AF", k.AF},
+                  {"AT", k.AT},
+                  {"AP", k.AP},
+                  {"F", k.F},
+                  {"FT", k.FT},
+                  {"FS", k.FS},
+                  {"FI", k.FI},
+                  {"FP", k.FP},
+                  {"background", k.background},
+                  {"text", k.text},
+                  {"border", k.border},
+                  {"header_icon", k.header_icon},
+                  {"border_width", (uint32_t) k.border_width},
+                  {"dark", k.dark},
+                  {"filled", k.filled}};
+    for (const auto &fd : fields)
+      if (fd.got != colour_of(e[fd.key])) miss(what + ": " + fd.key + " " + hex6(fd.got) + ", not " + hex6(colour_of(e[fd.key])));
+    if (tok.bg != colour_of(v["tokens"]["bg"]) || tok.ion != colour_of(v["tokens"]["ion"]) ||
+        tok.onbg_pr != colour_of(v["tokens"]["onbg_pr"]))
+      miss(what + ": tokens");
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " card colours differ, the first: " + first);
+  // FS on a tinted card is tx when tx2 does not stand out on F (contract
+  // 4.7). No vector of maths.json reaches that branch, so two by hand: a
+  // dark card whose tx2 is close to the fill, and one whose tx2 stands out.
+  {
+    D::Tok tok = D::theme_tokens(maths_theme(f["themes"]["midnight"]));
+    tok.tx2 = 0x404040;
+    const D::CardColours dim = D::card_colours(tok, true, 0, true, 0x303030);
+    CHECK(D::contrast(tok.tx2, dim.F) < 3 && dim.FS == tok.tx);
+    tok.tx2 = 0xC0C0C0;
+    const D::CardColours bright = D::card_colours(tok, true, 0, true, 0x303030);
+    CHECK(D::contrast(tok.tx2, bright.F) >= 3 && bright.FS == tok.tx2);
+  }
+
+  // An image's box (or circle) and icon colour.
+  bad = 0;
+  int images = 0;
+  for (const tj::Value &v : f["image"].a) {
+    const tj::Value &e = v["expect"];
+    if (e.is_null()) continue;  // a rectangle of no size: nothing is drawn
+    images++;
+    const D::Tok tok = D::theme_tokens(maths_theme(f["themes"][v["theme"].s.c_str()]));
+    const bool has_tint = !v["tint"].is_null(), has_c = !v["c"].is_null();
+    const D::CardColours k = D::card_colours(tok, v["on"].n == 1, v["lit"].i(), has_tint, has_tint ? colour_of(v["tint"]) : 0);
+    const D::ImageColours ic = D::image_colours(tok, k, v["look"].i(), has_c, has_c ? colour_of(v["c"]) : 0);
+    const std::string what = v["theme"].s + " " + v["state"].s + " look " + v["look"].s + " c " + (has_c ? v["c"].s : "none");
+    if (ic.icon != colour_of(e["icon"])) miss(what + ": icon " + hex6(ic.icon));
+    if (e["fill"].is_null() ? ic.boxed != 0 : (ic.boxed != 1 || ic.fill != colour_of(e["fill"]))) miss(what + ": fill");
+    if (e.has("plain") && ic.plain != (uint8_t) e["plain"].n) miss(what + ": plain");
+  }
+  CHECK(images >= 480);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " image colours differ, the first: " + first);
+}
+
+// The card's look as its state gives it now, worked out apart from the record.
+static D::CardColours look_now(D::Model &m, const D::Widget &card) {
+  uint32_t tint = 0;
+  const bool has_tint = D::bound_colour(m, card.c, &tint);
+  return D::card_colours(D::card_tokens(m, &card), D::card_is_on(m, &card), card.lit, has_tint, tint);
+}
+
+static bool same_look(const D::CardColours &a, const D::CardColours &b) {
+  return a.A == b.A && a.AF == b.AF && a.AT == b.AT && a.AP == b.AP && a.F == b.F && a.FT == b.FT && a.FS == b.FS &&
+         a.FI == b.FI && a.FP == b.FP && a.background == b.background && a.text == b.text && a.border == b.border &&
+         a.header_icon == b.header_icon && a.border_width == b.border_width && a.dark == b.dark && a.filled == b.filled &&
+         a.lit_on == b.lit_on && a.sel_border == b.sel_border;
+}
+
+// Every card's record and every widget's own colours hold what the state
+// gives now.
+static void looks_hold(D::Model &m, const std::string &when) {
+  int cards = 0, kept = 0;
+  for (uint32_t i = 0; i < m.nw; i++) {
+    D::Widget &w = m.w[i];
+    if (!w.obj) continue;
+    if (w.kind == D::W_CARD) {
+      cards++;
+      const D::CardLook *k = D::card_look(m, &w);
+      if (!CHECK_MSG(k, when + ": card " + std::to_string(w.id) + " has no record")) continue;
+      CHECK_MSG(same_look(k->k, look_now(m, w)), when + ": card " + std::to_string(w.id));
+      const D::Tok t = D::card_tokens(m, &w);
+      CHECK_MSG(k->t.bg == t.bg && k->t.tx == t.tx && k->t.acc == t.acc && k->t.ion == t.ion && k->t.onbg_pr == t.onbg_pr &&
+                    k->t.card2 == t.card2 && k->t.r2 == t.r2 && k->t.bw == t.bw,
+                when + ": tokens of card " + std::to_string(w.id));
+      continue;
+    }
+    D::Widget copy = w;
+    D::widget_colour_update(m, copy);
+    if (w.c_has) kept++;
+    CHECK_MSG(copy.c_has == w.c_has && copy.c_now == w.c_now && copy.c_on == w.c_on,
+              when + ": widget " + std::to_string(w.id) + " keeps " + hex6(w.c_now) + "/" + hex6(w.c_on) + ", the state gives " +
+                  hex6(copy.c_now) + "/" + hex6(copy.c_on));
+  }
+  CHECK(cards > 5 && kept > 5);
+}
+
+// A card's nine colours are worked out at the build and again only when its
+// `on`, `tint` or `un` changes; a widget's own colours at the build, when its
+// `c` changes and after its card's. A repaint with unchanged state works out
+// no contrast, also for widgets that carry `c`, the badges and a bar with a
+// handle (cards spec B.3). The optimistic value of a card comes with package
+// E4, and with it the record's update for it.
+TEST(card_look_cache) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  const std::string hash = sha_hex(kit).substr(0, 16);
+  CHECK(ha.show(kit));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  int cards = 0;
+  for (uint32_t i = 0; i < m.nw; i++) cards += m.w[i].kind == D::W_CARD;
+  CHECK(m.nlooks == cards && cards == 15);
+  looks_hold(m, "built without values");
+  // The tokens are the page's theme (page 1 has its own) with the style on
+  // top (card 7's style names none of these).
+  const tj::Value dl = fixture("layout_v2_kit.dl.json");
+  int themed = 0;
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    if (w.kind != D::W_CARD) continue;
+    const tj::Value &pt = dl["pages"][(size_t) w.page]["theme"];
+    auto role = [&](const char *key) { return colour_of(pt.has(key) ? pt[key] : dl["theme"][key]); };
+    const D::Tok &t = D::card_look(m, &w)->t;
+    CHECK_MSG(t.bg == role("card") && t.tx == role("tx") && t.acc == role("acc") && t.card2 == role("card2") &&
+                  t.line == role("line"),
+              "tokens of card " + std::to_string(w.id));
+    themed += pt.has("card") ? 1 : 0;
+  }
+  CHECK(themed == 7);
+  auto set = [&](const std::string &v) { return ha.set("{\"h\":\"" + hash + "\",\"v\":[" + v + "]}"); };
+  auto counts = [] { return D::test_counts(); };
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+
+  // The values of state_v2.json's first step: on, tint, un and the widgets' c.
+  CHECK_STR(ha.set(fixture("state_v2.json")["steps"][0]["payloads"][0].s), "");
+  hh::advance(50);
+  looks_hold(m, "after the first snapshot");
+  D::Widget *c2 = widget(2), *c7 = widget(7), *c55 = widget(55);
+  if (!CHECK(c2 && c7 && c55)) return;
+  CHECK(D::card_look(m, c2)->k.filled == 1 && D::card_look(m, c2)->has_tint == 1 && D::card_look(m, c2)->tint == 16754519);
+  CHECK(D::card_look(m, c7)->k.filled == 0 && D::card_look(m, c7)->k.lit_on == 1 && D::card_look(m, c7)->unavailable == 0);
+
+  // A repaint with unchanged state, of every widget on every page, and the
+  // frames of every page (the chart and thermostat draw callbacks).
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*l, m.w[i]);
+  for (int p = 0; p < tab::page_count(); p++) {
+    tab::go_to(p);
+    hh::advance(20);
+    lv_obj_invalidate(lv_screen_active());
+    hh::refresh();
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  CHECK_MSG(D::test_contrasts() == 0, std::to_string(D::test_contrasts()) + " contrasts");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 0);
+
+  // A text: no colour work.
+  reset();
+  CHECK_STR(set("[5,\"Off\"]"), "");
+  CHECK(D::test_contrasts() == 0 && counts().look_updates == 0 && counts().colour_updates == 0);
+
+  // `on` of three cards (2 and 7 on page 0, 55 on page 2): their records and
+  // their widgets', nothing else.
+  reset();
+  CHECK_STR(set("[2,0]"), "");
+  CHECK_MSG(counts().look_updates == 3, std::to_string(counts().look_updates));
+  CHECK_MSG(counts().colour_updates == c2->children + c7->children + c55->children, std::to_string(counts().colour_updates));
+  CHECK(D::test_contrasts() > 0);
+  CHECK(D::card_look(m, c2)->k.filled == 0 && D::card_look(m, c2)->k.background == D::card_look(m, c2)->t.bg);
+  looks_hold(m, "on 0");
+
+  // `tint` (slot 4 is also the c of the bars 6 and 11 in cards 2 and 7).
+  reset();
+  CHECK_STR(set("[4,255]"), "");
+  CHECK(counts().look_updates == 2 && D::card_look(m, c2)->tint == 255 && D::card_look(m, c7)->tint == 255);
+  looks_hold(m, "tint 0x0000ff");
+  // A colour slot with a value that is no colour: no tint.
+  for (const char *odd : {"1e9", "-1", "0.5", "16777216"}) {
+    CHECK_STR(set(std::string("[4,") + odd + "]"), "");
+    CHECK_MSG(D::card_look(m, c2)->has_tint == 0, odd);
+    looks_hold(m, std::string("tint ") + odd);
+  }
+  // Another value that is no colour changes no colour: the widgets of the
+  // two cards are not worked out again, but for the two bars whose own `c`
+  // is that slot.
+  reset();
+  CHECK_STR(set("[4,-2]"), "");
+  CHECK_MSG(counts().look_updates == 2 && counts().colour_updates == 2 && D::card_look(m, c2)->has_tint == 0,
+            std::to_string(counts().look_updates) + " " + std::to_string(counts().colour_updates));
+  CHECK_STR(set("[4,16711680]"), "");
+  CHECK(D::card_look(m, c2)->has_tint == 1);
+
+  // `un` of card 7.
+  reset();
+  CHECK_STR(set("[8,1]"), "");
+  CHECK(counts().look_updates == 1 && D::card_look(m, c7)->unavailable == 1);
+  looks_hold(m, "un 1");
+
+  // A widget's own c (label 50 on page 1, not on screen): its colours only.
+  reset();
+  D::Widget *lab = widget(50);
+  if (!CHECK(lab)) return;
+  CHECK_STR(set("[33,1382429]"), "");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 1);
+  const D::CardLook *k46 = D::card_look(m, D::card_of(m, *lab));
+  CHECK(lab->c_has && lab->c_now == D::legible(1382429, k46->k.background, k46->k.text));
+  looks_hold(m, "c of label 50");
+
+  // The same values again: nothing.
+  reset();
+  CHECK_STR(set("[2,0],[4,16711680],[8,1],[33,1382429]"), "");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 0 && D::test_contrasts() == 0);
+
+  // A repaint after all of it still works nothing out.
+  hh::advance(50);
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*l, m.w[i]);
+  CHECK(D::test_contrasts() == 0 && counts().look_updates == 0);
+}
+
+// LVGL lays the screen out again before the next frame (layout_update_core).
+static bool layout_pending() {
+  lv_obj_t *s = lv_screen_active();
+  return s && s->scr_layout_inv;
+}
+
+// The four repaint rules of cards spec B.4 for the parts of version 1: no
+// style call for a repaint with unchanged state; a tab_set paints only the
+// page on screen and marks the rest stale, which the timer's slices paint
+// (not in a tick that ran a build step), and the page's own before it
+// shows; a changed thermostat value, a changed `on` and a new text lay
+// nothing out.
+TEST(repaint_cost) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const std::string all = layout_bytes("layout_all_cards.dl.json");
+  CHECK(ha.show(all));
+  CHECK_STR(ha.set(state_payload(0)), "");
+  hh::advance(100);
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  CHECK(tab::current_page() == 0 && l->stale == 0);
+  auto set = [&](const std::string &v) { return ha.set("{\"h\":\"4384f665e4dd9f62\",\"v\":[" + v + "]}"); };
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+
+  // Rules 2 and 3: a repaint with unchanged state sets nothing.
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  reset();
+  int painted = 0;
+  for (uint32_t i = 0; i < m.nw; i++)
+    if (m.w[i].obj) {
+      D::paint_widget(*l, m.w[i]);
+      painted++;
+    }
+  CHECK(painted > 60);
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending() && D::test_contrasts() == 0);
+
+  // Rule 1: a label and a thermostat of page 1 while page 0 is on screen.
+  D::Widget *lab = widget(32), *th = widget(49), *lab0 = widget(4);
+  if (!CHECK(lab && th && lab0 && lab->page == 1 && th->page == 1 && lab0->page == 0)) return;
+  const std::string before = label_text(lab->obj), th_before = label_text(th->o1);
+  reset();
+  CHECK_STR(set("[26,\"Changed\"],[36,22.5]"), "");
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(lab->stale && th->stale && l->stale == 2 && m.pages[1].stale == 2 && m.pages[0].stale == 0);
+  CHECK(label_text(lab->obj) == before && label_text(th->o1) == th_before);
+  // The slices paint them.
+  hh::advance(20);
+  CHECK(!lab->stale && !th->stale && l->stale == 0 && m.pages[1].stale == 0);
+  CHECK_STR(label_text(lab->obj), "Changed");
+  CHECK_STR(label_text(th->o1), "22.5");
+  CHECK(D::test_counts().style_sets > 0);
+  // A page shows only once what is stale on it is painted, slices or not.
+  CHECK_STR(set("[26,\"Again\"]"), "");
+  CHECK(lab->stale);
+  tab::go_to(1);
+  CHECK(!lab->stale && l->stale == 0);
+  CHECK_STR(label_text(lab->obj), "Again");
+  // The page on screen is painted at once, and page 0 now waits.
+  CHECK_STR(set("[26,\"Now\"],[3,\"Stale\"]"), "");
+  CHECK_STR(label_text(lab->obj), "Now");
+  CHECK(!lab->stale && lab0->stale);
+  hh::advance(20);
+  CHECK(!lab0->stale);
+  CHECK_STR(label_text(lab0->obj), "Stale");
+
+  // Rule 3: on the page on screen, a thermostat's new value (same size of
+  // text) and a label's text lay nothing out.
+  tab::go_to(0);
+  hh::advance(20);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::Widget *th0 = widget(23);
+  if (!CHECK(th0)) return;
+  CHECK_STR(set("[16,22.5]"), "");
+  CHECK_STR(label_text(th0->o1), "22.5");
+  CHECK(!layout_pending());
+  hh::refresh();
+  CHECK_STR(set("[3,\"A new text\"]"), "");
+  CHECK_STR(label_text(lab0->obj), "A new text");
+  CHECK(!layout_pending());
+  hh::refresh();
+
+  // Rule 1 again: no stale paint in a tick that ran a build step.
+  CHECK_STR(set("[26,\"During a build\"]"), "");
+  CHECK(lab->stale);
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK_STR(ha.send(kit), "");
+  CHECK_STR(ha.commit(sha_hex(kit).substr(0, 16)), "");
+  int ticks = 0;
+  for (int t = 0; t < 2000 && D::staged_layout() && D::staged_layout()->state == D::L_BUILDING; t++) {
+    hh::advance(1);
+    ticks++;
+    if (D::staged_layout() && D::staged_layout()->state == D::L_BUILDING) CHECK(lab->stale && l->stale == 1);
+  }
+  CHECK_MSG(ticks > 10, std::to_string(ticks) + " ms of building");
+
+  // A card's `on` lays nothing out either (card 2 of the kit: a badge, two
+  // labels and a bar; the switch that shares its slot is on page 2).
+  const std::string kh = sha_hex(kit).substr(0, 16);
+  CHECK(advance_until([&] { return kh == tab::active_hash(); }, 5000));
+  CHECK_STR(ha.set(fixture("state_v2.json")["steps"][0]["payloads"][0].s), "");
+  hh::advance(50);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::Widget *card2 = widget(2);
+  if (!CHECK(card2 && D::card_look(*active()->model, card2))) return;
+  CHECK(D::card_look(*active()->model, card2)->k.filled == 1);
+  reset();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[2,0]]}"), "");
+  CHECK(D::card_look(*active()->model, card2)->k.filled == 0);
+  CHECK(D::test_counts().style_sets > 0);
+  CHECK(!layout_pending());
 }

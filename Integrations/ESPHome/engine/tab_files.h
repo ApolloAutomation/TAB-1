@@ -20,17 +20,19 @@
 #ifndef TAB_FILES_H
 #define TAB_FILES_H
 
-#define TAB1_FILES_ENGINE 7
+#define TAB1_FILES_ENGINE 8
 
-// files 7 all fb1f1ee56580feb025cf76066431eda37a164dc8c174ab5624ea06f980e9cd89
-// sha256 5c2123b9f2bf2a0aeee0682a86167153145b9c14620f0babc3e5f0a1ecd4d6dd engine/tab_core.h
+// files 8 all 55ca3f9773caefb49e80b67415e102560408015f5c1ed23dec89cb07e4885eb5
+// sha256 bcebc7ce4497dea1f23c100c75973532ba4ccbc61001834ec86eaf62e3339404 engine/tab_colour.h
+// sha256 66aba681c545c7390b01c4a1b1f7ff9617adbc5273de8b8958c59412d3dcde5c engine/tab_core.h
 // sha256 87451f63db1e59609f764fc7f754f8a12b269e7ce92627a4cf9bba0c6b982b5b engine/tab_crypto.h
 // sha256 17815c34c37a5bc78fcc88e2c378f5273b89a6c2ff459f6c1d6840b74ec5ba2d engine/tab_engine.h
 // sha256 17100ec9f3bd1b52ab2d34d3db096b476c85edff4d97cd4a299cfed8d2440a22 engine/tab_json.h
-// sha256 6a6dc2e86e6dd02d9981c427e2d404c7693547722ff28992a866f7ff1c1b8ef4 engine/tab_model.h
-// sha256 37c96d4c3a2734c7ffa84304be410f2778750290a3716296ef257a569fb1a6a0 engine/tab_state.h
-// sha256 a3071a7ac7b16f8e936d34160290c3a178f25dc361cbed019eb0c2b2e8841963 engine/tab_ui.h
-// sha256 936d87050a88005a47b99b4cd2482b40c038455d79dc1b01dc1520bd601df0a8 engine_glue.h
-// sha256 9329e6181449d59be7659fd7604b441e1ae919e8602f908e70ae0efff4227dc7 ota_lock.h
+// sha256 792ebd08135ba7a67f8731be1a3dc072d3139c16b424a01da5c7eaa865907a34 engine/tab_linear.h
+// sha256 ed3812581ba81401b375a6e33bbdead909a5af86c34e525e1f5d6545d4af4d11 engine/tab_model.h
+// sha256 e83aabf2acb1054c9bb35da65632b3585cd8f53b3b331019a412fda9b601a136 engine/tab_state.h
+// sha256 ef48a2b8f1e6752b3b8e0340dcc3cbc218bf09520dc3af04722c606488656c21 engine/tab_ui.h
+// sha256 f39464ce8aefad4871957319d898cb72efdd077cf92315f9d29fdde4646d92bf engine_glue.h
+// sha256 7216bb6ff7438cddd3675d660b7bf1e807b82b825423014b81bf50585315ee80 ota_lock.h
 
 #endif  // TAB_FILES_H

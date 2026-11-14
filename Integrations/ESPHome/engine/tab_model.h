@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include "lvgl.h"
+#include "tab_colour.h"
 #include "tab_json.h"
 
 namespace tab {
@@ -29,6 +30,9 @@ namespace detail {
 struct TestCounts {
   uint64_t keys;          // object keys looked up
   uint64_t key_compares;  // names compared with them
+  uint64_t style_sets;    // styles, flags, positions and texts the engine changed on an object
+  uint64_t look_updates;  // card_look_update runs
+  uint64_t colour_updates;  // widget_colour_update runs
 };
 inline TestCounts &test_counts() {
   static TestCounts c;
@@ -188,6 +192,26 @@ struct Widget {
   uint8_t st;       // chart: 1 steps
   uint8_t bs;       // thermostat: side of its buttons, 36 to 64
   uint8_t lit;      // card: 0 fill, 1 icon, 2 outline, 3 no change
+  // (2) Colours worked out from the state, never while painting (cards spec
+  // B.3). A card's are in Model.looks[cl]; a widget keeps those of its own
+  // that need a contrast: c_now is its colour (a label's text, a switch's
+  // track at 1, a slider's fill, an image's box), c_on what goes on it (the
+  // switch's knob, the bar's handle and icon, the image's icon).
+  int16_t cl;        // cards: index into Model.looks; -1 for other widgets
+  uint8_t c_has;     // c_now holds a colour of the widget's own `c` (or, for a slider and an image, always)
+  uint8_t stale;     // a value changed while its page was not on screen: paint before the page shows
+  uint32_t c_now, c_on;
+};
+
+// (2) One card's colours: its tokens, fixed at the build (a card is on one
+// page and a page has one theme), and the nine colours of its state, worked
+// out again only when its `on`, `tint` or `un` changes (card_look_update).
+struct CardLook {
+  Tok t;
+  CardColours k;
+  uint8_t ready;  // t and k were worked out (at the build)
+  uint8_t on, unavailable, has_tint;
+  uint32_t tint;
 };
 
 struct Page {
@@ -197,6 +221,7 @@ struct Page {
   uint8_t sub;    // (2) 1: a detail page (never page 0)
   uint8_t theme;  // (2) index into Model.themes; 0 is the layout's theme
   uint16_t ttl;   // (2) seconds without a touch on a detail page; 0 never
+  uint16_t stale; // widgets of this page waiting for their paint (Widget.stale)
 };
 
 struct Nav {
@@ -223,7 +248,8 @@ struct Model {
   Widget *w;
   Slot *slots;  // slots[0] is slot 1
   CardStyle *styles;
-  uint16_t npages, nw, nslots, nstyles;
+  CardLook *looks;  // (2) one per card
+  uint16_t npages, nw, nslots, nstyles, nlooks;
   uint8_t nnav, nthemes;
   uint32_t objects;  // estimate of LVGL objects, for the memory check
   Nav nav[MAX_NAV];
@@ -233,6 +259,7 @@ struct Counts {
   uint32_t pages, widgets, ids, slots, text_slots, list_slots, pool, styles, nums, objects;
   uint32_t themes;  // (2) the layout's theme and the page themes
   uint32_t normal;  // (2) pages that are not detail pages
+  uint32_t cards;   // (2) one CardLook each
   uint8_t version;  // `v`: 1 or 2
   // (2) Parts the per-page draw counts left out (contract 4.2).
   uint32_t drop_charts, drop_arcs, drop_tracks;
@@ -372,7 +399,7 @@ struct Loader {
   uint32_t nslots = 0;
   uint32_t npages = 0;
   // Fill cursors.
-  uint32_t wi = 0, si = 0, ti = 0;
+  uint32_t wi = 0, si = 0, ti = 0, ci = 0;
   char *pool = nullptr;
   double *nums = nullptr;
   // (2) What the page being read holds so far, for the per-page draw counts.
@@ -803,6 +830,7 @@ struct Loader {
     w.kind = kind;
     w.card = card;
     w.style = -1;
+    w.cl = -1;
     w.page = page;
     w.bs = 36;
     w.rows = 1;
@@ -850,6 +878,8 @@ struct Loader {
         if (!read_bound(f[I_TINT], 'c', &w.c)) return false;
         if (!read_bound(f[I_UN], 'b', &w.vis)) return false;
         if (!read_look(f[I_LIT], 0, 3, 0, &w.lit)) return false;
+        w.cl = (int16_t) ci++;
+        if (!fill) c.cards++;
         break;
       case W_LABEL: {
         if (!read_bound(f[I_TEXT], 't', &w.text)) return false;
@@ -1149,6 +1179,7 @@ struct Loader {
   bool walk() {
     wi = 0;
     si = 0;
+    ci = 0;
     if (!read_slots() || !read_theme() || !read_pages() || !read_nav()) return false;
     return true;
   }
@@ -1185,7 +1216,7 @@ inline const char *model_check(const char *data, size_t n, Loader &ld, uint32_t 
 
 // Byte offsets of the parts of the model block.
 struct BlockPlan {
-  size_t themes, pages, w, slots, styles, nums, text, lists, pool, total;
+  size_t themes, pages, w, slots, styles, looks, nums, text, lists, pool, total;
 };
 
 inline BlockPlan model_plan(const Counts &c) {
@@ -1201,6 +1232,8 @@ inline BlockPlan model_plan(const Counts &c) {
   at = align8(at + c.slots * sizeof(Slot));
   b.styles = at;
   at = align8(at + c.styles * sizeof(CardStyle));
+  b.looks = at;
+  at = align8(at + c.cards * sizeof(CardLook));
   b.nums = at;
   at = align8(at + c.nums * sizeof(double));
   b.text = at;
@@ -1227,10 +1260,12 @@ inline Model *model_fill(const char *data, size_t n, const Counts &counts, void 
   m->w = reinterpret_cast<Widget *>(base + plan.w);
   m->slots = reinterpret_cast<Slot *>(base + plan.slots);
   m->styles = reinterpret_cast<CardStyle *>(base + plan.styles);
+  m->looks = reinterpret_cast<CardLook *>(base + plan.looks);
   m->npages = (uint16_t) counts.pages;
   m->nw = (uint16_t) counts.widgets;
   m->nslots = (uint16_t) counts.slots;
   m->nstyles = (uint16_t) counts.styles;
+  m->nlooks = (uint16_t) counts.cards;
   m->nthemes = (uint8_t) counts.themes;
   m->objects = counts.objects + counts.pages + 2;
   Loader ld;
@@ -1259,7 +1294,8 @@ inline Model *model_fill(const char *data, size_t n, const Counts &counts, void 
     }
   }
   if (!ld.walk()) return nullptr;
-  if (ld.wi != counts.widgets || ld.si != counts.styles || ld.ti != counts.themes) return nullptr;
+  if (ld.wi != counts.widgets || ld.si != counts.styles || ld.ti != counts.themes || ld.ci != counts.cards)
+    return nullptr;
   return m;
 }
 

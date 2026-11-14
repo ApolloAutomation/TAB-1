@@ -43,6 +43,7 @@ static const uint32_t TICK_MS = 5;
 static const uint32_t SLICE_MS = 4;
 static const uint32_t SLICE_OBJECTS = 48;        // objects per build slice at most
 static const uint32_t DELETE_OBJECTS = 96;       // objects per delete slice at most
+static const uint32_t STALE_WIDGETS = 16;        // stale widgets painted per slice at most
 static const uint32_t SWAP_WAIT_MS = 3000;       // longest wait for a finger to lift
 // The strip when that wait ends during a drag on a slider that asks first (contract 7.4).
 static const char *const SWAP_DRAG_TEXT = "The dashboard changed. Try again";
@@ -238,6 +239,8 @@ struct Layout {
   uint8_t b_stage;   // 0 root, 1 items, 2 values, 3 done
   uint32_t ready_at;
   uint16_t d_page;   // delete progress
+  uint16_t stale;    // widgets with a stale mark (shown layout only, cards spec B.4)
+  uint16_t s_page;   // the page the next stale slice starts on
 };
 
 // What one slice may still spend: objects, and milliseconds since start.
@@ -466,42 +469,14 @@ inline bool bound_dirty(const Bound &b) {
 
 // ---------------------------------------------------------------- colours
 
-// The colours one card is drawn with: the theme with the card's style on top
-// (render.js cardTokens).
-struct Tok {
-  uint32_t bg, bg2, tx, tx2, acc, acc2, acct, accf, accf_pr, card2, card2_pr, line, onbg, onbg_pr, ontx, ion, card_pr;
-  int16_t r, r2, bw;
-  int8_t gd;
-  bool has_bg2;
-};
-
-inline double channel_linear(uint32_t c) {
-  const double v = c / 255.0;
-  return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+// The theme of a page: its own (contract 4.8), else the layout's.
+inline const Theme &page_theme(const Model &m, int page) {
+  if (page >= 0 && page < (int) m.npages && m.themes && m.pages[page].theme < m.nthemes)
+    return m.themes[m.pages[page].theme];
+  return m.theme;
 }
 
-inline double luminance(uint32_t rgb) {
-  return 0.2126 * channel_linear(rgb >> 16 & 255) + 0.7152 * channel_linear(rgb >> 8 & 255) +
-         0.0722 * channel_linear(rgb & 255);
-}
-
-inline double contrast(uint32_t a, uint32_t b) {
-  const double x = luminance(a), y = luminance(b);
-  return ((x > y ? x : y) + 0.05) / ((x > y ? y : x) + 0.05);
-}
-
-// t = 0 gives fg, t = 1 gives bg (render.js blend).
-inline uint32_t blend(uint32_t fg, uint32_t bg, double t) {
-  uint32_t out = 0;
-  for (int shift = 16; shift >= 0; shift -= 8) {
-    const double v = (fg >> shift & 255) * (1 - t) + (bg >> shift & 255) * t;
-    out |= (uint32_t) (int) floor(v + 0.5) << shift;
-  }
-  return out;
-}
-
-inline Tok theme_tokens(const Model &m) {
-  const Theme &th = m.theme;
+inline Tok theme_tokens(const Theme &th) {
   Tok t{};
   t.bg = th.c[C_CARD];
   t.bg2 = 0;
@@ -528,29 +503,42 @@ inline Tok theme_tokens(const Model &m) {
   return t;
 }
 
-inline Tok card_tokens(const Model &m, const Widget *card) {
-  Tok t = theme_tokens(m);
-  if (!card || card->style < 0 || card->style >= (int) m.nstyles) return t;
-  const CardStyle &s = m.styles[card->style];
+// The layout's own theme: the side bar and the engine's pieces (until the
+// page theme reaches them).
+inline Tok theme_tokens(const Model &m) { return theme_tokens(m.theme); }
+
+// A card's tokens (contract 4.7): the theme with the style on top; ion and
+// onbg_pr the style's own, else worked out when the style's onbg differs
+// from the theme's, else the theme's. style may be nullptr.
+inline Tok style_tokens(const Theme &th, const CardStyle *s) {
+  Tok t = theme_tokens(th);
+  if (!s) return t;
   uint32_t *dst[S_COUNT] = {&t.bg,    &t.bg2,      &t.tx,   &t.tx2,      &t.acc,      &t.acc2,
                             &t.acct,  &t.card2,    &t.line, &t.onbg,     &t.ontx,     &t.card_pr,
                             &t.card2_pr, &t.accf, &t.accf_pr, &t.onbg_pr, &t.ion};
   for (int i = 0; i < S_ONTX + 1; i++)
-    if (s.mask & (1u << i)) *dst[i] = s.c[i];
-  t.has_bg2 = (s.mask & (1u << S_BG2)) != 0;
-  if (s.has_r) t.r = s.r;
-  if (s.has_r2) t.r2 = s.r2;
-  if (s.has_bw) t.bw = s.bw;
-  t.gd = s.gd;
+    if (s->mask & (1u << i)) *dst[i] = s->c[i];
+  t.has_bg2 = (s->mask & (1u << S_BG2)) != 0;
+  if (s->has_r) t.r = s->r;
+  if (s->has_r2) t.r2 = s->r2;
+  if (s->has_bw) t.bw = s->bw;
+  t.gd = s->gd;
   // A style with its own "on" fill gets its own ion and onbg_pr.
-  if ((s.mask & (1u << S_ONBG)) && s.c[S_ONBG] != m.theme.c[C_ONBG]) {
-    t.ion = contrast(t.acc, s.c[S_ONBG]) >= 3 ? t.acc : t.ontx;
-    t.onbg_pr = blend(t.ontx, s.c[S_ONBG], 0.82);
+  if ((s->mask & (1u << S_ONBG)) && s->c[S_ONBG] != th.c[C_ONBG]) {
+    t.ion = contrast(t.acc, s->c[S_ONBG]) >= 3 ? t.acc : t.ontx;
+    t.onbg_pr = blend(t.ontx, s->c[S_ONBG], 0.82);
   }
   // (2) The roles a style names itself win over those worked out above.
   for (int i = S_CARD_PR; i < S_COUNT; i++)
-    if (s.mask & (1u << i)) *dst[i] = s.c[i];
+    if (s->mask & (1u << i)) *dst[i] = s->c[i];
   return t;
+}
+
+// Works the tokens out; paints read CardLook.t instead (card_look).
+inline Tok card_tokens(const Model &m, const Widget *card) {
+  const Theme &th = page_theme(m, card ? card->page : 0);
+  if (!card || card->style < 0 || card->style >= (int) m.nstyles) return theme_tokens(th);
+  return style_tokens(th, &m.styles[card->style]);
 }
 
 inline bool card_is_on(Model &m, const Widget *card) {
@@ -561,6 +549,105 @@ inline bool card_is_on(Model &m, const Widget *card) {
 
 inline Widget *card_of(Model &m, const Widget &w) {
   return (w.card >= 0 && w.card < (int) m.nw) ? &m.w[w.card] : nullptr;
+}
+
+// The record of a card, or nullptr for a widget outside a card and a card
+// whose colours were not worked out yet.
+inline CardLook *card_look(Model &m, const Widget *card) {
+  if (!card || card->cl < 0 || card->cl >= (int) m.nlooks) return nullptr;
+  CardLook &k = m.looks[card->cl];
+  return k.ready ? &k : nullptr;
+}
+
+// Works a card's nine colours out again from its `on`, `tint` and `un`
+// (cards spec B.3), and its tokens the first time. The one place that knows
+// the tint rule. Returns true when anything the card shows changed.
+inline bool card_look_update(Model &m, Widget &card) {
+  if (card.kind != W_CARD || card.cl < 0 || card.cl >= (int) m.nlooks) return false;
+  TAB_COUNT(look_updates);
+  CardLook &k = m.looks[card.cl];
+  if (!k.ready) k.t = card_tokens(m, &card);
+  uint32_t tint = 0;
+  const bool has_tint = bound_colour(m, card.c, &tint);
+  double un = 0;
+  const uint8_t unavailable = bound_num(m, card.vis, &un) && un == 1 ? 1 : 0;
+  const uint8_t on = card_is_on(m, &card) ? 1 : 0;
+  if (k.ready && k.on == on && k.has_tint == (has_tint ? 1 : 0) && k.tint == tint && k.unavailable == unavailable)
+    return false;
+  k.k = card_colours(k.t, on != 0, card.lit, has_tint, tint);
+  k.on = on;
+  k.has_tint = has_tint ? 1 : 0;
+  k.tint = has_tint ? tint : 0;
+  k.unavailable = unavailable;
+  k.ready = 1;
+  return true;
+}
+
+// A widget's own colours that contract 4.7 gets through contrast, readable
+// or legible, kept in the widget (cards spec B.3): worked out at the build,
+// when its `c` slot is written with another value, and after its card's
+// colours changed. Paints read them and never call contrast. Returns true
+// when they changed.
+inline bool widget_colour_update(Model &m, Widget &w) {
+  TAB_COUNT(colour_updates);
+  const uint32_t before_now = w.c_now, before_on = w.c_on;
+  const uint8_t before_has = w.c_has;
+  uint32_t c = 0;
+  const bool has_c = w.kind != W_CARD && w.kind != W_CHOICE && bound_colour(m, w.c, &c);
+  w.c_has = 0;
+  w.c_now = w.c_on = 0;
+  if (w.kind == W_HEADING) {
+    if (has_c) {
+      const Theme &th = page_theme(m, w.page);
+      w.c_now = legible(c, th.c[C_WALL], th.c[C_TX]);
+      w.c_has = 1;
+    }
+  } else if (CardLook *k = card_look(m, card_of(m, w))) {
+    const CardColours &cc = k->k;
+    switch (w.kind) {
+      case W_LABEL:
+      case W_THERMO:
+      case W_CHART:
+        if (has_c) {
+          w.c_now = legible(c, cc.background, cc.text);
+          w.c_has = 1;
+        }
+        break;
+      case W_SWITCH:
+        if (has_c) {
+          w.c_now = legible(c, cc.background, cc.text);
+          w.c_on = readable(w.c_now);
+          w.c_has = 1;
+        }
+        break;
+      case W_BUTTON:
+        if (has_c) {
+          w.c_now = c;
+          w.c_on = readable(c);
+          w.c_has = 1;
+        }
+        break;
+      case W_SLIDER: {
+        // The fill; a bar's handle and icon go on it. `c` does not colour a
+        // slider with a track.
+        const uint32_t track = cc.filled ? cc.FP : k->t.card2;
+        w.c_now = has_c && !w.track_n ? legible(c, track, cc.text) : cc.filled ? cc.FI : cc.A;
+        w.c_on = w.look == 1 ? readable(w.c_now) : 0;
+        w.c_has = 1;
+        break;
+      }
+      case W_IMAGE: {
+        const ImageColours ic = image_colours(k->t, cc, w.look, has_c, c);
+        w.c_now = ic.fill;
+        w.c_on = ic.icon;
+        w.c_has = 1;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return w.c_now != before_now || w.c_on != before_on || w.c_has != before_has;
 }
 
 // ------------------------------------------------- calls across headers
@@ -575,6 +662,7 @@ void show_layout(Layout &l);
 void show_page(Layout &l, int page);
 void paint_widget(Layout &l, Widget &w);
 void paint_dirty(Layout &l);
+void paint_stale(Layout &l, uint32_t start);
 void show_waiting(bool on);
 void show_strip(const char *text);
 void show_note(const char *text);

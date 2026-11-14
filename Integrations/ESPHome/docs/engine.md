@@ -718,6 +718,20 @@ glyphs with floating point, so a stored hash would hold only for one
 compiler and one CPU. A frame that differs is saved as
 `v1_pixels_<frame>.png` among the screenshots. Never edit the frozen copy.
 
+Card colours follow contract 4.7 in whole numbers: `engine/tab_colour.h`
+holds `mix`, `lum`, `contrast`, `readable`, `legible`, `blend` and the nine
+colours of a card, and `engine/tab_linear.h` the table `linear` of
+`maths.json` (written once from the fixture; `lum` never calls `pow`).
+A card's colours are worked out at its build and again only when its
+`on`, `tint` or `un` changes, and a widget's own colours when its `c`
+changes or its card's did; painting reads them and works nothing out
+(test `maths_fixture` against `maths.json`, test `card_look_cache`). A
+repaint changes only what differs (every style helper compares first), a
+`tab_set` paints only the page on screen and marks the widgets of other
+pages stale, which the timer paints a few at a time (never in a tick that
+ran a build step) and `show_page` paints before the page shows (test
+`repaint_cost`, which counts style calls and pending layout passes).
+
 It also builds and runs `tests/test_fast_display.cpp` the same two ways.
 That test takes the rotation out of `fast_display.h` (with
 `FAST_DISPLAY_HOST_TEST` defined, no LVGL and no ESPHome) and compares it,

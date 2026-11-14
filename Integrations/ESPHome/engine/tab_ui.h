@@ -136,15 +136,79 @@ inline void place(lv_obj_t *o, int x, int y, int w, int h) {
   lv_obj_set_size(o, w, h);
 }
 
-inline void set_bg(lv_obj_t *o, uint32_t c) {
+// Every style the engine sets after the build goes through these, and each
+// compares first (cards spec B.4, rules 2 and 3): LVGL sets a style again
+// even when it holds that value, invalidates the object twice for it, and
+// for a position, size, padding, border width or font walks every object of
+// the screen before the next frame. All of them set the main part's local
+// style, the only one the engine uses (plain() removes the theme's).
+inline void style_num(lv_obj_t *o, lv_style_prop_t prop, int32_t v) {
   if (!o) return;
-  lv_obj_set_style_bg_color(o, lv_color_hex(c), 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == v) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.num = v;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
 }
 
-inline void set_radius(lv_obj_t *o, int r) {
-  if (o) lv_obj_set_style_radius(o, r, 0);
+inline void style_colour(lv_obj_t *o, lv_style_prop_t prop, uint32_t c) {
+  if (!o) return;
+  const lv_color_t want = lv_color_hex(c);
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && lv_color_eq(cur.color, want)) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.color = want;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
 }
+
+inline void style_ptr(lv_obj_t *o, lv_style_prop_t prop, const void *p) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && cur.ptr == p) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.ptr = p;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
+}
+
+// lv_obj_set_pos and lv_obj_set_width compare too; these count what changes.
+inline void move(lv_obj_t *o, int32_t x, int32_t y) {
+  if (!o) return;
+  lv_style_value_t cx, cy;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_X, &cx, 0) == LV_STYLE_RES_FOUND && cx.num == x &&
+      lv_obj_get_local_style_prop(o, LV_STYLE_Y, &cy, 0) == LV_STYLE_RES_FOUND && cy.num == y)
+    return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_pos(o, x, y);
+}
+
+inline void set_width(lv_obj_t *o, int32_t w) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_WIDTH, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == w) return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_width(o, w);
+}
+
+inline void set_hidden(lv_obj_t *o, bool hide) {
+  if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hide) return;
+  TAB_COUNT(style_sets);
+  if (hide)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+inline void set_opa(lv_obj_t *o, lv_opa_t opa) { style_num(o, LV_STYLE_OPA, opa); }
+
+inline void set_bg(lv_obj_t *o, uint32_t c) {
+  style_colour(o, LV_STYLE_BG_COLOR, c);
+  style_num(o, LV_STYLE_BG_OPA, LV_OPA_COVER);
+}
+
+inline void set_radius(lv_obj_t *o, int r) { style_num(o, LV_STYLE_RADIUS, r); }
 
 inline void set_clickable(lv_obj_t *o, bool on) {
   if (!o) return;
@@ -156,11 +220,11 @@ inline void set_clickable(lv_obj_t *o, bool on) {
 
 inline void set_outline(lv_obj_t *o, bool on, uint32_t c) {
   if (!o) return;
-  lv_obj_set_style_outline_width(o, on ? 2 : 0, 0);
+  style_num(o, LV_STYLE_OUTLINE_WIDTH, on ? 2 : 0);
   if (on) {
-    lv_obj_set_style_outline_color(o, lv_color_hex(c), 0);
-    lv_obj_set_style_outline_opa(o, LV_OPA_COVER, 0);
-    lv_obj_set_style_outline_pad(o, 0, 0);
+    style_colour(o, LV_STYLE_OUTLINE_COLOR, c);
+    style_num(o, LV_STYLE_OUTLINE_OPA, LV_OPA_COVER);
+    style_num(o, LV_STYLE_OUTLINE_PAD, 0);
   }
 }
 
@@ -193,12 +257,14 @@ inline void set_icon(lv_obj_t *l, int px, uint32_t cp) {
   if (!l) return;
   char buf[5];
   icon_utf8(icon_or_fallback(icon_font(px), cp), buf);
-  if (strcmp(lv_label_get_text(l), buf) != 0) lv_label_set_text(l, buf);
+  if (strcmp(lv_label_get_text(l), buf) == 0) return;
+  TAB_COUNT(style_sets);
+  lv_label_set_text(l, buf);
 }
 
-inline void set_text_colour(lv_obj_t *o, uint32_t c) {
-  if (o) lv_obj_set_style_text_color(o, lv_color_hex(c), 0);
-}
+inline void set_text_colour(lv_obj_t *o, uint32_t c) { style_colour(o, LV_STYLE_TEXT_COLOR, c); }
+
+inline void set_font(lv_obj_t *o, const lv_font_t *f) { style_ptr(o, LV_STYLE_TEXT_FONT, f); }
 
 // Sets one line of text, cut with an ellipsis when wider than width. Control
 // characters show as spaces. Returns true when the text was cut.
@@ -232,7 +298,10 @@ inline bool set_text(lv_obj_t *l, const char *text, int width) {
     n = keep + ell_n;
     buf[n] = 0;
   }
-  if (strcmp(lv_label_get_text(l), buf) != 0) lv_label_set_text(l, buf);
+  if (strcmp(lv_label_get_text(l), buf) != 0) {
+    TAB_COUNT(style_sets);
+    lv_label_set_text(l, buf);
+  }
   return cut;
 }
 
@@ -519,6 +588,20 @@ inline void add_events(lv_obj_t *o, lv_event_cb_t cb, void *user) {
   lv_obj_add_event_cb(o, cb, LV_EVENT_CLICKED, user);
 }
 
+// ---------------------------------------------------------------- colours of the parts
+
+// The colours a widget is painted with: its card's record (cards spec B.3),
+// worked out at the build. A widget outside a card has none: the record of
+// no card, all zero, which nothing paints with.
+inline const CardLook &look_for(Model &m, Widget *card) {
+  static const CardLook none{};
+  if (!card) return none;
+  if (const CardLook *k = card_look(m, card)) return *k;
+  card_look_update(m, *card);  // not reached: the card's shell works it out first
+  const CardLook *k = card_look(m, card);
+  return k ? *k : none;
+}
+
 // ---------------------------------------------------------------- custom drawing
 
 // logic.js linePoints and barRects, drawn with the LVGL draw API.
@@ -532,7 +615,8 @@ inline void on_chart_draw(lv_event_t *e) {
   lv_area_t a;
   lv_obj_get_coords(obj, &a);
   const int W = lv_area_get_width(&a), H = lv_area_get_height(&a);
-  const Tok t = card_tokens(m, card_of(m, *w));
+  const Tok &t = look_for(m, card_of(m, *w)).t;
+  const uint32_t colour = w->c_has ? w->c_now : t.acc2;
   const lv_opa_t opa = lv_obj_get_style_opa_recursive(obj, LV_PART_MAIN);
   lv_draw_rect_dsc_t base;
   lv_draw_rect_dsc_init(&base);
@@ -555,7 +639,7 @@ inline void on_chart_draw(lv_event_t *e) {
     const double bw = fmax(0.0, (W - gap * (n - 1)) / n);
     lv_draw_rect_dsc_t bar;
     lv_draw_rect_dsc_init(&bar);
-    bar.bg_color = lv_color_hex(t.acc2);
+    bar.bg_color = lv_color_hex(colour);
     bar.bg_opa = opa;
     bar.radius = (int32_t) fmin(4.0, bw / 2);
     for (int i = 0; i < n; i++) {
@@ -570,7 +654,7 @@ inline void on_chart_draw(lv_event_t *e) {
   const double pad = 4;
   lv_draw_line_dsc_t ld;
   lv_draw_line_dsc_init(&ld);
-  ld.color = lv_color_hex(t.acc2);
+  ld.color = lv_color_hex(colour);
   ld.width = 3;
   ld.opa = opa;
   ld.round_start = 1;
@@ -613,9 +697,7 @@ inline void on_thermo_draw(lv_event_t *e) {
   Layout *l = layout_of(w);
   if (!l || !l->model) return;
   Model &m = *l->model;
-  Widget *card = card_of(m, *w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, *w));
   lv_layer_t *layer = lv_event_get_layer(e);
   lv_area_t a;
   lv_obj_get_coords(w->obj, &a);
@@ -634,7 +716,7 @@ inline void on_thermo_draw(lv_event_t *e) {
   arc.opa = opa;
   arc.start_angle = 135;
   arc.end_angle = 45;
-  arc.color = lv_color_hex(on ? t.onbg_pr : t.card2);
+  arc.color = lv_color_hex(k.k.filled ? k.k.FP : k.t.card2);
   lv_draw_arc(layer, &arc);
   double v;
   if (!thermostat_value(m, *w, &v)) return;
@@ -645,7 +727,7 @@ inline void on_thermo_draw(lv_event_t *e) {
   if (end <= 135) return;
   if (end >= 360) end -= 360;
   arc.end_angle = end;
-  arc.color = lv_color_hex(t.acc2);
+  arc.color = lv_color_hex(w->c_has ? w->c_now : k.t.acc2);
   lv_draw_arc(layer, &arc);
 }
 
@@ -653,10 +735,10 @@ inline void on_thermo_draw(lv_event_t *e) {
 
 inline void paint_label(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
-  set_text_colour(w.obj, w.size == 0 ? (on ? t.ontx : t.tx2) : (on ? t.ontx : t.tx));
+  const CardLook &k = look_for(m, card_of(m, w));
+  uint32_t colour = w.size == 0 ? (k.k.filled ? k.k.FS : k.t.tx2) : k.k.text;
+  if (w.c_has) colour = w.c_now;
+  set_text_colour(w.obj, colour);
   const char *text = "";
   bound_text(m, w.text, &text);
   w.cut = set_text(w.obj, text, w.r[2]);
@@ -673,8 +755,8 @@ inline void layout_button(Layout &l, Widget &w, const char *text) {
   if (has_icon && has_text && H >= 64) {
     const int group = ih + 6 + th;
     const int y0 = (H - group) / 2;
-    lv_obj_set_pos(w.o1, (W - iw) / 2, y0);
-    lv_obj_set_pos(w.o2, 6, y0 + ih + 6);
+    move(w.o1, (W - iw) / 2, y0);
+    move(w.o2, 6, y0 + ih + 6);
     w.cut = set_text(w.o2, text, W - 12);
   } else if (has_icon && has_text) {
     const int avail = W - 12 - iw - 6;
@@ -683,10 +765,10 @@ inline void layout_button(Layout &l, Widget &w, const char *text) {
     const int tw = text_width(tf, shown, strlen(shown));
     const int group = iw + 6 + (tw < avail ? tw : avail);
     const int x0 = (W - group) / 2;
-    lv_obj_set_pos(w.o1, x0, (H - ih) / 2);
-    lv_obj_set_pos(w.o2, x0 + iw + 6, 0);
+    move(w.o1, x0, (H - ih) / 2);
+    move(w.o2, x0 + iw + 6, 0);
   } else if (has_icon) {
-    lv_obj_set_pos(w.o1, (W - iw) / 2, (H - ih) / 2);
+    move(w.o1, (W - iw) / 2, (H - ih) / 2);
   } else if (has_text) {
     w.cut = set_text(w.o2, text, W - 12);
   }
@@ -694,20 +776,19 @@ inline void layout_button(Layout &l, Widget &w, const char *text) {
 
 inline void paint_button(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   const bool pulse = w.fb == 2;
-  uint32_t bg = t.card2;
+  uint32_t bg = k.t.card2;
   if (pulse)
-    bg = t.accf;
+    bg = k.k.AF;
   else if (w.pressed)
-    bg = on ? t.onbg_pr : t.card2_pr;
+    bg = filled ? k.k.FP : k.t.card2_pr;
   set_bg(w.obj, bg);
-  const uint32_t fg = pulse ? t.acct : t.tx;
+  const uint32_t fg = pulse ? k.k.AT : k.t.tx;
   set_text_colour(w.o1, fg);
   set_text_colour(w.o2, fg);
-  set_outline(w.obj, w.fb == 1, on ? t.ion : t.acc);
+  set_outline(w.obj, w.fb == 1, filled ? k.k.FI : k.k.A);
   const char *text = "";
   bound_text(m, w.text, &text);
   layout_button(l, w, text);
@@ -726,21 +807,20 @@ inline bool switch_value(Model &m, Widget &w, bool *v) {
 
 inline void paint_switch(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   bool v = false;
   const bool has = switch_value(m, w, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
   w.faded = has ? 0 : 1;
-  uint32_t track = v ? (on ? t.ion : t.acc) : t.card2;
-  if (w.pressed) track = v ? t.accf_pr : t.card2_pr;
+  uint32_t track = v ? (w.c_has ? w.c_now : filled ? k.k.FI : k.k.A) : k.t.card2;
+  if (w.pressed) track = v ? k.k.AP : k.t.card2_pr;
   set_bg(w.o1, track);
-  set_bg(w.o2, v ? (on ? t.onbg : t.acct) : t.tx2);
+  set_bg(w.o2, v ? (w.c_has ? w.c_on : filled ? k.k.F : k.k.AT) : k.t.tx2);
   const int tw = w.r[2] < 64 ? w.r[2] : 64;
   const int th = w.r[3] < 36 ? w.r[3] : 36;
-  lv_obj_set_pos(w.o2, v ? tw - 32 : 4, (th - 28) / 2);
-  set_outline(w.o1, w.fb == 1, on ? t.ion : t.acc);
+  move(w.o2, v ? tw - 32 : 4, (th - 28) / 2);
+  set_outline(w.o1, w.fb == 1, filled ? k.k.FI : k.k.A);
 }
 
 inline bool slider_value(Model &m, Widget &w, double *v) {
@@ -757,42 +837,37 @@ inline bool slider_value(Model &m, Widget &w, double *v) {
 
 inline void paint_slider(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   double v = 0, lo, hi, step;
   const bool has = slider_value(m, w, &v);
   limits_of(m, w, &lo, &hi, &step);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
   w.faded = has ? 0 : 1;
   const double amount = has ? fraction(v, lo, hi) : 0;
   const int W = w.r[2], H = w.r[3];
   const int fill = (int) js_round(amount * W);
-  set_bg(w.o1, on ? t.onbg_pr : t.card2);
-  set_bg(w.o2, on ? t.ion : t.acc);
-  lv_obj_set_width(w.o2, fill);
-  if (fill <= 0)
-    lv_obj_add_flag(w.o2, LV_OBJ_FLAG_HIDDEN);
-  else
-    lv_obj_remove_flag(w.o2, LV_OBJ_FLAG_HIDDEN);
-  set_bg(w.o3, on ? t.ontx : t.tx);
-  lv_obj_set_style_outline_width(w.o3, on ? 2 : 0, 0);
-  if (on) {
-    lv_obj_set_style_outline_color(w.o3, lv_color_hex(t.onbg), 0);
-    lv_obj_set_style_outline_opa(w.o3, LV_OPA_COVER, 0);
+  set_bg(w.o1, filled ? k.k.FP : k.t.card2);
+  set_bg(w.o2, w.c_has ? w.c_now : filled ? k.k.FI : k.k.A);
+  set_width(w.o2, fill);
+  set_hidden(w.o2, fill <= 0);
+  set_bg(w.o3, filled ? k.k.FT : k.t.tx);
+  style_num(w.o3, LV_STYLE_OUTLINE_WIDTH, filled ? 2 : 0);
+  if (filled) {
+    style_colour(w.o3, LV_STYLE_OUTLINE_COLOR, k.k.F);
+    style_num(w.o3, LV_STYLE_OUTLINE_OPA, LV_OPA_COVER);
   }
-  lv_obj_set_pos(w.o3, fill - 11, (H - 22) / 2);
-  set_outline(w.o1, w.fb == 1, on ? t.ion : t.acc);
+  move(w.o3, fill - 11, (H - 22) / 2);
+  set_outline(w.o1, w.fb == 1, filled ? k.k.FI : k.k.A);
 }
 
 inline void paint_thermostat(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   double v;
   const bool has = thermostat_value(m, w, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
   w.faded = has ? 0 : 1;
   char text[24];
   if (has)
@@ -801,19 +876,19 @@ inline void paint_thermostat(Layout &l, Widget &w) {
     snprintf(text, sizeof text, "\xE2\x80\x93");  // en dash
   const int s = w.r[2] < w.r[3] ? w.r[2] : w.r[3];
   const lv_font_t *font = thermostat_font(text, s);
-  if (lv_obj_get_style_text_font(w.o1, LV_PART_MAIN) != font) lv_obj_set_style_text_font(w.o1, font, 0);
+  set_font(w.o1, font);
   const int pad = (s - line_height(font)) / 2;
-  lv_obj_set_style_pad_top(w.o1, pad > 0 ? pad : 0, 0);
-  set_text_colour(w.o1, on ? t.ontx : t.tx);
+  style_num(w.o1, LV_STYLE_PAD_TOP, pad > 0 ? pad : 0);  // only when the font changed (rule 3)
+  set_text_colour(w.o1, k.k.text);
   w.cut = set_text(w.o1, text, thermostat_text_width(s));
-  for (int k = 0; k < 2; k++) {
-    lv_obj_t *b = k == 0 ? w.o2 : w.o3;
+  for (int b_i = 0; b_i < 2; b_i++) {
+    lv_obj_t *b = b_i == 0 ? w.o2 : w.o3;
     if (!b) continue;
-    const int dir = k == 0 ? -1 : 1;
-    set_bg(b, w.pressed_part == dir ? t.card2_pr : t.card2);
-    set_outline(b, w.fb == 1, on ? t.ion : t.acc);
+    const int dir = b_i == 0 ? -1 : 1;
+    set_bg(b, w.pressed_part == dir ? k.t.card2_pr : k.t.card2);
+    set_outline(b, w.fb == 1, filled ? k.k.FI : k.k.A);
     lv_obj_t *icon = lv_obj_get_child(b, 0);
-    set_text_colour(icon, t.tx);
+    set_text_colour(icon, k.t.tx);
   }
   lv_obj_invalidate(w.obj);
 }
@@ -822,30 +897,30 @@ inline void paint_chart(Layout &l, Widget &w) {
   Model &m = *l.model;
   const double *v;
   const bool has = bound_list(m, w.value, &v) >= 0;
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
   lv_obj_invalidate(w.obj);
 }
 
 inline void paint_image(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
   double v = 0;
   const bool has = bound_num(m, w.value, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
   w.faded = has ? 0 : 1;
-  set_bg(w.obj, w.pressed ? t.card2_pr : t.card2);
+  set_bg(w.obj, w.pressed ? k.t.card2_pr : k.t.card2);
   const int px = image_icon_px(w.r[2], w.r[3]);
-  set_text_colour(w.o1, t.acc2);
+  // The box of look 0; badge and bare looks come with their own drawing.
+  set_text_colour(w.o1, w.look == 0 && w.c_has ? w.c_on : k.t.acc2);
   set_icon(w.o1, px, has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
-  set_outline(w.obj, w.fb == 1, t.acc);
+  set_outline(w.obj, w.fb == 1, k.k.A);
 }
 
 inline void paint_heading(Layout &l, Widget &w) {
   Model &m = *l.model;
-  const Tok t = theme_tokens(m);
-  set_text_colour(w.o1, t.tx);
-  set_text_colour(w.o2, t.tx);
+  const uint32_t colour = w.c_has ? w.c_now : page_theme(m, w.page).c[C_TX];
+  set_text_colour(w.o1, colour);
+  set_text_colour(w.o2, colour);
   const char *text = "";
   bound_text(m, w.text, &text);
   w.cut = set_text(w.o2, text, w.r[2] - (w.o1 ? 32 : 0));
@@ -853,23 +928,23 @@ inline void paint_heading(Layout &l, Widget &w) {
 
 inline void paint_card(Layout &l, Widget &w) {
   Model &m = *l.model;
-  const Tok t = card_tokens(m, &w);
-  const bool on = card_is_on(m, &w);
-  if (on) {
-    set_bg(w.obj, t.onbg);
-    lv_obj_set_style_bg_grad_dir(w.obj, LV_GRAD_DIR_NONE, 0);
+  const CardLook &k = look_for(m, &w);
+  const Tok &t = k.t;
+  if (k.k.filled) {
+    set_bg(w.obj, k.k.F);
+    style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
   } else {
     set_bg(w.obj, t.bg);
     if (t.has_bg2 && t.gd >= 0) {
-      lv_obj_set_style_bg_grad_color(w.obj, lv_color_hex(t.bg2), 0);
-      lv_obj_set_style_bg_grad_dir(w.obj, t.gd == 1 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER, 0);
+      style_colour(w.obj, LV_STYLE_BG_GRAD_COLOR, t.bg2);
+      style_num(w.obj, LV_STYLE_BG_GRAD_DIR, t.gd == 1 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER);
     } else {
-      lv_obj_set_style_bg_grad_dir(w.obj, LV_GRAD_DIR_NONE, 0);
+      style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
     }
   }
-  lv_obj_set_style_border_color(w.obj, lv_color_hex(on ? t.acc : t.line), 0);
-  set_text_colour(w.o1, on ? t.ion : t.tx2);
-  set_text_colour(w.o2, on ? t.ontx : t.tx);
+  style_colour(w.obj, LV_STYLE_BORDER_COLOR, k.k.border);
+  set_text_colour(w.o1, k.k.header_icon);
+  set_text_colour(w.o2, k.k.text);
   if (w.o2) {
     const char *text = "";
     bound_text(m, w.text, &text);
@@ -879,6 +954,12 @@ inline void paint_card(Layout &l, Widget &w) {
 
 inline void paint_widget(Layout &l, Widget &w) {
   if (!w.obj || !l.model) return;
+  if (w.stale) {
+    w.stale = 0;
+    Page &p = l.model->pages[w.page];
+    if (p.stale) p.stale--;
+    if (l.stale) l.stale--;
+  }
   switch (w.kind) {
     case W_HEADING: paint_heading(l, w); break;
     case W_CARD: paint_card(l, w); break;
@@ -895,24 +976,77 @@ inline void paint_widget(Layout &l, Widget &w) {
 
 inline bool widget_dirty(const Widget &w) {
   return bound_dirty(w.text) || bound_dirty(w.value) || bound_dirty(w.vmin) || bound_dirty(w.vmax) ||
-         bound_dirty(w.step) || bound_dirty(w.on) || bound_dirty(w.confirm);
+         bound_dirty(w.step) || bound_dirty(w.on) || bound_dirty(w.confirm) || bound_dirty(w.vis) ||
+         bound_dirty(w.c) || bound_dirty(w.ic) || bound_dirty(w.mark);
 }
 
-// Repaints the widgets whose values changed (g.dirty), and every widget of a
-// card whose "on" state changed.
+// Rule 1 of "What a repaint may cost" (cards spec B.4): a widget of the page
+// on screen is painted now. One of another page of the shown layout gets a
+// stale mark instead; the timer's slices paint it (paint_stale), and
+// show_page paints what is still stale on a page before it shows. A layout
+// being built is painted as before: at its build, with the values it holds.
+inline void repaint(Layout &l, Widget &w) {
+  if (!w.obj || !l.model) return;
+  if (l.state != L_ACTIVE || w.page == g.page) {
+    paint_widget(l, w);
+    return;
+  }
+  if (w.stale) return;
+  w.stale = 1;
+  l.model->pages[w.page].stale++;
+  l.stale++;
+}
+
+// Repaints the widgets whose values changed (g.dirty). A card whose `on`,
+// `tint` or `un` changed gets its colours worked out again, and then it and
+// every widget in it are repainted; a widget whose `c` changed gets its own.
 inline void paint_dirty(Layout &l) {
   if (!l.model || !g.dirty_any) return;
   Model &m = *l.model;
   for (uint32_t i = 0; i < m.nw; i++) {
     Widget &w = m.w[i];
     if (!w.obj) continue;
-    if (w.kind == W_CARD && bound_dirty(w.on)) {
-      paint_widget(l, w);
-      for (uint32_t k = 1; k <= w.children && i + k < m.nw; k++) paint_widget(l, m.w[i + k]);
+    if (w.kind == W_CARD && (bound_dirty(w.on) || bound_dirty(w.c) || bound_dirty(w.vis)) && card_look_update(m, w)) {
+      repaint(l, w);
+      for (uint32_t k = 1; k <= w.children && i + k < m.nw; k++) {
+        Widget &c = m.w[i + k];
+        widget_colour_update(m, c);
+        repaint(l, c);
+      }
       i += w.children;
       continue;
     }
-    if (widget_dirty(w)) paint_widget(l, w);
+    if (!widget_dirty(w)) continue;
+    if (w.kind != W_CARD && bound_dirty(w.c)) widget_colour_update(m, w);
+    repaint(l, w);
+  }
+}
+
+// Paints the stale widgets of one page now (before it shows).
+inline void paint_stale_page(Layout &l, int page) {
+  if (!l.model || !l.stale || page < 0 || page >= l.model->npages) return;
+  Model &m = *l.model;
+  Page &p = m.pages[page];
+  for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw && p.stale; i++)
+    if (m.w[i].stale) paint_widget(l, m.w[i]);
+}
+
+// One slice of stale painting: page by page from where the last slice
+// stopped, at most STALE_WIDGETS widgets and while the slice's time lasts.
+inline void paint_stale(Layout &l, uint32_t start) {
+  if (!l.model || !l.stale) return;
+  Model &m = *l.model;
+  uint32_t painted = 0;
+  for (uint32_t n = 0; n <= m.npages && l.stale; n++) {
+    if (l.s_page >= m.npages) l.s_page = 0;
+    Page &p = m.pages[l.s_page];
+    for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw && p.stale; i++) {
+      if (!m.w[i].stale) continue;
+      if (painted >= STALE_WIDGETS || now() - start >= SLICE_MS) return;
+      paint_widget(l, m.w[i]);
+      painted++;
+    }
+    l.s_page++;
   }
 }
 
@@ -936,7 +1070,7 @@ inline void paint_nav(Layout &l) {
     } else if (act) {
       set_bg(n.obj, t.onbg);
     } else {
-      lv_obj_set_style_bg_opa(n.obj, LV_OPA_TRANSP, 0);
+      style_num(n.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
     }
     set_text_colour(n.icon_obj, act ? t.acc : t.tx2);
   }
@@ -988,7 +1122,7 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       w.obj = plain(parent);
       if (!w.obj) return;
       place(w.obj, x, y, W, H);
-      set_radius(w.obj, card_tokens(*l.model, card_of(*l.model, w)).r2);
+      set_radius(w.obj, look_for(*l.model, card_of(*l.model, w)).t.r2);
       const lv_font_t *ifont = icon_font(24);
       // The glyph that is drawn: the fallback when the font lacks w.icon. The
       // text room beside it uses the same width, as layout_button does.
@@ -1079,7 +1213,7 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       w.obj = plain(parent);
       if (!w.obj) return;
       place(w.obj, x, y, W, H);
-      set_radius(w.obj, card_tokens(*l.model, card_of(*l.model, w)).r2);
+      set_radius(w.obj, look_for(*l.model, card_of(*l.model, w)).t.r2);
       const int px = image_icon_px(W, H);
       w.o1 = icon_box(w.obj, 0, 0, W, H, px);
       break;
@@ -1094,6 +1228,7 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
     set_clickable(w.obj, true);
     add_events(w.obj, on_widget_event, &w);
   }
+  widget_colour_update(*l.model, w);
   paint_widget(l, w);
 }
 
@@ -1112,11 +1247,14 @@ inline void build_shell(Layout &l, Widget &w, lv_obj_t *parent) {
     const int tx = w.o1 ? 32 : 0;
     w.o2 = text_box(w.obj, tx, 0, w.r[2] - tx, w.r[3], text_font(20), false);
     if (g.obj_fail) return;
+    widget_colour_update(m, w);
     paint_widget(l, w);
     return;
   }
   if (w.kind != W_CARD) return;
-  const Tok t = card_tokens(m, &w);
+  // The card's colours, once at its build (cards spec B.3).
+  card_look_update(m, w);
+  const Tok &t = look_for(m, &w).t;
   w.obj = plain(parent);
   if (!w.obj) return;
   place(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]);
@@ -1180,7 +1318,7 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
     }
     // Widget rectangles are absolute (contract 4.3); LVGL places children
     // inside the card's border, so that is taken off.
-    const int bw = card_tokens(m, &w).bw;
+    const int bw = look_for(m, &w).t.bw;
     const int ox = w.r[0] + bw, oy = w.r[1] + bw;
     while (l.b_child <= kids) {
       Widget &c = m.w[l.b_item + l.b_child];
@@ -1243,6 +1381,7 @@ inline bool delete_step(Layout &l, Budget &b) {
 inline void show_page(Layout &l, int page) {
   if (!l.model || page < 0 || page >= l.model->npages) return;
   if (l.state == L_ACTIVE) {
+    paint_stale_page(l, page);  // what changed while it was not on screen
     for (int p = 0; p < l.model->npages; p++) {
       lv_obj_t *po = l.model->pages[p].obj;
       if (!po || p == page) continue;
@@ -1299,19 +1438,19 @@ inline void restyle_overlay() {
   if (!g.overlay) return;
   set_text_colour(g.mark, ui_colour(C_TX2));
   set_bg(g.strip, ui_colour(C_CARD2));
-  lv_obj_set_style_radius(g.strip, ui_radius(true), 0);
+  set_radius(g.strip, ui_radius(true));
   set_text_colour(g.strip_label, ui_colour(C_TX));
   set_bg(g.q_box, ui_colour(C_CARD));
-  lv_obj_set_style_radius(g.q_box, ui_radius(false), 0);
+  set_radius(g.q_box, ui_radius(false));
   set_text_colour(g.q_text, ui_colour(C_TX));
   set_bg(g.q_no, ui_colour(C_CARD2));
   set_bg(g.q_yes, ui_colour(C_ACCF));
-  lv_obj_set_style_radius(g.q_no, ui_radius(true), 0);
-  lv_obj_set_style_radius(g.q_yes, ui_radius(true), 0);
+  set_radius(g.q_no, ui_radius(true));
+  set_radius(g.q_yes, ui_radius(true));
   set_text_colour(lv_obj_get_child(g.q_no, 0), ui_colour(C_TX));
   set_text_colour(lv_obj_get_child(g.q_yes, 0), ui_colour(C_ACCT));
-  lv_obj_set_style_bg_color(g.question, lv_color_hex(ui_colour(C_WALL)), 0);
-  lv_obj_set_style_bg_opa(g.question, LV_OPA_60, 0);
+  style_colour(g.question, LV_STYLE_BG_COLOR, ui_colour(C_WALL));
+  style_num(g.question, LV_STYLE_BG_OPA, LV_OPA_60);
 }
 
 inline void ui_begin() {
