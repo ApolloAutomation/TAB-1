@@ -7,9 +7,12 @@ Static checks (always run, no ESPHome needed):
   - the two events match contract.json and send `data:` (never a template);
   - every action chain holds only `lambda` and `api.respond`: no delay,
     wait_until or other step that would make ESPHome copy the arguments;
-  - fonts: the ids, sizes and glyph lists equal contract.json `fonts` and
-    icons.json level 1, the generated block is up to date, and the start-up
-    script hands each font to the right slot of tab::Fonts;
+  - fonts: the ids, sizes, bits a pixel and glyph lists equal contract.json
+    `fonts` and icons.json up to level 2 (the 14 fonts), the generated block
+    is up to date, the start-up script hands each font to the right place of
+    tab::Fonts, and the metrics table of engine_tests/host/harness.h has one
+    row per font in that order with no digits font's line higher than
+    contract.json fonts.row_px;
   - both entry files: api and wifi reboot_timeout 0s, the same device as
     TAB-1.yaml, an open hotspot with the set-up page, a 15-minute set-up
     window that tells the waiting screen when it closes, and the update lock
@@ -59,6 +62,10 @@ Static checks (always run, no ESPHome needed):
     builds the whole of fast_display.h against the stand-in headers in
     engine_tests/host/fast_display_sim (one for each header it includes)
     and tests flush_cb, setup and set_enabled (tests/test_flush_cb.cpp);
+  - engine_tests/run.sh builds everything with -ffp-contract=off, and builds
+    and runs the frozen sources of engine 0.1.0 (engine_tests/frozen/0.1.0)
+    optimised and with sanitizers before the engine, whose host test
+    v1_pixels_unchanged compares their frames byte for byte;
   - docs/engine.md quotes each waiting screen of engine/tab_state.h with its
     exact headline and step (none alone or cut short, no old wording; the
     erased one with its second line and the tablet's name) and each Wi-Fi
@@ -110,6 +117,7 @@ Optional steps:
              stop with the error naming it), reads
              every NVS namespace the firmware opens and compares it with the
              erase list, compares the font metrics with the host harness and
+             the host's lv_conf.h with the tablet's (LV_HOST_ONLY apart), and
              reports firmware size and RAM and flash use. Any compiler
              warning from engine/, engine_glue.h, ota_lock.h or the lambdas
              of Engine.yaml and the entry files fails (main.cpp, where all
@@ -1226,26 +1234,68 @@ def check_events(engine, contract, rep):
         rep.check(f"events: {script_id} parameters are {sorted(want[name])}", sorted(params) == sorted(want[name]), f"got {params}")
 
 
+HARNESS = Path("engine_tests") / "host" / "harness.h"
+FONT_FAMILY = {"tab_text_": "text", "tab_digits_": "digits", "tab_icon_": "icons"}
+
+
+def harness_metrics(text):
+    """[(family, px, line_height, base_line)] of the DEVICE_METRICS table."""
+    return [(fam, int(px), int(lh), int(bl)) for fam, px, lh, bl in METRIC_RE.findall(text)]
+
+
+def harness_metric_problems(text, contract):
+    """What is wrong with the harness table against contract.json `fonts`:
+    one row per font of Engine.yaml, in its order (--compile compares the
+    numbers with a build), and no digits font whose line is higher than its
+    fonts.row_px (the lowest rectangle HA gives a label of that size)."""
+    problems = []
+    rows = harness_metrics(text)
+    want = []
+    for fid, (_file, px) in gen.font_ids(contract).items():
+        family = next(fam for prefix, fam in FONT_FAMILY.items() if fid.startswith(prefix))
+        want.append((family, px))
+    got = [(fam, px) for fam, px, _lh, _bl in rows]
+    if got != want:
+        problems.append(f"the table has {got}, Engine.yaml's fonts are {want}")
+    row_px = contract["fonts"].get("row_px") or {}
+    for fam, px, lh, _bl in rows:
+        if fam != "digits":
+            continue
+        limit = row_px.get(str(px))
+        if not isinstance(limit, int):
+            problems.append(f"fonts.row_px has no row for the {px} px digits")
+        elif lh > limit:
+            problems.append(f"the {px} px digits font's line is {lh} px, higher than its fonts.row_px {limit}")
+    return problems
+
+
 def check_fonts(engine, contract, icons, contract_dir, rep):
     fonts = {f.get("id"): f for f in _as_list(engine.get("font")) if isinstance(f, dict)}
     expected = gen.font_ids(contract)
     tab_ids = {fid for fid in fonts if str(fid).startswith("tab_")}
     rep.check(
-        "fonts: exactly the contract sizes (text, digits, icons)",
-        tab_ids == set(expected),
-        f"missing {sorted(set(expected) - tab_ids)}, extra {sorted(tab_ids - set(expected))}",
+        f"fonts: exactly the contract sizes ({len(expected)} fonts: text, digits, icons)",
+        tab_ids == set(expected) and len(expected) == 14,
+        f"missing {sorted(set(expected) - tab_ids)}, extra {sorted(tab_ids - set(expected))}, {len(expected)} in the contract",
+    )
+    level = gen.ICON_LEVEL
+    rep.check(
+        f"fonts: the firmware embeds icon level {level}, the newest of icons.json",
+        level == icons.get("version"),
+        f"icons.json version {icons.get('version')!r}",
     )
     text_set = {chr(c) for c in gen.text_codepoints(contract)}
     digit_set = set(gen.digit_glyphs(contract))
-    level1 = {chr(cp) for _name, cp in gen.icon_entries(icons, 1)}
-    all_level1 = {chr(cp) for cp, lvl in icons["icons"].values() if lvl <= 1}
+    embedded = {chr(cp) for _name, cp in gen.icon_entries(icons, level)}
+    all_up_to = {chr(cp) for cp, lvl in icons["icons"].values() if lvl <= level}
     for fid, (file, size) in expected.items():
         f = fonts.get(fid)
         if f is None:
             continue
+        bpp = gen.bpp_of(fid)
         rep.check(
-            f"fonts: {fid} is {file} at {size} px, {gen.BPP} bpp",
-            f.get("file") == file and f.get("size") == size and f.get("bpp") == gen.BPP,
+            f"fonts: {fid} is {file} at {size} px, {bpp} bpp",
+            f.get("file") == file and f.get("size") == size and f.get("bpp") == bpp,
             f"got file={f.get('file')!r} size={f.get('size')!r} bpp={f.get('bpp')!r}",
         )
         chars = _flatten_glyphs(f.get("glyphs"))
@@ -1254,17 +1304,17 @@ def check_fonts(engine, contract, icons, contract_dir, rep):
         elif fid.startswith("tab_digits_"):
             want, what = digit_set, f"only {gen.digit_glyphs(contract)!r}"
         else:
-            want, what = level1, "every icons.json level 1 icon"
+            want, what = embedded, f"every icons.json icon up to level {level}"
         rep.check(
             f"fonts: {fid} glyphs are {what}",
             set(chars) == want and len(chars) == len(set(chars)),
             f"{len(set(chars))} glyphs, {len(chars) - len(set(chars))} duplicates, "
             f"missing {len(want - set(chars))}, extra {len(set(chars) - want)}",
         )
-    rep.check("fonts: icon glyph list equals icons.json level 1", level1 == all_level1)
+    rep.check(f"fonts: icon glyph list equals icons.json up to level {level}", embedded == all_up_to and len(embedded) == len(icons["icons"]))
     for key in ("fallback", "placeholder"):
         cp = icons["icons"][icons[key]][0]
-        rep.check(f"fonts: the {key} icon {icons[key]} is embedded", chr(cp) in level1)
+        rep.check(f"fonts: the {key} icon {icons[key]} is embedded", chr(cp) in embedded)
     try:
         fresh = gen.is_up_to_date(str(contract_dir), str(ROOT / ENGINE))
     except ValueError as err:
@@ -1279,19 +1329,47 @@ def check_fonts(engine, contract, icons, contract_dir, rep):
         for step in _as_list(start.get("then")):
             if isinstance(step, dict) and "lambda" in step:
                 body += str(step["lambda"])
-    text_map = dict(re.findall(r"fonts\.text\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
-    icon_map = dict(re.findall(r"fonts\.icon\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
-    digits = re.findall(r"fonts\.digits\s*=\s*id\((\w+)\)->get_lv_font\(\)", body)
-    want_text = {str(i): f"tab_text_{px}" for i, px in enumerate(contract["fonts"]["text_px"])}
-    want_icon = {str(i): f"tab_icon_{px}" for i, px in enumerate(contract["fonts"]["icon_px"])}
-    rep.check("fonts: tab::Fonts.text[] gets 14, 15, 16, 18, 20, 34 px in order", text_map == want_text, f"got {text_map}")
+    maps = {}
+    for kind in ("text", "digits", "icon"):
+        maps[kind] = dict(re.findall(rf"fonts\.{kind}\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
+    for kind, key, prefix in (("text", "text_px", "tab_text_"), ("digits", "digits_px", "tab_digits_"), ("icon", "icon_px", "tab_icon_")):
+        sizes = contract["fonts"][key]
+        want = {str(i): f"{prefix}{px}" for i, px in enumerate(sizes)}
+        rep.check(
+            f"fonts: tab::Fonts.{kind}[] gets {', '.join(str(px) for px in sizes)} px in order",
+            maps[kind] == want,
+            f"got {maps[kind]}",
+        )
     rep.check(
-        "fonts: tab::Fonts.digits gets the digits font",
-        digits == [f"tab_digits_{contract['fonts']['digits_px'][0]}"],
-        f"got {digits}",
+        "fonts: tab_engine_start hands every font by its place (no tab::Fonts.digits without a place)",
+        not re.search(r"fonts\.digits\s*=", body),
     )
-    rep.check("fonts: tab::Fonts.icon[] gets 24, 28, 48, 72 px in order", icon_map == want_icon, f"got {icon_map}")
     rep.check("start: tab_engine_start calls tab_glue::start", "tab_glue::start(" in body)
+
+    harness = _read_or_empty(ROOT / HARNESS)
+    problems = harness_metric_problems(harness, contract)
+    rep.check(
+        f"fonts: {HARNESS} has the metrics of the {len(expected)} fonts in Engine.yaml's order, and no digits font's line is higher than contract.json fonts.row_px",
+        bool(harness) and not problems,
+        "; ".join(problems) if problems else ", ".join(f"{px}: {lh}" for fam, px, lh, _bl in harness_metrics(harness) if fam == "digits"),
+    )
+    # That rule, on what it must catch.
+    rows = re.findall(r'\{"digits",\s*\d+,\s*\d+,\s*\d+\}', harness)
+    cases = []
+    if rows:
+        big = re.sub(r"(\{\"digits\",\s*96,\s*)\d+", lambda m: m.group(1) + "121", harness)
+        cases.append(("a 96 px line of 121", big, contract, "higher than its fonts.row_px"))
+        no_row = json.loads(json.dumps(contract))
+        no_row["fonts"]["row_px"].pop("192", None)
+        cases.append(("no row for 192", harness, no_row, "no row for the 192 px digits"))
+        cases.append(("a row missing", harness.replace(rows[-1], ""), contract, "Engine.yaml's fonts are"))
+        cases.append(("two rows swapped", harness.replace(rows[0], "@@").replace(rows[1], rows[0]).replace("@@", rows[1]), contract, "Engine.yaml's fonts are"))
+    missed = [name for name, text, c, want in cases if not any(want in p for p in harness_metric_problems(text, c))]
+    rep.check(
+        f"self-test: the harness metrics rule fails a digits line above fonts.row_px, a size without a row, and a table row missing or out of order ({len(cases)} cases)",
+        len(cases) == 4 and not missed,
+        f"not caught: {missed}",
+    )
 
 
 def _walk(value):
@@ -2676,6 +2754,69 @@ def check_display(rep):
     )
 
 
+FROZEN = Path("engine_tests") / "frozen" / "0.1.0"
+FROZEN_FILES = tuple(f"engine/{n}" for n in (
+    "tab_core.h", "tab_crypto.h", "tab_engine.h", "tab_files.h", "tab_json.h", "tab_model.h", "tab_state.h", "tab_ui.h",
+)) + ("host/harness.h", "host/fake_platform.h")
+
+
+def host_test_problems(run_sh, frozen_present):
+    """What engine_tests/run.sh lacks for v1_pixels_unchanged and for doubles
+    as the tablet works them out (cards spec B.1, B.9): -ffp-contract=off in
+    COMMON (LVGL and every test), the frozen engine 0.1.0 built before host/
+    and run optimised and with sanitizers before the engine, each run
+    counted, and the engine told where its frames are."""
+    problems = []
+    script = "\n".join(line for line in run_sh.splitlines() if not line.lstrip().startswith("#"))
+    common = re.search(r'^COMMON="([^"]*)"', script, re.M)
+    if not common or "-ffp-contract=off" not in common.group(1).split():
+        problems.append("COMMON in engine_tests/run.sh lacks -ffp-contract=off")
+    built = re.search(r'-I"\$T/frozen/0\.1\.0/host" -I"\$T/frozen/0\.1\.0/engine" \$COMMON "\$T/tests/test_frozen\.cpp"', script)
+    if not built:
+        problems.append("engine_tests/run.sh does not build tests/test_frozen.cpp against frozen/0.1.0 (its host/ and engine/ before host/)")
+    for name in ("o2", "asan"):
+        if not re.search(rf'^build_frozen {name} ', script, re.M):
+            problems.append(f"engine_tests/run.sh does not build test_frozen_{name}")
+        if not re.search(rf'"\$WORK/test_frozen_{name}"[^\n]*"\$WORK/frozen_frames_{name}" \|\| status=1', script):
+            problems.append(f"engine_tests/run.sh does not run test_frozen_{name} into frozen_frames_{name}, or its failure does not count")
+        run_engine = script.find(f'"$WORK/test_engine_{name}"')
+        run_frozen = script.find(f'"$WORK/test_frozen_{name}"')
+        if run_engine < 0 or run_frozen < 0 or run_frozen > run_engine:
+            problems.append(f"engine_tests/run.sh does not run test_frozen_{name} before test_engine_{name}")
+        if not re.search(rf'TAB_FROZEN_FRAMES="\$WORK/frozen_frames_{name}"[^\n]*(\\\n[^\n]*)?"\$WORK/test_engine_{name}"', script):
+            problems.append(f"engine_tests/run.sh does not hand frozen_frames_{name} to test_engine_{name} (TAB_FROZEN_FRAMES)")
+    missing = [f for f, there in frozen_present.items() if not there]
+    if missing:
+        problems.append(f"{FROZEN} lacks {missing}")
+    return problems
+
+
+def check_host_tests(rep):
+    run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
+    present = {f: (ROOT / FROZEN / f).is_file() for f in FROZEN_FILES}
+    problems = host_test_problems(run_sh, present)
+    rep.check(
+        f"host tests: engine_tests/run.sh builds with -ffp-contract=off, and builds and runs the frozen engine 0.1.0 ({FROZEN}) optimised and with sanitizers before the engine, whose v1_pixels_unchanged compares their frames",
+        not problems,
+        "; ".join(problems),
+    )
+    frozen_run = '"$WORK/test_frozen_asan" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/frozen_frames_asan" || status=1'
+    cases = (
+        ("no -ffp-contract=off", run_sh.replace(" -ffp-contract=off", ""), present, "lacks -ffp-contract=off"),
+        ("the flag only in a comment", run_sh.replace(" -ffp-contract=off", "") + "\n# -ffp-contract=off\n", present, "lacks -ffp-contract=off"),
+        ("frozen built against engine/", run_sh.replace('-I"$T/frozen/0.1.0/engine" ', ""), present, "does not build tests/test_frozen.cpp"),
+        ("the sanitizer run does not count", run_sh.replace(frozen_run, frozen_run.replace(" || status=1", " || true")), present, "does not run test_frozen_asan"),
+        ("no frames for the engine", run_sh.replace('TAB_FROZEN_FRAMES="$WORK/frozen_frames_o2" ', ""), present, "does not hand frozen_frames_o2"),
+        ("a frozen file gone", run_sh, dict(present, **{"engine/tab_ui.h": False}), "lacks ['engine/tab_ui.h']"),
+    )
+    missed = [name for name, text, there, want in cases if not any(want in p for p in host_test_problems(text, there))]
+    rep.check(
+        f"self-test: the host test rule fails a run.sh without -ffp-contract=off, a frozen program built against engine/, a frozen run that does not count or whose frames the engine does not get, and a frozen file gone ({len(cases)} cases)",
+        not missed,
+        f"not caught: {missed}",
+    )
+
+
 def check_files(engine_dir, rep, substitute):
     ttf = ROOT / "fonts" / "Montserrat-Medium.ttf"
     ofl = ROOT / "fonts" / "Montserrat-OFL.txt"
@@ -3712,16 +3853,56 @@ def check_nvs(build_dir, rep, label):
     )
 
 
+# Settings of the host's lv_conf.h that differ from the tablet's on purpose:
+# one draw unit, the font the host has, the C library allocator (so
+# AddressSanitizer sees every block), no LVGL log.
+LV_HOST_ONLY = {"LV_DRAW_SW_DRAW_UNIT_CNT", "LV_FONT_DEFAULT", "LV_USE_LOG", "LV_USE_STDLIB_MALLOC"}
+LV_DEFINE_RE = re.compile(r"^#define\s+(LV_\w+)\s+(.*?)\s*$", re.M)
+
+
+def lv_conf_problems(host_text, build_text):
+    """Settings both lv_conf.h files name with another value, apart from
+    LV_HOST_ONLY: a host test could pass with what the tablet lacks."""
+    host = dict(LV_DEFINE_RE.findall(host_text))
+    build = dict(LV_DEFINE_RE.findall(build_text))
+    if not host or not build:
+        return ["an lv_conf.h has no LV_ settings"]
+    return [f"{k} is {host[k]} on the host, {build[k]} on the tablet" for k in sorted(host) if k in build and k not in LV_HOST_ONLY and host[k] != build[k]]
+
+
+def check_lv_conf_self_test(rep):
+    host = _read_or_empty(ROOT / "engine_tests" / "host" / "lv_conf.h")
+    cases = (
+        ("the image widget on", host.replace("#define LV_USE_IMAGE 0", "#define LV_USE_IMAGE 1"), "LV_USE_IMAGE is 0 on the host, 1"),
+        ("A8 layers on", host.replace("#define LV_DRAW_SW_SUPPORT_A8 0", "#define LV_DRAW_SW_SUPPORT_A8 1"), "LV_DRAW_SW_SUPPORT_A8 is 0 on the host, 1"),
+        ("no settings", "", "no LV_ settings"),
+    )
+    missed = [name for name, build, want in cases if not any(want in p for p in lv_conf_problems(host, build))]
+    rep.check(
+        f"self-test: the --compile lv_conf.h rule fails a tablet build with the image widget or A8 layers the host lacks, and an empty file ({len(cases)} cases), and passes the host file against itself",
+        bool(host) and not missed and not lv_conf_problems(host, host),
+        f"not caught: {missed}",
+    )
+
+
+def check_lv_conf(build_dir, rep, label):
+    problems = lv_conf_problems(_read_or_empty(ROOT / "engine_tests" / "host" / "lv_conf.h"), _read_or_empty(build_dir / "src" / "lv_conf.h"))
+    rep.check(
+        f"compile {label}: engine_tests/host/lv_conf.h has the tablet's LVGL settings (src/lv_conf.h), apart from {sorted(LV_HOST_ONLY)}",
+        not problems,
+        "; ".join(problems),
+    )
+
+
 def check_font_metrics(build_dir, rep, label):
     main = build_dir / "src" / "main.cpp"
     got = FONT_RE.findall(main.read_text(encoding="utf-8", errors="replace")) if main.is_file() else []
-    harness = ROOT / "engine_tests" / "host" / "harness.h"
-    want = METRIC_RE.findall(harness.read_text(encoding="utf-8")) if harness.is_file() else []
+    want = harness_metrics(_read_or_empty(ROOT / HARNESS))
     pairs = [(int(h), int(h) - int(a)) for a, h in got]
-    table = [(int(lh), int(bl)) for _f, _px, lh, bl in want]
+    table = [(lh, bl) for _f, _px, lh, bl in want]
     rep.check(
-        f"compile {label}: font line_height and base_line equal the host harness table (engine_tests/host/harness.h)",
-        len(pairs) == 11 and pairs == table,
+        f"compile {label}: font line_height and base_line equal the host harness table ({HARNESS}, {len(table)} fonts)",
+        len(table) == 14 and pairs == table,
         f"build {pairs}, harness {table}",
     )
 
@@ -3959,6 +4140,7 @@ def run_compile(esphome, copy_dir, work, env, rep):
         check_generated_lock(build_dir, load_yaml(copy_dir / ENGINE), rep, label)
         check_nvs(build_dir, rep, label)
         check_font_metrics(build_dir, rep, label)
+        check_lv_conf(build_dir, rep, label)
         if label == "adopt":
             run_stale_copies(esphome, copy_dir, work, venv, build_dir, entry, rep)
 
@@ -4063,6 +4245,7 @@ def main():
         tab1 = load_yaml(ROOT / TAB1)
         check_package(engine, rep)
         check_display(rep)
+        check_host_tests(rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
         check_fonts(engine, contract, icons, contract_dir, rep)
@@ -4075,6 +4258,7 @@ def main():
         check_release(prod, bench, rep)
         check_files(engine_dir, rep, substitute)
         check_warning_gate_self_test(rep)
+        check_lv_conf_self_test(rep)
         yaml_cross_check(rep)
     except YamlError as err:
         sys.exit(f"FAIL  cannot read the YAML: {err}")

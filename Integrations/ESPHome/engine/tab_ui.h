@@ -21,7 +21,17 @@ inline const lv_font_t *text_font(int px) {
     case 16: return g.fonts.text[2];
     case 18: return g.fonts.text[3];
     case 20: return g.fonts.text[4];
-    default: return g.fonts.text[5];
+    case 28: return g.fonts.text[5];
+    default: return g.fonts.text[6];
+  }
+}
+
+// The digits fonts hold only contract.json fonts.digits_glyphs.
+inline const lv_font_t *digits_font(int px) {
+  switch (px) {
+    case 96: return g.fonts.digits[1];
+    case 192: return g.fonts.digits[2];
+    default: return g.fonts.digits[0];
   }
 }
 
@@ -290,7 +300,7 @@ inline const lv_font_t *thermostat_fit_font(const char *text, int s) {
     if (!((cp >= '0' && cp <= '9') || cp == '.' || cp == ',' || cp == '-')) digits = false;
   }
   const double fit = fmin(s / 5.0, em > 0 ? max_w / em : s / 5.0);
-  if (digits && g.fonts.digits && fit >= 48) return g.fonts.digits;
+  if (digits && digits_font(48) && fit >= 48) return digits_font(48);
   static const int SIZES[4] = {34, 20, 18, 14};
   for (int px : SIZES)
     if (fit >= px) return text_font(px);
@@ -298,7 +308,8 @@ inline const lv_font_t *thermostat_fit_font(const char *text, int s) {
 }
 
 // The thermostat value font (contract 4.7): the largest size not above
-// thermostatFit; 48 only for text the digits font holds (0123456789.,-).
+// thermostatFit; 48 only for text of 0123456789.,- (its own list: the
+// digits font holds a few more characters).
 // Anything else, such as the no-value "–" (U+2013), takes the largest text
 // size that fits: 34 at most. Every text size holds U+2013. thermostatFit
 // counts 0.62 em a digit, but Montserrat's digits are up to 0.67 em, so the
@@ -310,7 +321,7 @@ inline const lv_font_t *thermostat_font(const char *text, int s) {
   const int room = thermostat_text_width(s);
   const size_t n = strlen(text);
   int next = 0;
-  if (font != g.fonts.digits) {
+  if (font != digits_font(48)) {
     while (next < 4 && text_font(SIZES[next]) != font) next++;
     next++;  // the size after the one picked
   }

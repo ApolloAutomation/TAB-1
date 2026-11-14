@@ -121,7 +121,9 @@ api:
             error_message: !lambda return tab_glue::error();
 
 # --- Fonts at the contract sizes (contract section 4.7) ----------------------
-# One weight for all text. The icon fonts hold every icon of icons.json level 1.
+# One weight for all text. The digits fonts hold only fonts.digits_glyphs; the
+# 96 and 192 px ones are 8 bits a pixel, which draw faster. The icon fonts
+# hold every icon of icons.json up to level 2.
 font:
   # BEGIN tab fonts
   # Made by tools/gen_engine_fonts.py from contract.json and
@@ -173,6 +175,11 @@ font:
     bpp: 4
     glyphs: *tab_text_glyphs
   - file: "fonts/Montserrat-Medium.ttf"
+    id: tab_text_28
+    size: 28
+    bpp: 4
+    glyphs: *tab_text_glyphs
+  - file: "fonts/Montserrat-Medium.ttf"
     id: tab_text_34
     size: 34
     bpp: 4
@@ -182,7 +189,19 @@ font:
     size: 48
     bpp: 4
     glyphs:
-      - "0123456789.,-"
+      - "0123456789.,-:\u00B0%+ "
+  - file: "fonts/Montserrat-Medium.ttf"
+    id: tab_digits_96
+    size: 96
+    bpp: 8
+    glyphs:
+      - "0123456789.,-:\u00B0%+ "
+  - file: "fonts/Montserrat-Medium.ttf"
+    id: tab_digits_192
+    size: 192
+    bpp: 8
+    glyphs:
+      - "0123456789.,-:\u00B0%+ "
   - file: "fonts/materialdesignicons-webfont.ttf"
     id: tab_icon_24
     size: 24
@@ -190,92 +209,179 @@ font:
     glyphs: &tab_icon_glyphs
       - "\U000F0004"  # mdi:account
       - "\U000F000E"  # mdi:account-multiple
+      - "\U000F001B"  # mdi:air-conditioner
+      - "\U000F0D43"  # mdi:air-filter
+      - "\U000F1099"  # mdi:air-humidifier
+      - "\U000F0D44"  # mdi:air-purifier
+      - "\U000F0020"  # mdi:alarm
       - "\U000F05D6"  # mdi:alert-circle-outline
+      - "\U000F0937"  # mdi:angle-acute
       - "\U000F0045"  # mdi:arrow-down
       - "\U000F004D"  # mdi:arrow-left
       - "\U000F0054"  # mdi:arrow-right
       - "\U000F005D"  # mdi:arrow-up
+      - "\U000F006A"  # mdi:autorenew
       - "\U000F0E7D"  # mdi:baby-face-outline
+      - "\U000F0079"  # mdi:battery
+      - "\U000F007B"  # mdi:battery-20
+      - "\U000F007E"  # mdi:battery-50
+      - "\U000F0083"  # mdi:battery-alert
+      - "\U000F0084"  # mdi:battery-charging
       - "\U000F02E3"  # mdi:bed
       - "\U000F009A"  # mdi:bell
+      - "\U000F009B"  # mdi:bell-off
+      - "\U000F009E"  # mdi:bell-ring
       - "\U000F00AC"  # mdi:blinds
+      - "\U000F1011"  # mdi:blinds-open
+      - "\U000F00BE"  # mdi:book-open-variant
+      - "\U000F00DF"  # mdi:brightness-6
       - "\U000F00ED"  # mdi:calendar
+      - "\U000F00F6"  # mdi:calendar-today
       - "\U000F010B"  # mdi:car
+      - "\U000F0B6C"  # mdi:car-electric
+      - "\U000F0118"  # mdi:cast
       - "\U000F07AE"  # mdi:cctv
       - "\U000F0769"  # mdi:ceiling-light
       - "\U000F012A"  # mdi:chart-line
       - "\U000F012C"  # mdi:check
+      - "\U000F05E0"  # mdi:check-circle
       - "\U000F0140"  # mdi:chevron-down
       - "\U000F0141"  # mdi:chevron-left
       - "\U000F0142"  # mdi:chevron-right
       - "\U000F0143"  # mdi:chevron-up
       - "\U000F0150"  # mdi:clock-outline
       - "\U000F0156"  # mdi:close
+      - "\U000F109F"  # mdi:coffee-maker
       - "\U000F0493"  # mdi:cog
+      - "\U000F0674"  # mdi:creation
       - "\U000F1239"  # mdi:desk
+      - "\U000F095F"  # mdi:desk-lamp
+      - "\U000F0AAC"  # mdi:dishwasher
       - "\U000F081A"  # mdi:door
+      - "\U000F081B"  # mdi:door-closed
       - "\U000F081C"  # mdi:door-open
+      - "\U000F01D8"  # mdi:dots-horizontal
+      - "\U000F05F1"  # mdi:ev-station
       - "\U000F0210"  # mdi:fan
+      - "\U000F081D"  # mdi:fan-off
       - "\U000F0238"  # mdi:fire
+      - "\U000F0241"  # mdi:flash
       - "\U000F08DD"  # mdi:floor-lamp
       - "\U000F024A"  # mdi:flower
+      - "\U000F028F"  # mdi:fridge-outline
       - "\U000F06D9"  # mdi:garage
+      - "\U000F0872"  # mdi:garage-alert
       - "\U000F06DA"  # mdi:garage-open
+      - "\U000F0299"  # mdi:gate
+      - "\U000F116A"  # mdi:gate-open
       - "\U000F029A"  # mdi:gauge
+      - "\U000F12A8"  # mdi:gesture-tap-button
       - "\U000F0625"  # mdi:help-circle-outline
       - "\U000F02DC"  # mdi:home
       - "\U000F07D0"  # mdi:home-assistant
+      - "\U000F0F9B"  # mdi:home-export-outline
+      - "\U000F0DD2"  # mdi:home-floor-0
+      - "\U000F0D80"  # mdi:home-floor-1
+      - "\U000F0D81"  # mdi:home-floor-2
+      - "\U000F0D85"  # mdi:home-floor-g
+      - "\U000F0F54"  # mdi:home-thermometer
       - "\U000F11D1"  # mdi:image-off-outline
       - "\U000F0976"  # mdi:image-outline
       - "\U000F02FD"  # mdi:information-outline
+      - "\U000F05FA"  # mdi:kettle
       - "\U000F06B5"  # mdi:lamp
       - "\U000F0319"  # mdi:lan-disconnect
+      - "\U000F032A"  # mdi:leaf
       - "\U000F1051"  # mdi:led-strip-variant
+      - "\U000F097E"  # mdi:light-switch
       - "\U000F0335"  # mdi:lightbulb
       - "\U000F1253"  # mdi:lightbulb-group
+      - "\U000F1255"  # mdi:lightbulb-multiple
+      - "\U000F0E4F"  # mdi:lightbulb-off
       - "\U000F06E8"  # mdi:lightbulb-on
       - "\U000F0336"  # mdi:lightbulb-outline
       - "\U000F140B"  # mdi:lightning-bolt
       - "\U000F033E"  # mdi:lock
+      - "\U000F08EE"  # mdi:lock-alert
       - "\U000F033F"  # mdi:lock-open
       - "\U000F0341"  # mdi:lock-outline
+      - "\U000F034E"  # mdi:map-marker
       - "\U000F0374"  # mdi:minus
+      - "\U000F07E4"  # mdi:molecule-co2
+      - "\U000F0F65"  # mdi:moon-waning-crescent
       - "\U000F0D91"  # mdi:motion-sensor
+      - "\U000F0FCE"  # mdi:movie-open
       - "\U000F075A"  # mdi:music
       - "\U000F0388"  # mdi:music-note
+      - "\U000F03A0"  # mdi:numeric
+      - "\U000F1054"  # mdi:outdoor-lamp
       - "\U000F03D8"  # mdi:palette
+      - "\U000F0E0C"  # mdi:palette-outline
       - "\U000F03E4"  # mdi:pause
+      - "\U000F0889"  # mdi:pipe-leak
       - "\U000F040A"  # mdi:play
       - "\U000F040E"  # mdi:play-pause
       - "\U000F0415"  # mdi:plus
+      - "\U000F065A"  # mdi:pot-steam
       - "\U000F0425"  # mdi:power
       - "\U000F06A5"  # mdi:power-plug
+      - "\U000F0438"  # mdi:radiator
+      - "\U000F0456"  # mdi:repeat
       - "\U000F070D"  # mdi:robot-vacuum
+      - "\U000F14DE"  # mdi:rocket-launch
+      - "\U000F0BC3"  # mdi:script-text-outline
+      - "\U000F0ECC"  # mdi:shield-alert
+      - "\U000F0565"  # mdi:shield-check
       - "\U000F068A"  # mdi:shield-home
       - "\U000F099D"  # mdi:shield-lock
       - "\U000F099E"  # mdi:shield-off
+      - "\U000F0499"  # mdi:shield-outline
       - "\U000F09A0"  # mdi:shower
+      - "\U000F049D"  # mdi:shuffle
       - "\U000F0A70"  # mdi:silverware-fork-knife
       - "\U000F04AD"  # mdi:skip-next
       - "\U000F04AE"  # mdi:skip-previous
+      - "\U000F04B2"  # mdi:sleep
+      - "\U000F0392"  # mdi:smoke-detector
       - "\U000F0717"  # mdi:snowflake
       - "\U000F04B9"  # mdi:sofa
+      - "\U000F0A72"  # mdi:solar-power
+      - "\U000F0CD1"  # mdi:spa
       - "\U000F04C3"  # mdi:speaker
+      - "\U000F0D38"  # mdi:speaker-multiple
+      - "\U000F105F"  # mdi:sprinkler
       - "\U000F04CE"  # mdi:star
       - "\U000F04DB"  # mdi:stop
+      - "\U000F04DE"  # mdi:stove
+      - "\U000F12BA"  # mdi:string-lights
       - "\U000F04F6"  # mdi:tablet
       - "\U000F0ECE"  # mdi:tablet-dashboard
       - "\U000F0502"  # mdi:television
+      - "\U000F0ECF"  # mdi:television-play
       - "\U000F050F"  # mdi:thermometer
+      - "\U000F10C2"  # mdi:thermometer-high
+      - "\U000F10C3"  # mdi:thermometer-low
       - "\U000F0393"  # mdi:thermostat
+      - "\U000F051B"  # mdi:timer-outline
       - "\U000F0521"  # mdi:toggle-switch
+      - "\U000F0522"  # mdi:toggle-switch-off
+      - "\U000F0914"  # mdi:track-light
+      - "\U000F0D3E"  # mdi:transmission-tower
+      - "\U000F0917"  # mdi:tumble-dryer
+      - "\U000F054A"  # mdi:umbrella
       - "\U000F056E"  # mdi:view-dashboard
       - "\U000F057E"  # mdi:volume-high
+      - "\U000F057F"  # mdi:volume-low
       - "\U000F0580"  # mdi:volume-medium
+      - "\U000F075F"  # mdi:volume-mute
       - "\U000F0581"  # mdi:volume-off
+      - "\U000F0583"  # mdi:walk
+      - "\U000F091D"  # mdi:wall-sconce-flat
       - "\U000F072A"  # mdi:washing-machine
       - "\U000F058C"  # mdi:water
+      - "\U000F0F92"  # mdi:water-boiler
       - "\U000F058E"  # mdi:water-percent
+      - "\U000F058F"  # mdi:water-pump
       - "\U000F0590"  # mdi:weather-cloudy
       - "\U000F0F2F"  # mdi:weather-cloudy-alert
       - "\U000F0591"  # mdi:weather-fog
@@ -289,11 +395,15 @@ font:
       - "\U000F0598"  # mdi:weather-snowy
       - "\U000F067F"  # mdi:weather-snowy-rainy
       - "\U000F0599"  # mdi:weather-sunny
+      - "\U000F059A"  # mdi:weather-sunset
       - "\U000F059D"  # mdi:weather-windy
       - "\U000F059E"  # mdi:weather-windy-variant
+      - "\U000F05A8"  # mdi:white-balance-sunny
       - "\U000F05AA"  # mdi:wifi-off
       - "\U000F05AE"  # mdi:window-closed
       - "\U000F05B1"  # mdi:window-open
+      - "\U000F111C"  # mdi:window-shutter
+      - "\U000F111E"  # mdi:window-shutter-open
   - file: "fonts/materialdesignicons-webfont.ttf"
     id: tab_icon_28
     size: 28
@@ -348,13 +458,13 @@ script:
   - id: tab_engine_start
     then:
       - lambda: |-
-          #if !defined(TAB1_FILES_ENGINE) || TAB1_FILES_ENGINE != 5
+          #if !defined(TAB1_FILES_ENGINE) || TAB1_FILES_ENGINE != 6
           #error "engine/ is not this package's copy: delete the old engine/ folder from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
-          #if !defined(TAB1_FILES_GLUE) || TAB1_FILES_GLUE != 5
+          #if !defined(TAB1_FILES_GLUE) || TAB1_FILES_GLUE != 6
           #error "engine_glue.h is not this package's copy: delete the old engine_glue.h from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
-          #if !defined(TAB1_FILES_LOCK) || TAB1_FILES_LOCK != 5
+          #if !defined(TAB1_FILES_LOCK) || TAB1_FILES_LOCK != 6
           #error "ota_lock.h is not this package's copy: delete the old ota_lock.h from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
           static tab::Fonts fonts;
@@ -363,8 +473,11 @@ script:
           fonts.text[2] = id(tab_text_16)->get_lv_font();
           fonts.text[3] = id(tab_text_18)->get_lv_font();
           fonts.text[4] = id(tab_text_20)->get_lv_font();
-          fonts.text[5] = id(tab_text_34)->get_lv_font();
-          fonts.digits = id(tab_digits_48)->get_lv_font();
+          fonts.text[5] = id(tab_text_28)->get_lv_font();
+          fonts.text[6] = id(tab_text_34)->get_lv_font();
+          fonts.digits[0] = id(tab_digits_48)->get_lv_font();
+          fonts.digits[1] = id(tab_digits_96)->get_lv_font();
+          fonts.digits[2] = id(tab_digits_192)->get_lv_font();
           fonts.icon[0] = id(tab_icon_24)->get_lv_font();
           fonts.icon[1] = id(tab_icon_28)->get_lv_font();
           fonts.icon[2] = id(tab_icon_48)->get_lv_font();

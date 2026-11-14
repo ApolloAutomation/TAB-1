@@ -20,6 +20,7 @@ It can hang either way up: see "Which way up".
 | `fast_display.h` | The fast screen path, for both ways up. Shared with `TAB-1.yaml` and the showcase. |
 | `engine/` | The engine itself. Header files only; all of them go into the firmware. |
 | `engine_tests/` | Tests that run on a computer, and their copy of the contract. Never part of the firmware. |
+| `engine_tests/frozen/0.1.0/` | The sources of engine 0.1.0, frozen: the tests compare its pictures with this engine's. Never edited, never part of the firmware. |
 | `fonts/Montserrat-Medium.ttf` | The text font, with its licence in `fonts/Montserrat-OFL.txt`. |
 | `tools/gen_engine_fonts.py` | Writes the font list in `Engine.yaml` from the contract. |
 | `tools/check_engine_package.py` | Checks the package against the contract and builds it. |
@@ -699,6 +700,24 @@ and undefined-behaviour checks), runs both, saves a screenshot of every page
 of the test dashboards and lists texts that are cut with "…". Its default
 folders (`engine_tests/.lvgl`, `.build`, `out`) are ignored by git.
 
+It builds everything, LVGL too, with `-ffp-contract=off`: without it the
+compiler fuses a multiply and an add into one step that rounds once, and a
+colour worked out in doubles comes out one apart from the tablet's (whose
+doubles are software) at a few values (test `doubles_are_not_fused`).
+
+It also builds a second program, `tests/test_frozen.cpp`, from the sources
+of engine 0.1.0 frozen in `engine_tests/frozen/0.1.0` (`engine/*.h`,
+`host/harness.h` and `host/fake_platform.h` as at `dd3e379`, copied once,
+never shipped), with the same compiler, flags, LVGL and fonts, and runs it
+first, the same two ways. It draws every page of `layout_small` and
+`layout_all_cards`, without values and after steps of `state_stream.json`
+(`tests/frames.h`), and the engine's test `v1_pixels_unchanged` draws the
+same and compares the frames byte for byte: a version 1 dashboard looks the
+same on this engine as on 0.1.0. No hash of a frame is kept: the host draws
+glyphs with floating point, so a stored hash would hold only for one
+compiler and one CPU. A frame that differs is saved as
+`v1_pixels_<frame>.png` among the screenshots. Never edit the frozen copy.
+
 It also builds and runs `tests/test_fast_display.cpp` the same two ways.
 That test takes the rotation out of `fast_display.h` (with
 `FAST_DISPLAY_HOST_TEST` defined, no LVGL and no ESPHome) and compares it,
@@ -758,7 +777,14 @@ default than `"90"`; `fast_display.h` loses its fast path for 90 or for
 builds the whole of `fast_display.h` and runs `tests/test_flush_cb.cpp`
 twice, that test leaves out `flush_cb`, `setup` or `set_enabled`, or a
 header `fast_display.h` includes has no stand-in (with a self-test of that
-rule as well). It also reads the erase (it
+rule as well); `engine_tests/run.sh` loses `-ffp-contract=off`, or no
+longer builds the frozen engine 0.1.0 against its own `engine/` and runs it
+twice before the engine with each result counted (self-test too); a font
+of `Engine.yaml` differs from `contract.json` `fonts` in size, bits a
+pixel or glyphs, or from `icons.json` up to level 2; or the metrics table
+in `engine_tests/host/harness.h` does not follow the fonts of
+`Engine.yaml`, or gives a digits font a line higher than its
+`fonts.row_px` (self-test too). It also reads the erase (it
 feeds the watchdog before each step and erases the partition once), the
 lock's two restarts (each in its own case, run first in it: not commented
 out or under `#if 0`, not under a condition, before any `break` or
@@ -805,8 +831,10 @@ update server's certificate (`set_verify_ssl(true)` and the certificate
 bundle in `sdkconfig`), has the safe mode hook (`USE_SAFE_MODE_CALLBACK`)
 and Engine.yaml's three files-version checks with the same numbers; every
 flash space the firmware opens is on the erase list; ESPHome still keeps a
-key from Home Assistant in the settings place `keep_key` writes; and the
-font metrics equal the test harness table. Any compiler warning from
+key from Home Assistant in the settings place `keep_key` writes; the
+font metrics equal the test harness table; and the host tests' `lv_conf.h`
+has the tablet's LVGL settings (the generated `src/lv_conf.h`), apart from
+the draw units, the default font, the allocator and the log. Any compiler warning from
 `engine/`, `engine_glue.h`, `ota_lock.h` or a lambda of `Engine.yaml` or an
 entry file fails the compile check (GCC names the YAML file and line of a
 lambda); warnings from ESPHome's own code are listed, not failed. All of
@@ -1121,14 +1149,19 @@ Checks:
 
 ## Fonts
 
-Text uses Montserrat Medium at 14, 15, 16, 18, 20 and 34 px, with the
+Text uses Montserrat Medium at 14, 15, 16, 18, 20, 28 and 34 px, with the
 characters of `fonts.text_glyphs` in `contract.json`: Latin letters, accents
 and common punctuation (including `·`, `–`, `…`, `°`, `€`). Any other
 character, for example Greek, Cyrillic, Chinese or an emoji, shows as an
-empty box. Big numbers use 48 px with only `0123456789.,-`. Icons come from
-Material Design Icons at 24, 28, 48 and 72 px: the icons in `icons.json`
-marked level 1. An icon the tablet does not have shows as a question mark in
-a circle.
+empty box. Big numbers use 48, 96 and 192 px with only the characters of
+`fonts.digits_glyphs`: `0123456789.,-:°%+` and the space. The 96 and 192 px
+ones are stored at 8 bits a pixel: ESPHome hands such a glyph to LVGL with
+one copy instead of unpacking it half byte by half byte. Their lines are 59, 117 and 234 px
+high, within the rows Home Assistant gives them (`fonts.row_px`: 60, 120,
+240). The thermostat takes the 48 px digits only for `0123456789.,-`.
+Icons come from Material Design Icons at 24, 28, 48 and 72 px: every icon
+in `icons.json`, levels 1 and 2. An icon the tablet does not have shows as
+a question mark in a circle.
 
 The editor's tablet picture uses the same Montserrat Medium file, and draws
 the same box for a character the tablet does not have, so texts are cut with

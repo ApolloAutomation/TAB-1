@@ -10,6 +10,8 @@
 #include "fake_platform.h"
 #include "tj.h"
 #include "tab_engine.h"
+#include "frames.h"
+#include "host_fonts.h"
 
 #include <algorithm>
 #include <array>
@@ -671,26 +673,26 @@ TEST(reading_thermostat_dash) {
   // No value yet: the dash, in text fonts only.
   CHECK_STR(label_text(big->o1), DASH);
   CHECK_STR(label_text(small->o1), DASH);
-  CHECK(font_of(big->o1) == g_fonts.text[5]);    // 34: fit is 64, 48 would be digits only
+  CHECK(font_of(big->o1) == g_fonts.text[6]);    // 34: fit is 64, 48 would be digits only
   CHECK(font_of(small->o1) == g_fonts.text[4]);  // 20: fit is 24
-  CHECK(font_of(big->o1) != g_fonts.digits && font_of(small->o1) != g_fonts.digits);
+  CHECK(font_of(big->o1) != g_fonts.digits[0] && font_of(small->o1) != g_fonts.digits[0]);
   // A value: digits at 48 where it fits.
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,21.5],[2,21.5]]}"), "");
   CHECK_STR(label_text(big->o1), "21.5");
-  CHECK(font_of(big->o1) == g_fonts.digits);
+  CHECK(font_of(big->o1) == g_fonts.digits[0]);
   CHECK(font_of(small->o1) == g_fonts.text[4]);
   // A negative value uses the ASCII hyphen, which the digits font holds.
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,-4]]}"), "");
   CHECK_STR(label_text(big->o1), "-4");
-  CHECK(font_of(big->o1) == g_fonts.digits);
+  CHECK(font_of(big->o1) == g_fonts.digits[0]);
   // Back to no value: the dash in 34 again.
   CHECK_STR(ha.set("{\"f\":1,\"h\":\"" + h + "\",\"v\":[]}"), "");
   CHECK_STR(label_text(big->o1), DASH);
-  CHECK(font_of(big->o1) == g_fonts.text[5]);
+  CHECK(font_of(big->o1) == g_fonts.text[6]);
   // The rule itself, at any size.
   for (int s : {60, 100, 120, 200, 320, 800}) {
     const lv_font_t *f = D::thermostat_font(DASH, s);
-    CHECK_MSG(f != g_fonts.digits, std::to_string(s));
+    CHECK_MSG(f != g_fonts.digits[0], std::to_string(s));
     const double fit = s / 5.0;  // the dash is narrow; s / 5 always decides
     const int want = fit >= 34 ? 34 : fit >= 20 ? 20 : fit >= 18 ? 18 : 14;
     CHECK_MSG(f == D::text_font(want), std::to_string(s));
@@ -714,7 +716,7 @@ TEST(thermostat_value_steps_down_when_too_wide) {
       const lv_font_t *fit = D::thermostat_fit_font(t, s);
       // The sizes in order from the one thermostatFit picks: the first that fits.
       std::vector<const lv_font_t *> order{fit};
-      bool after = fit == g_fonts.digits;
+      bool after = fit == g_fonts.digits[0];
       for (int px : SIZES) {
         if (after) order.push_back(D::text_font(px));
         if (D::text_font(px) == fit) after = true;
@@ -747,11 +749,11 @@ TEST(thermostat_value_steps_down_when_too_wide) {
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,4040],[2,21.5],[3,40000]]}"), "");
   D::Widget *a = widget(2), *b = widget(3), *c = widget(4);
   if (!CHECK(a && b && c && a->o1 && b->o1 && c->o1)) return;
-  CHECK(D::thermostat_fit_font("4040", 248) == g_fonts.digits);
-  CHECK(font_of(a->o1) == g_fonts.text[5]);
+  CHECK(D::thermostat_fit_font("4040", 248) == g_fonts.digits[0]);
+  CHECK(font_of(a->o1) == g_fonts.text[6]);
   CHECK_STR(label_text(a->o1), "4040");
   CHECK(!a->cut);
-  CHECK(font_of(b->o1) == g_fonts.digits);
+  CHECK(font_of(b->o1) == g_fonts.digits[0]);
   CHECK_STR(label_text(b->o1), "21.5");
   CHECK(!b->cut);
   CHECK(font_of(c->o1) == g_fonts.text[0]);
@@ -902,16 +904,19 @@ TEST(hello_fixture) {
   CHECK_STR(v["engine"].s, "0.1.0");
   CHECK(v["proto"][0].n == 1 && v["proto"][1].n == 1);
   CHECK_STR(v["layout"].s, "");
-  // caps are exactly the contract's caps_defaults.
+  // Every cap the engine answers is in the contract's caps_defaults, with the
+  // same value (contract.json may name caps that engine 0.1.0 does not answer).
   const tj::Value caps = tj::load(CDIR + "/contract.json")["caps_defaults"];
-  for (auto &kv : caps.o) {
-    if (kv.second.t == tj::Value::ARR) {
-      CHECK_MSG(v["caps"][kv.first.c_str()].size() == kv.second.size(), kv.first);
-      for (size_t i = 0; i < kv.second.size(); i++)
-        CHECK_MSG(v["caps"][kv.first.c_str()][i].s == kv.second[i].s && v["caps"][kv.first.c_str()][i].n == kv.second[i].n,
-                  kv.first);
+  CHECK(v["caps"].t == tj::Value::OBJ && v["caps"].size() > 0);
+  for (auto &kv : v["caps"].o) {
+    const tj::Value &want_cap = caps[kv.first.c_str()];
+    if (!CHECK_MSG(caps.has(kv.first.c_str()), kv.first + " is not in caps_defaults")) continue;
+    if (want_cap.t == tj::Value::ARR) {
+      CHECK_MSG(kv.second.size() == want_cap.size(), kv.first);
+      for (size_t i = 0; i < want_cap.size(); i++)
+        CHECK_MSG(kv.second[i].s == want_cap[i].s && kv.second[i].n == want_cap[i].n, kv.first);
     } else {
-      CHECK_MSG(v["caps"][kv.first.c_str()].n == kv.second.n, kv.first);
+      CHECK_MSG(kv.second.t == want_cap.t && kv.second.n == want_cap.n, kv.first);
     }
   }
   CHECK(D::g.session);
@@ -1467,7 +1472,7 @@ TEST(text_measure) {
   // The engine's width measure equals LVGL's own, so "…" cuts exactly at the box.
   const char *texts[] = {"Ceiling light", "Climate \xC2\xB7 W\xC3\xA4rme", "21.5\xC2\xB0 \xC2\xB7 46% \xC2\xB7 2 lights on",
                          "AVAWAy To", "Soft focus \xC2\xB7 Mara Lind", "x"};
-  for (const lv_font_t *f : {g_fonts.text[0], g_fonts.text[3], g_fonts.text[5]}) {
+  for (const lv_font_t *f : {g_fonts.text[0], g_fonts.text[3], g_fonts.text[6]}) {
     for (const char *t : texts) {
       lv_point_t p;
       lv_text_get_size(&p, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -3216,25 +3221,74 @@ TEST(set_over_12000_bytes_is_accepted) {
 // with no kerning, line_height = the font's height and base_line = height -
 // ascender. LVGL's own TTF defaults differ (kerning on, other line heights).
 TEST(font_metrics_match_the_tablet) {
-  const int text_px[6] = {14, 15, 16, 18, 20, 34}, icon_px[4] = {24, 28, 48, 72};
+  const tj::Value fonts = tj::load(CDIR + "/contract.json")["fonts"];
   auto same = [](const lv_font_t *f, const char *family, int px) {
     const hh::DeviceMetric *m = hh::device_metric(family, px);
     return m && f && (int) f->line_height == m->line_height && (int) f->base_line == m->base_line;
   };
-  for (int i = 0; i < 6; i++) {
+  for (size_t i = 0; i < fonts["text_px"].size(); i++) {
     const lv_font_t *f = g_fonts.text[i];
-    const std::string px = std::to_string(text_px[i]);
-    CHECK_MSG(same(f, "text", text_px[i]), px);
+    const std::string px = std::to_string(fonts["text_px"][i].i());
+    CHECK_MSG(same(f, "text", fonts["text_px"][i].i()), px);
     CHECK_MSG(lv_font_get_glyph_width(f, 'T', 'o') == lv_font_get_glyph_width(f, 'T', 0), px);
     CHECK_MSG(lv_font_get_glyph_width(f, 'A', 'V') == lv_font_get_glyph_width(f, 'A', 0), px);
   }
-  CHECK(same(g_fonts.digits, "digits", 48));
-  for (int i = 0; i < 4; i++) CHECK_MSG(same(g_fonts.icon[i], "icons", icon_px[i]), std::to_string(icon_px[i]));
+  for (size_t i = 0; i < fonts["digits_px"].size(); i++)
+    CHECK_MSG(same(g_fonts.digits[i], "digits", fonts["digits_px"][i].i()), std::to_string(fonts["digits_px"][i].i()));
+  for (size_t i = 0; i < fonts["icon_px"].size(); i++)
+    CHECK_MSG(same(g_fonts.icon[i], "icons", fonts["icon_px"][i].i()), std::to_string(fonts["icon_px"][i].i()));
   // LVGL lays text out with those numbers.
   lv_point_t p;
   lv_text_get_size(&p, "To", g_fonts.text[3], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
   CHECK(p.y == 22);
   CHECK(p.x == lv_font_get_glyph_width(g_fonts.text[3], 'T', 0) + lv_font_get_glyph_width(g_fonts.text[3], 'o', 0));
+}
+
+// contract.json `fonts` decides the fonts (cards spec B.8): every size has
+// its place in tab::Fonts and its font from text_font, digits_font and
+// icon_font; the digits fonts hold exactly fonts.digits_glyphs, read as
+// UTF-8; a digits font's line fits into its fonts.row_px.
+TEST(fonts_follow_the_contract) {
+  const tj::Value fonts = tj::load(CDIR + "/contract.json")["fonts"];
+  CHECK(fonts["text_px"].size() == 7 && fonts["digits_px"].size() == 3 && fonts["icon_px"].size() == 4);
+  Ha ha;
+  ha.boot(false);
+  for (size_t i = 0; i < fonts["text_px"].size(); i++) {
+    const int px = fonts["text_px"][i].i();
+    CHECK_MSG(D::text_font(px) == g_fonts.text[i], std::to_string(px));
+    const hh::DeviceMetric *m = hh::device_metric("text", px);
+    CHECK_MSG(m && D::line_height(D::text_font(px)) == m->line_height, std::to_string(px));
+  }
+  for (size_t i = 0; i < fonts["digits_px"].size(); i++) {
+    const int px = fonts["digits_px"][i].i();
+    CHECK_MSG(D::digits_font(px) == g_fonts.digits[i], std::to_string(px));
+    const hh::DeviceMetric *m = hh::device_metric("digits", px);
+    const tj::Value &row = fonts["row_px"][std::to_string(px).c_str()];
+    CHECK_MSG(m && row.t == tj::Value::NUM && m->line_height <= row.i(),
+              std::to_string(px) + " px: line " + std::to_string(m ? m->line_height : -1) + ", row " + std::to_string(row.i()));
+  }
+  for (size_t i = 0; i < fonts["icon_px"].size(); i++)
+    CHECK_MSG(D::icon_font(fonts["icon_px"][i].i()) == g_fonts.icon[i], std::to_string(fonts["icon_px"][i].i()));
+  // The 28 px text is its own font, not the 34 px one.
+  CHECK(D::text_font(28) != D::text_font(34) && D::line_height(D::text_font(28)) == 34);
+  // The 48 px digits keep engine 0.1.0's line.
+  CHECK(hh::device_metric("digits", 48) && hh::device_metric("digits", 48)->line_height == 59);
+
+  // The digits glyphs, character by character: "°" is U+00B0, two bytes in
+  // UTF-8. Taken byte by byte, U+00C2 would be in the font too, and a text
+  // the tablet cannot draw would pass here.
+  const std::vector<uint32_t> want = hf::utf8_codepoints(fonts["digits_glyphs"].s);
+  CHECK(want.size() == 18 && std::find(want.begin(), want.end(), 0xB0u) != want.end());
+  for (const lv_font_t *f : g_fonts.digits) {
+    for (uint32_t cp : want) CHECK_MSG(D::has_glyph(f, cp), std::to_string(cp));
+    CHECK(!D::has_glyph(f, 0xC2) && !D::has_glyph(f, 'A') && !D::has_glyph(f, 0x2013));
+  }
+  CHECK(hf::utf8_codepoints("1\xC2\xB0") == std::vector<uint32_t>({'1', 0xB0}));
+  CHECK(hf::utf8_codepoints("\xE2\x80\x93") == std::vector<uint32_t>({0x2013}));
+  CHECK(hf::utf8_codepoints("\xC2").empty() && hf::utf8_codepoints("\xB0").empty() && hf::utf8_codepoints("\xC2" "A").empty());
+  // The thermostat keeps its own list: "21:05" is not digits-only for it.
+  CHECK(D::thermostat_fit_font("21.5", 400) == g_fonts.digits[0]);
+  CHECK(D::thermostat_fit_font("21:05", 400) != g_fonts.digits[0]);
 }
 
 // ================================================================ set-up window and erase (design 10.8)
@@ -3500,7 +3554,7 @@ TEST(waiting_screen_states) {
   // text colour; the tablet's name 16 px in the dimmer colour.
   lv_obj_t *name = waiting_label(fake::NAME);
   if (!CHECK(name)) return;
-  CHECK(font_of(D::g.headline) == g_fonts.text[5] && font_of(D::g.hint) == g_fonts.text[4]);
+  CHECK(font_of(D::g.headline) == g_fonts.text[6] && font_of(D::g.hint) == g_fonts.text[4]);
   CHECK(font_of(D::g.hint2) == g_fonts.text[4]);
   CHECK(font_of(name) == g_fonts.text[2]);
   CHECK(text_colour_is(D::g.headline, D::DEF_TX) && text_colour_is(D::g.hint, D::DEF_TX));
@@ -3527,7 +3581,7 @@ TEST(waiting_screen_states) {
   steps.push_back(screen_words(SCREENS["waiting"]["erased"]["step"], "", "Apollo TAB-1 12ee0e"));
   for (int k = 0; k < 2; k++)
     for (const std::string &t : k == 0 ? titles : steps) {
-      const int w = D::text_width(g_fonts.text[k == 0 ? 5 : 4], t.c_str(), t.size());
+      const int w = D::text_width(g_fonts.text[k == 0 ? 6 : 4], t.c_str(), t.size());
       CHECK_MSG(w <= hh::W - 192, t + " is " + std::to_string(w) + " px");
       for (const char *jargon : {"integration", "entity", "config entry", "ESPHome", "API"})
         CHECK_MSG(t.find(jargon) == std::string::npos, t);
@@ -4782,6 +4836,73 @@ TEST(faded_controls_say_why) {
   CHECK(fake::events("tab1_input").empty());
 }
 
+// ================================================================ the host build
+
+// run.sh builds everything with -ffp-contract=off. Without it clang fuses
+// a * (1 - t) + b * t into one multiply-add, which rounds once where the
+// tablet (software doubles), Python and JavaScript round twice: at today's
+// weight 0.82, 19 pairs of channel values come out one apart.
+static volatile double g_mix_weight = 0.82;
+__attribute__((noinline)) static double mix_as_written(double a, double b, double t) {
+  return floor(a * (1 - t) + b * t + 0.5);
+}
+__attribute__((noinline)) static double mix_rounded_each_step(double a, double b, double t) {
+  volatile double p = a * (1 - t);
+  volatile double q = b * t;
+  volatile double s = p + q;
+  return floor(s + 0.5);
+}
+TEST(doubles_are_not_fused) {
+  const double t = g_mix_weight;
+  int fused = 0;
+  for (int a = 0; a < 256; a++)
+    for (int b = 0; b < 256; b++)
+      if (mix_as_written(a, b, t) != mix_rounded_each_step(a, b, t)) fused++;
+  CHECK_MSG(fused == 0, std::to_string(fused) + " pairs differ: build with -ffp-contract=off");
+}
+
+// The frozen sources of engine 0.1.0 (frozen/0.1.0, built by run.sh as
+// test_frozen and run before this program) drew the frames of frames.h into
+// TAB_FROZEN_FRAMES. This engine draws the same run, and every frame must be
+// the same, byte for byte: version 1 pixels do not move.
+TEST(v1_pixels_unchanged) {
+  const char *env = getenv("TAB_FROZEN_FRAMES");
+  if (!CHECK_MSG(env && *env, "TAB_FROZEN_FRAMES is not set: run engine_tests/run.sh, which draws engine 0.1.0's frames first"))
+    return;
+  const std::string dir = env;
+  FILE *lf = fopen((dir + "/frames.txt").c_str(), "r");
+  if (!CHECK_MSG(lf != nullptr, dir + "/frames.txt is missing: engine 0.1.0 did not run")) return;
+  std::string old_list;
+  for (int c; (c = fgetc(lf)) != EOF;) old_list += (char) c;
+  fclose(lf);
+
+  shutdown();
+  std::string list;
+  int frames_seen = 0;
+  const std::string err = frames::run(CDIR, g_fonts, [&](const std::string &name) {
+    list += name + "\n";
+    frames_seen++;
+    std::vector<uint16_t> old;
+    if (!CHECK_MSG(frames::read(dir + "/" + name + ".raw", &old), name + ": engine 0.1.0 drew no such frame")) return;
+    long differ = 0, first = -1;
+    for (size_t i = 0; i < old.size(); i++)
+      if (old[i] != hh::g_fb[i]) {
+        if (first < 0) first = (long) i;
+        differ++;
+      }
+    if (differ > 0) {
+      shot("v1_pixels_" + name);
+      CHECK_MSG(false, name + ": " + std::to_string(differ) + " pixels differ, the first at (" +
+                           std::to_string(first % hh::W) + ", " + std::to_string(first / hh::W) + "); this engine's frame is " +
+                           SHOTS + "/v1_pixels_" + name + ".png");
+    }
+  });
+  CHECK_MSG(err.empty(), err);
+  CHECK_MSG(list == old_list, "the frames differ from engine 0.1.0's list");
+  // Both fixtures, every page, without and with values.
+  CHECK_MSG(tab::page_count() > 1 && frames_seen >= 1 + 3 * tab::page_count(), std::to_string(frames_seen));
+}
+
 // ================================================================ main
 
 int main(int argc, char **argv) {
@@ -4811,26 +4932,28 @@ int main(int argc, char **argv) {
   size_t tn = 0, in = 0;
   uint8_t *text = hh::load_file(argv[2], &tn);
   uint8_t *icon = hh::load_file(argv[3], &in);
-  const int text_px[6] = {14, 15, 16, 18, 20, 34}, icon_px[4] = {24, 28, 48, 72};
-  // The tablet's fonts hold only the contract's characters; so do these.
+  // The tablet's fonts, at contract.json's sizes, hold only the contract's
+  // characters; so do these (tools/gen_engine_fonts.py reads the same keys).
   const tj::Value contract = tj::load(CDIR + "/contract.json");
-  std::vector<uint32_t> text_ranges, digit_ranges;
-  for (const tj::Value &r : contract["fonts"]["text_glyphs"].a) {
-    text_ranges.push_back((uint32_t) r[0].i());
-    text_ranges.push_back((uint32_t) r[1].i());
-  }
-  for (const char c : contract["fonts"]["digits_glyphs"].s) {
-    digit_ranges.push_back((uint32_t) (uint8_t) c);
-    digit_ranges.push_back((uint32_t) (uint8_t) c);
-  }
-  if (text_ranges.empty() || digit_ranges.empty()) {
-    fprintf(stderr, "contract.json has no fonts.text_glyphs or fonts.digits_glyphs\n");
+  const tj::Value &cf = contract["fonts"];
+  const size_t n_text = sizeof g_fonts.text / sizeof g_fonts.text[0];
+  const size_t n_digits = sizeof g_fonts.digits / sizeof g_fonts.digits[0];
+  const size_t n_icon = sizeof g_fonts.icon / sizeof g_fonts.icon[0];
+  if (cf["text_px"].size() != n_text || cf["digits_px"].size() != n_digits || cf["icon_px"].size() != n_icon) {
+    fprintf(stderr, "contract.json fonts has %zu text, %zu digits and %zu icon sizes; tab::Fonts holds %zu, %zu and %zu\n",
+            cf["text_px"].size(), cf["digits_px"].size(), cf["icon_px"].size(), n_text, n_digits, n_icon);
     return 2;
   }
-  for (int i = 0; i < 6; i++)
-    g_fonts.text[i] = hh::limited_font(hh::ttf_font(text, tn, text_px[i], "text"), text_ranges);
-  g_fonts.digits = hh::limited_font(hh::ttf_font(text, tn, 48, "digits"), digit_ranges);
-  for (int i = 0; i < 4; i++) g_fonts.icon[i] = hh::ttf_font(icon, in, icon_px[i], "icons");
+  const std::vector<uint32_t> text_ranges = hf::text_ranges(contract), digit_ranges = hf::digit_ranges(contract);
+  if (text_ranges.empty() || digit_ranges.empty()) {
+    fprintf(stderr, "contract.json has no fonts.text_glyphs, or no fonts.digits_glyphs in UTF-8\n");
+    return 2;
+  }
+  for (size_t i = 0; i < n_text; i++)
+    g_fonts.text[i] = hh::limited_font(hh::ttf_font(text, tn, cf["text_px"][i].i(), "text"), text_ranges);
+  for (size_t i = 0; i < n_digits; i++)
+    g_fonts.digits[i] = hh::limited_font(hh::ttf_font(text, tn, cf["digits_px"][i].i(), "digits"), digit_ranges);
+  for (size_t i = 0; i < n_icon; i++) g_fonts.icon[i] = hh::ttf_font(icon, in, cf["icon_px"][i].i(), "icons");
 
   int ran = 0;
   for (const TestCase &t : registry()) {

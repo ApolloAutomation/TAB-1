@@ -50,7 +50,7 @@
 // The version of this file. ESPHome builds an ota_lock.h from the ESPHome
 // config folder instead of this one when there is one there, so Engine.yaml
 // stops a build whose copy has another number, or none (engine/tab_files.h).
-#define TAB1_FILES_LOCK 5
+#define TAB1_FILES_LOCK 6
 
 #include "engine/tab_crypto.h"  // the engine's plain C++ SHA-256
 #if __has_include("engine/tab_files.h")  // an older engine/ has none: the #error below says so
