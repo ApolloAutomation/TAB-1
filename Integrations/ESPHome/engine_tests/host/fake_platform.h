@@ -33,6 +33,8 @@ struct State {
   // Memory.
   bool alloc_fails = false;
   size_t largest = 16000000;
+  uint32_t free = 28000000;  // free PSRAM; a heap that is nearly full lowers both
+  int largest_calls = 0;     // each one walks the tablet's whole heap
   uint64_t allocs = 0, releases = 0;
   std::set<void *> live;
   bool bad_release = false;
@@ -101,9 +103,12 @@ static void release(void *p) {
   free(p);
 }
 
-static size_t largest_block() { return st.largest; }
+static size_t largest_block() {
+  st.largest_calls++;
+  return st.largest;
+}
 static uint32_t free_internal() { return 61000; }
-static uint32_t free_psram() { return 28000000; }
+static uint32_t free_psram() { return st.free; }
 
 static bool api_key(uint8_t out[32]) {
   if (!st.have_key) return false;

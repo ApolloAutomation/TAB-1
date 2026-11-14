@@ -2791,6 +2791,60 @@ def host_test_problems(run_sh, frozen_present):
     return problems
 
 
+# The engine answers protocol 2 only once the whole of version 2 is drawn
+# (cards spec B.8): until then tab_state.h keeps TAB_PROTO_HIGH at 1, no
+# shipped YAML raises it, and only the host tests build with 2.
+PROTO_DEFAULT_RE = re.compile(r"^#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH (\d+)\n#endif$", re.M)
+PROTO_FLAG_RE = re.compile(r"-DTAB_PROTO_HIGH(?:=(\S+))?")
+
+
+def proto_high_problems(state_h, yamls, run_sh):
+    problems = []
+    live = live_cpp(state_h)
+    found = PROTO_DEFAULT_RE.findall(live)
+    if found != ["1"]:
+        problems.append(f"tab_state.h does not default TAB_PROTO_HIGH to 1 (found {found})")
+    elif re.findall(r"#\s*(?:define|undef)\s+TAB_PROTO_HIGH\b", live) != ["#define TAB_PROTO_HIGH"]:
+        problems.append("tab_state.h sets TAB_PROTO_HIGH more than once")
+    for name, text in sorted(yamls.items()):
+        if "TAB_PROTO_HIGH" in text:
+            problems.append(f"{name} names TAB_PROTO_HIGH")
+    flags = [m for line in run_sh.splitlines() if not line.lstrip().startswith("#") for m in PROTO_FLAG_RE.findall(line)]
+    if flags != ["2"]:
+        problems.append(f"engine_tests/run.sh does not build the engine tests with -DTAB_PROTO_HIGH=2 exactly once (found {flags})")
+    return problems
+
+
+def check_proto_high(rep):
+    state_h = _read_or_empty(ROOT / "engine" / "tab_state.h")
+    yamls = {p.name: _read_or_empty(p) for p in sorted(ROOT.glob("*.yaml"))}
+    run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
+    problems = proto_high_problems(state_h, yamls, run_sh)
+    rep.check(
+        "protocol: the shipped engine speaks up to protocol 1 (TAB_PROTO_HIGH defaults to 1 in tab_state.h, no YAML raises it), the host tests build with -DTAB_PROTO_HIGH=2",
+        not problems,
+        "; ".join(problems),
+    )
+    block = "#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 1\n#endif"
+    flag = "-DTAB_PROTO_HIGH=2"
+    cases = (
+        ("as shipped", state_h, yamls, run_sh, True),
+        ("default 2", state_h.replace(block, block.replace("HIGH 1", "HIGH 2")), yamls, run_sh, False),
+        ("default commented out", state_h.replace(block, "// " + block.replace("\n", "\n// ")), yamls, run_sh, False),
+        ("raised after the default", state_h + "\n#undef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 2\n", yamls, run_sh, False),
+        ("a YAML build flag", state_h, {**yamls, "TAB-1-engine.yaml": yamls.get("TAB-1-engine.yaml", "") + "\n  build_flags:\n    - -DTAB_PROTO_HIGH=2\n"}, run_sh, False),
+        ("no flag in run.sh", state_h, yamls, run_sh.replace(flag, ""), False),
+        ("the flag only in a comment", state_h, yamls, run_sh.replace(flag, "") + "\n# " + flag + "\n", False),
+        ("the flag set to 1", state_h, yamls, run_sh.replace(flag, "-DTAB_PROTO_HIGH=1"), False),
+    )
+    wrong = [what for what, h, y, r, passes in cases if (not proto_high_problems(h, y, r)) != passes]
+    rep.check(
+        f"self-test: the protocol rule passes the shipped files and fails a raised default, a YAML flag or a host build without 2 ({len(cases)} cases)",
+        not wrong,
+        f"wrong for: {wrong}" if wrong else "",
+    )
+
+
 def check_host_tests(rep):
     run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
     present = {f: (ROOT / FROZEN / f).is_file() for f in FROZEN_FILES}
@@ -4246,6 +4300,7 @@ def main():
         check_package(engine, rep)
         check_display(rep)
         check_host_tests(rep)
+        check_proto_high(rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
         check_fonts(engine, contract, icons, contract_dir, rep)

@@ -1167,7 +1167,7 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
     const uint32_t kids = w.kind == W_CARD ? (w.children < left ? w.children : left) : 0;
     lv_obj_t *parent = page_obj(l, w.page);
     if (l.b_child == 0) {
-      const uint32_t cost = parent ? Loader::objects_of(w.kind) : 0;
+      const uint32_t cost = parent ? Loader::objects_of(w) : 0;
       if (spent(cost)) return false;
       if (parent) build_shell(l, w, parent);
       if (g.obj_fail) return false;
@@ -1184,7 +1184,7 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
     const int ox = w.r[0] + bw, oy = w.r[1] + bw;
     while (l.b_child <= kids) {
       Widget &c = m.w[l.b_item + l.b_child];
-      const uint32_t cost = Loader::objects_of(c.kind);
+      const uint32_t cost = Loader::objects_of(c);
       if (spent(cost)) return false;
       build_widget(l, c, w.obj, ox, oy);
       if (g.obj_fail) return false;

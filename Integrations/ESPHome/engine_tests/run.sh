@@ -108,12 +108,14 @@ build_lib() {
   echo "$want" > "$stamp"
 }
 
+# The engine is built as it will answer once it draws all of version 2:
+# TAB_PROTO_HIGH 2 (the shipped default is 1 until then, cards spec B.8).
 build_test() {
   name="$1"; flags="$2"
   echo "compiling test_engine_$name"
   # shellcheck disable=SC2086
   $CXX -std=c++17 $flags -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers \
-    $COMMON -I"$FW/engine" "$T/tests/test_engine.cpp" "$WORK/liblvgl_$name.a" -lz -o "$WORK/test_engine_$name"
+    -DTAB_PROTO_HIGH=2 $COMMON -I"$FW/engine" "$T/tests/test_engine.cpp" "$WORK/liblvgl_$name.a" -lz -o "$WORK/test_engine_$name"
 }
 
 # The frozen engine 0.1.0: its engine/ and host/ come before host/, so

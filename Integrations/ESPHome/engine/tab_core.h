@@ -102,9 +102,14 @@ struct Out {
   }
 };
 
+// While a layout is being built, `block` is the value read when it was
+// staged: the heap is not walked during a build (contract 3.1).
 inline void write_mem(Out &o) {
   o.raw("\"mem\":{\"block\":");
-  o.num(g.pf.largest_block ? (unsigned long long) g.pf.largest_block() : 0);
+  if (staged_layout())
+    o.num((unsigned long long) g.staged_block);
+  else
+    o.num(g.pf.largest_block ? (unsigned long long) g.pf.largest_block() : 0);
   o.raw(",\"int\":");
   o.num(g.pf.free_internal ? g.pf.free_internal() : 0);
   o.raw(",\"psram\":");
@@ -224,7 +229,7 @@ inline void poll_connection() {
 inline void knock_tick() {
   if (!g.knocking || !g.connected || !due(g.knock_next)) return;
   char d[48];
-  snprintf(d, sizeof d, "1|%s|%u", mac(), (unsigned) g.pf.boot);
+  snprintf(d, sizeof d, "%d|%s|%u", INPUT_VERSION, mac(), (unsigned) g.pf.boot);
   if (g.pf.send_event) g.pf.send_event("tab1_hello", d, nullptr);
   if (g.knock_count < 255) g.knock_count++;
   if (g.knock_count >= KNOCK_REPEATS) {
@@ -246,7 +251,7 @@ inline void knock_for_touch() {
   if (!g.touch_knock_at) g.touch_knock_at = 1;
   say(1, "Touch without a session; asking Home Assistant to greet again");
   char d[48];
-  snprintf(d, sizeof d, "1|%s|%u", mac(), (unsigned) g.pf.boot);
+  snprintf(d, sizeof d, "%d|%s|%u", INPUT_VERSION, mac(), (unsigned) g.pf.boot);
   if (g.pf.send_event) g.pf.send_event("tab1_hello", d, nullptr);
   g.knocking = true;
   g.knock_count = 0;
@@ -338,7 +343,9 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
   const size_t msize = model_size(ld.c);
   const size_t objects = ld.c.objects + ld.c.pages + 2;
   const size_t need = msize + objects * OBJECT_BYTES + MEMORY_MARGIN;
-  if (!g.pf.largest_block || g.pf.largest_block() < need) return "memory";
+  // The one look at the largest block for this layout (it walks the heap).
+  const size_t block_now = g.pf.largest_block ? g.pf.largest_block() : 0;
+  if (block_now < need) return "memory";
   const int idx = free_layout();
   if (idx < 0) return "memory";
   void *block = g.pf.alloc ? g.pf.alloc(msize) : nullptr;
@@ -358,6 +365,10 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
   l.size = size;
   l.model = m;
   *out_idx = idx;
+  g.staged_block = block_now;
+  if (ld.c.drop_charts || ld.c.drop_arcs || ld.c.drop_tracks)
+    say(1, "Layout %s: %u charts, %u thermostats and %u tracks over a page's limit are not drawn", l.hash,
+        (unsigned) ld.c.drop_charts, (unsigned) ld.c.drop_arcs, (unsigned) ld.c.drop_tracks);
   return "";
 }
 
@@ -462,8 +473,8 @@ inline bool send_input(Layout &l, Widget &w, char event, bool confirmed, bool ha
   char val[40] = "";
   if (has_value) wire_number(value, val, sizeof val);
   char d[256];
-  const int n = snprintf(d, sizeof d, "1|%s|%s|%u|%s|%u|%c|%c|%s", mac(), g.nonce, (unsigned) g.counter, l.hash,
-                         (unsigned) w.id, event, confirmed ? '1' : '0', val);
+  const int n = snprintf(d, sizeof d, "%d|%s|%s|%u|%s|%u|%c|%c|%s", INPUT_VERSION, mac(), g.nonce,
+                         (unsigned) g.counter, l.hash, (unsigned) w.id, event, confirmed ? '1' : '0', val);
   if (n <= 0 || n > 200) return false;
   uint8_t mac_out[32];
   crypto::hmac_sha256(g.secret, 32, d, (size_t) n, mac_out);
@@ -626,7 +637,9 @@ inline bool finger_down() {
 inline void build_tick() {
   Layout *s = staged_layout();
   if (!s || s->state != L_BUILDING) return;
-  if (g.pf.largest_block && g.pf.largest_block() < MEMORY_MARGIN + SLICE_OBJECTS * OBJECT_BYTES) {
+  // Free PSRAM is a number the heap keeps; its largest block would be a walk
+  // of the whole heap on every tick. stage() checked the block once.
+  if (g.pf.free_psram && g.pf.free_psram() < MEMORY_MARGIN + SLICE_OBJECTS * OBJECT_BYTES) {
     fail_build("memory");
     return;
   }
@@ -1327,16 +1340,20 @@ inline size_t on_hello(const char *nonce, size_t nonce_len, const char *auth, si
   Out o{out, cap, 0, true};
   o.raw("{\"boot\":");
   o.num(g.pf.boot);
-  o.raw(",\"caps\":{\"icons\":1,\"max_chunk\":");
+  o.raw(",\"caps\":{\"icons\":2,\"max_chunk\":");
   o.num(MAX_CHUNK);
   o.raw(",\"max_layout\":");
   o.num(MAX_LAYOUT);
+  o.raw(",\"max_pages\":");
+  o.num(MAX_PAGES);
   o.raw(",\"max_slots\":");
   o.num(MAX_SLOTS);
+  o.raw(",\"max_stored\":");
+  o.num(CACHE_LIMIT);
   o.raw(",\"max_widgets\":");
   o.num(MAX_WIDGETS);
   o.raw(",\"screen\":[1280,800],\"w\":[\"heading\",\"card\",\"label\",\"button\",\"switch\",\"slider\","
-        "\"thermostat\",\"chart\",\"image\"]},\"enc\":");
+        "\"thermostat\",\"chart\",\"image\",\"choice\"]},\"enc\":");
   o.num(enc ? 1 : 0);
   o.raw(",\"engine\":");
   o.str(ENGINE_VERSION);
@@ -1533,10 +1550,11 @@ inline const char *on_set(const char *data, size_t data_len, const char *auth, s
     json::Reader whole(data, data_len);
     if (whole.peek() != json::K_OBJECT || !whole.skip() || !whole.at_end()) return "parse";
   }
-  static const char *const KEYS[3] = {"h", "f", "v"};
+  static constexpr const char *KEYS[3] = {"h", "f", "v"};
+  static constexpr KeyIndex SET_INDEX(KEYS, 3);
   const char *at[3];
   json::Reader r(data, data_len);
-  if (!scan_object(r, KEYS, 3, at) || !at[0]) return "parse";
+  if (!scan_object(r, SET_INDEX, at) || !at[0]) return "parse";
   auto reader_at = [&](const char *p) { return json::Reader(p, (size_t) (data + data_len - p)); };
   json::Span h;
   {

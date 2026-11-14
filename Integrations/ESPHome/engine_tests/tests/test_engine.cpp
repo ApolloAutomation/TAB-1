@@ -6,6 +6,7 @@
 // Screenshots go to <out dir>/shots, the report of cut texts to
 // <out dir>/cut_texts.txt. Exit code 0 only when every check passed.
 #define TAB_TEST_OBJECT_LIMIT 1  // tab_ui.h: lets a test make object creation fail
+#define TAB_TEST_COUNTERS 1      // tab_model.h: counts what the engine does
 #include "harness.h"
 #include "fake_platform.h"
 #include "tj.h"
@@ -560,7 +561,7 @@ TEST(layout_shapes) {
        "parse"},
       {"{\"v\":1,\"slots\":\"\",\"pages\":[{\"w\":[{\"t\":\"card\",\"id\":1,\"r\":[0,0,1]}]}]}", "parse"},
       {"{\"slots\":\"\",\"pages\":[]}", "parse"},
-      {"{\"v\":2,\"pages\":7}", "version"},
+      {"{\"v\":3,\"pages\":7}", "version"},
       {"{\"v\":1,\"slots\":\"tx\",\"pages\":[]}", "parse"},
       {"[1]", "parse"},
       {"{\"v\":1,\"pages\":[]} x", "parse"}};
@@ -618,8 +619,10 @@ TEST(chunks_fixture) {
       CHECK_STR(build_fails, "memory");
       CHECK(tab::building());
       fake::st.largest = 1000000;
+      fake::st.free = 1000000;
       hh::advance(20);
       fake::st.largest = 16000000;
+      fake::st.free = 28000000;
       CHECK(!tab::building());
       CHECK_STR(status_build(), build_fails);
     }
@@ -865,8 +868,10 @@ TEST(reading_repeated_commit) {
   CHECK_STR(ha.send(small), "");
   CHECK_STR(ha.commit(hs), "");
   fake::st.largest = 1000000;
+  fake::st.free = 1000000;
   hh::advance(200);
   fake::st.largest = 16000000;
+  fake::st.free = 28000000;
   char out[768];
   tj::Value v;
   CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v));
@@ -887,9 +892,25 @@ static void same_shape(const tj::Value &got, const tj::Value &want, const std::s
   }
 }
 
+// The answer has the shape and the values of the first case of
+// hello_v2.json (engine 0.2.0, proto [1, 2]: the host build sets
+// TAB_PROTO_HIGH 2), and its caps are contract.json's engine_caps
+// (contract 3, cards spec A.5).
+static void same_value(const tj::Value &got, const tj::Value &want, const std::string &path) {
+  CHECK_MSG(got.t == want.t && got.n == want.n && got.s == want.s && got.size() == want.size(), path);
+  if (got.t != want.t) return;
+  if (want.t == tj::Value::ARR)
+    for (size_t i = 0; i < want.a.size() && i < got.a.size(); i++)
+      same_value(got.a[i], want.a[i], path + "[" + std::to_string(i) + "]");
+  if (want.t == tj::Value::OBJ)
+    for (size_t i = 0; i < want.o.size() && i < got.o.size(); i++)
+      same_value(got.o[i].second, want.o[i].second, path + "." + want.o[i].first);
+}
+
 TEST(hello_fixture) {
-  const tj::Value f = fixture("hello.json");
-  const tj::Value &want = f["cases"][0]["response"];  // up_to_date
+  const tj::Value f = fixture("hello_v2.json");
+  const tj::Value &want = f["cases"][0]["response"];  // speaks_1_and_2
+  CHECK_STR(f["cases"][0]["name"].s, "speaks_1_and_2");
   Ha ha;
   // Paired with the fixture secret: the fixture's auth starts a session, any other does not.
   ha.boot(true);
@@ -899,26 +920,27 @@ TEST(hello_fixture) {
   tj::Value v;
   CHECK(n > 0 && tj::parse(out, n, &v));
   same_shape(v, want, "hello");
-  CHECK(v["session"].n == 1 && v["enc"].n == 1 && v["boot"].n == 3);
-  CHECK_STR(v["kid"].s, "d9ccb8a994337e34");
-  CHECK_STR(v["engine"].s, "0.1.0");
-  CHECK(v["proto"][0].n == 1 && v["proto"][1].n == 1);
-  CHECK_STR(v["layout"].s, "");
-  // Every cap the engine answers is in the contract's caps_defaults, with the
-  // same value (contract.json may name caps that engine 0.1.0 does not answer).
-  const tj::Value caps = tj::load(CDIR + "/contract.json")["caps_defaults"];
-  CHECK(v["caps"].t == tj::Value::OBJ && v["caps"].size() > 0);
+  CHECK(v["session"].n == want["session"].n && v["enc"].n == want["enc"].n && v["boot"].n == want["boot"].n);
+  CHECK_STR(v["kid"].s, want["kid"].s);
+  CHECK_STR(v["engine"].s, want["engine"].s);
+  same_value(v["proto"], want["proto"], "proto");
+  CHECK_STR(v["layout"].s, "");  // nothing on screen here
+  same_value(v["caps"], want["caps"], "caps");
+  // The caps are those of the newest engine, both ways round: every cap the
+  // engine answers is in engine_caps with the same value, and every one of
+  // engine_caps is answered.
+  const tj::Value contract = tj::load(CDIR + "/contract.json");
+  const tj::Value &caps = contract["engine_caps"];
+  CHECK(v["caps"].t == tj::Value::OBJ && v["caps"].size() == caps.size());
   for (auto &kv : v["caps"].o) {
-    const tj::Value &want_cap = caps[kv.first.c_str()];
-    if (!CHECK_MSG(caps.has(kv.first.c_str()), kv.first + " is not in caps_defaults")) continue;
-    if (want_cap.t == tj::Value::ARR) {
-      CHECK_MSG(kv.second.size() == want_cap.size(), kv.first);
-      for (size_t i = 0; i < want_cap.size(); i++)
-        CHECK_MSG(kv.second[i].s == want_cap[i].s && kv.second[i].n == want_cap[i].n, kv.first);
-    } else {
-      CHECK_MSG(kv.second.t == want_cap.t && kv.second.n == want_cap.n, kv.first);
-    }
+    if (!CHECK_MSG(caps.has(kv.first.c_str()), kv.first + " is not in engine_caps")) continue;
+    same_value(kv.second, caps[kv.first.c_str()], "engine_caps." + kv.first);
   }
+  for (auto &kv : caps.o) CHECK_MSG(v["caps"].has(kv.first.c_str()), kv.first + " is not answered");
+  // What a missing cap means to HA (caps_defaults) never claims more than
+  // the engine has: every name there is answered.
+  for (auto &kv : contract["caps_defaults"].o)
+    CHECK_MSG(v["caps"].has(kv.first.c_str()), kv.first + " of caps_defaults is not answered");
   CHECK(D::g.session);
   // auth.json "hello": the good auth starts a session, once per boot; the
   // same nonce again starts none (contract 3), and the bad auth none either.
@@ -1300,7 +1322,7 @@ static void report_cuts(const char *label) {
     D::bound_text(m, w.text, &full);
     lv_obj_t *o = w.kind == D::W_LABEL ? w.obj : w.kind == D::W_THERMO ? w.o1 : w.o2;
     static const char *const KINDS[] = {"", "heading", "card", "label", "button", "switch", "slider", "thermostat",
-                                        "chart", "image"};
+                                        "chart", "image", "choice"};
     char line[600];
     snprintf(line, sizeof line, "%s: widget %u (%s, box %d px): \"%s\" shows as \"%s\"\n", label, (unsigned) w.id,
              KINDS[w.kind], o ? (int) lv_obj_get_content_width(o) : 0, full, label_text(o).c_str());
@@ -1753,6 +1775,7 @@ TEST(swap_safety) {
   CHECK_STR(ha.commit("4384f665e4dd9f62"), "");
   CHECK_STR(tab::staged_hash(), "4384f665e4dd9f62");
   fake::st.largest = 1000000;
+  fake::st.free = 1000000;
   hh::advance(200);
   char out[768];
   tj::Value v;
@@ -1768,6 +1791,7 @@ TEST(swap_safety) {
   CHECK_STR(label_text(widget(4)->obj), "40%");
   // A new seq 0 clears the build code.
   fake::st.largest = 16000000;
+  fake::st.free = 28000000;
   CHECK_STR(ha.send(all), "");
   tj::parse(out, tab::on_status(out, sizeof out), &v);
   CHECK_STR(v["build"].s, "");
@@ -2699,7 +2723,7 @@ TEST(escaped_slots_are_fast) {
       {"escaped mixed", body("t\\u0062n\\u006cn"), ""},
       {"43000 escaped, bad page", "{\"pages\":[{\"w\":7}],\"slots\":\"" + escaped(43000) + "\",\"v\":1}", "parse"},
       {"43000 escaped, wrong last letter", body(escaped(42999) + "\\u0078"), "parse"},
-      {"43000 escaped, newer version", "{\"pages\":[],\"slots\":\"" + escaped(43000) + "\",\"v\":2}", "version"},
+      {"43000 escaped, newer version", "{\"pages\":[],\"slots\":\"" + escaped(43000) + "\",\"v\":3}", "version"},
       {"2000 escaped, slot 1500 used",
        "{\"pages\":[{\"title\":\"P\",\"w\":[{\"id\":1,\"r\":[100,20,376,56],\"t\":\"card\",\"w\":[{\"id\":2,"
        "\"r\":[116,30,300,28],\"size\":1,\"t\":\"label\",\"text\":{\"s\":1500}}]}]}],\"slots\":\"" +
@@ -2965,7 +2989,9 @@ TEST(build_failure_is_reported) {
   CHECK(ha.show(all));
   CHECK_STR(status_build(), "");
   // A heading with an icon is three objects, and is counted as three.
-  CHECK(D::Loader::objects_of(D::W_HEADING) == 3);
+  D::Widget heading{};
+  heading.kind = D::W_HEADING;
+  CHECK(D::Loader::objects_of(heading) == 3);
 }
 
 // A touch that finds no session, on a tablet that is connected and paired,
@@ -4226,14 +4252,14 @@ TEST(erase_hold_timing) {
   CHECK(D::g.erase_timer == nullptr);
   // The start line says how long after power-on the engine started, so the
   // time left for the hold can be measured on the tablet.
-  CHECK_STR(started_line(), "Engine 0.1.0 started 12000 ms after power-on (boot 3, not paired)");
+  CHECK_STR(started_line(), "Engine 0.2.0 started 12000 ms after power-on (boot 3, not paired)");
   hh::press(640, 400);
   hh::advance(6000);
   hh::release();
   CHECK(!tab::erase_asking());
   boot_at_uptime(0, false);
   CHECK(D::g.erase_timer == nullptr);
-  CHECK_STR(started_line(), "Engine 0.1.0 started (boot 3, not paired)");  // no uptime to tell
+  CHECK_STR(started_line(), "Engine 0.2.0 started (boot 3, not paired)");  // no uptime to tell
   Ha ha;
   ha.boot(false);  // the other tests: powered on long ago
   CHECK(D::g.erase_timer == nullptr && D::g.erase_step == D::E_OFF);
@@ -4970,4 +4996,896 @@ int main(int argc, char **argv) {
   printf("\n%d tests, %d checks, %d failed\n", ran, g_checks, g_failed);
   for (auto &f : g_failures) printf("  %s\n", f.c_str());
   return g_failed == 0 ? 0 : 1;
+}
+
+// ================================================================ device layout version 2: parsing (package E2)
+//
+// Contract 4.2, 4.3 and 4.8, cards spec B.2. The keys of version 2 are read
+// and kept; most are drawn by later packages, so these tests look at the
+// model, and draw and press every layout that loads to show that nothing
+// breaks.
+
+// A JSON writer for tj values, for layouts made from the fixtures.
+static void json_out(const tj::Value &v, std::string &o) {
+  switch (v.t) {
+    case tj::Value::NUL: o += "null"; break;
+    case tj::Value::BOOL: o += v.b ? "true" : "false"; break;
+    case tj::Value::NUM: o += v.s; break;
+    case tj::Value::STR:
+      o += '"';
+      for (unsigned char c : v.s) {
+        if (c == '"' || c == '\\') {
+          o += '\\';
+          o += (char) c;
+        } else if (c < 0x20) {
+          char b[8];
+          snprintf(b, sizeof b, "\\u%04x", c);
+          o += b;
+        } else {
+          o += (char) c;
+        }
+      }
+      o += '"';
+      break;
+    case tj::Value::ARR:
+      o += '[';
+      for (size_t i = 0; i < v.a.size(); i++) {
+        if (i) o += ',';
+        json_out(v.a[i], o);
+      }
+      o += ']';
+      break;
+    case tj::Value::OBJ:
+      o += '{';
+      for (size_t i = 0; i < v.o.size(); i++) {
+        if (i) o += ',';
+        tj::Value k;
+        k.t = tj::Value::STR;
+        k.s = v.o[i].first;
+        json_out(k, o);
+        o += ':';
+        json_out(v.o[i].second, o);
+      }
+      o += '}';
+      break;
+  }
+}
+static std::string json_text(const tj::Value &v) {
+  std::string o;
+  json_out(v, o);
+  return o;
+}
+
+static std::string commit_answer(const std::string &bytes) {
+  D::Loader ld;
+  return D::model_check(bytes.data(), bytes.size(), ld);
+}
+
+// A version 2 layout: one page, one card holding `widgets`, slots "tnbilnn"
+// (1 text, 2 number, 3 bool, 4 icon, 5 list, 6 and 7 numbers).
+static const char *V2_SLOTS = "tnbilnn";
+static std::string v2_card(const std::string &widgets, const std::string &card_keys = "",
+                           const std::string &page_keys = "", int v = 2) {
+  return "{\"nav\":[{\"p\":0,\"title\":\"P\"}],\"pages\":[{" + page_keys + "\"title\":\"P\",\"w\":[{" + card_keys +
+         "\"id\":1,\"r\":[100,84,568,640],\"t\":\"card\",\"w\":[" + widgets + "]}]}],\"slots\":\"" + V2_SLOTS +
+         "\",\"v\":" + std::to_string(v) + "}";
+}
+
+// Every page drawn, every widget pressed at its centre and dragged across:
+// nothing may crash or leak (run under ASan and UBSan too).
+static void draw_and_press_all(const char *label) {
+  D::Layout *l = active();
+  if (!CHECK_MSG(l && l->model, label)) return;
+  const int pages = tab::page_count();
+  for (int p = 0; p < pages; p++) {
+    tab::go_to(p);
+    hh::advance(30);
+    l = active();
+    if (!l || !l->model) return;
+    D::Model &m = *l->model;
+    for (uint32_t i = 0; i < m.nw; i++) {
+      const D::Widget &w = m.w[i];
+      if (w.page != p || !w.obj || w.r[2] <= 0 || w.r[3] <= 0) continue;
+      const int x = centre_x(w.r), y = centre_y(w.r);
+      hh::tap(x, y);
+      hh::advance(10);
+      hh::drag(w.r[0] + 1, y, w.r[0] + w.r[2] - 1, y, 120);
+      hh::advance(10);
+      if (!hidden(D::g.question)) D::question_answer(false);
+      hh::advance(10);
+      if (tab::current_page() != p) {
+        tab::go_to(p);
+        hh::advance(20);
+      }
+      l = active();
+      if (!l || !l->model || &l->model->w[0] != m.w) return;  // another layout came up
+    }
+  }
+  tab::go_to(0);
+  hh::advance(20);
+}
+
+// One commit on a fresh, unpaired tablet: the answer, and when it is "" the
+// layout on screen, drawn and pressed.
+static std::string commit_and_draw(Ha &ha, const std::string &bytes, const char *label, bool press = true) {
+  ha.boot(false);
+  ha.hello();
+  const std::string hash = sha_hex(bytes).substr(0, 16);
+  const std::string sent = ha.send(bytes);
+  if (!sent.empty()) return sent;
+  const std::string got = ha.commit(hash);
+  if (!got.empty()) return got;
+  if (!CHECK_MSG(advance_until([&] { return hash == tab::active_hash(); }, 5000), label)) return "not shown";
+  if (press) draw_and_press_all(label);
+  return "";
+}
+
+static const tj::Value *find_item(const tj::Value &dl, uint32_t id) {
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      if (it["id"].n == id) return &it;
+      for (const tj::Value &w : it["w"].a)
+        if (w["id"].n == id) return &w;
+    }
+  return nullptr;
+}
+
+// A bound field of the model against its form in the layout.
+static bool same_bound(const D::Bound &b, const tj::Value &v) {
+  if (v.t == tj::Value::NUL) return b.how == D::B_NULL || (b.how == D::B_ABSENT && v.s.empty());
+  if (v.t == tj::Value::OBJ) return b.how == D::B_SLOT && b.slot == (uint16_t) v["s"].n;
+  if (v.t == tj::Value::NUM) return b.how == D::B_CONST && b.c.num == v.n;
+  if (v.t == tj::Value::BOOL) return b.how == D::B_CONST && b.c.num == (v.b ? 1 : 0);
+  return false;
+}
+
+static bool same_list(const double *got, int n, const tj::Value &want) {
+  if (n != (int) want.size()) return false;
+  for (int i = 0; i < n; i++)
+    if (!got || got[i] != want[i].n) return false;
+  return true;
+}
+
+// Every key of version 2 of every widget, as the model holds it, against the
+// layout's bytes (contract 4.3: absent keys give the version 1 look).
+static void check_v2_keys(const tj::Value &dl, const D::Model &m, const char *label) {
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    const tj::Value *it = find_item(dl, w.id);
+    const std::string id = std::string(label) + " widget " + std::to_string(w.id);
+    if (!CHECK_MSG(it, id)) continue;
+    const tj::Value &v = *it;
+    auto num = [&](const char *k, double def) { return v.has(k) ? v[k].n : def; };
+    if (w.kind == D::W_CARD) {
+      CHECK_MSG(v.has("tint") ? same_bound(w.c, v["tint"]) : w.c.how == D::B_ABSENT, id + " tint");
+      CHECK_MSG(v.has("un") ? same_bound(w.vis, v["un"]) : w.vis.how == D::B_ABSENT, id + " un");
+      CHECK_MSG(v.has("ic") ? same_bound(w.ic, v["ic"]) : w.ic.how == D::B_ABSENT, id + " ic");
+      CHECK_MSG(w.lit == num("lit", 0), id + " lit");
+    } else {
+      if (w.kind != D::W_HEADING)
+        CHECK_MSG(v.has("vis") ? same_bound(w.vis, v["vis"]) : w.vis.how == D::B_ABSENT, id + " vis");
+      if (w.kind != D::W_CHOICE) CHECK_MSG(v.has("c") ? same_bound(w.c, v["c"]) : w.c.how == D::B_ABSENT, id + " c");
+    }
+    const tj::Value &tap = v["tap"];
+    const int tap_kind = tap.has("p") ? 1 : tap.has("go") ? 2 : tap.has("back") ? 3 : 0;
+    CHECK_MSG(w.tap == tap_kind, id + " tap");
+    if (tap_kind == 2) CHECK_MSG(w.tap_v == tap["go"].n, id + " tap go");
+    const tj::Value &hold = v["hold"];
+    CHECK_MSG(w.hold == (hold.has("go") ? 2 : 0) && (!hold.has("go") || w.hold_v == hold["go"].n), id + " hold");
+    switch (w.kind) {
+      case D::W_LABEL:
+        CHECK_MSG(w.px == num("px", 0) && w.al == num("al", 0) && w.clk == num("clk", 0), id + " px al clk");
+        if (v.has("clk")) CHECK_MSG(same_bound(w.value, v["value"]), id + " clock value");
+        break;
+      case D::W_BUTTON:
+        CHECK_MSG(w.shape == num("shape", 0) && w.isz == num("isz", 0), id + " shape isz");
+        CHECK_MSG(v.has("value") ? same_bound(w.value, v["value"]) : w.value.how == D::B_ABSENT, id + " value");
+        CHECK_MSG(v.has("ic") ? same_bound(w.ic, v["ic"]) : w.ic.how == D::B_ABSENT, id + " ic");
+        break;
+      case D::W_SLIDER:
+        CHECK_MSG(w.look == num("look", 0) && w.dir == num("dir", 0) && w.nv == num("nv", 0), id + " look dir nv");
+        CHECK_MSG(v.has("rate") ? same_bound(w.mark, v["rate"]) : w.mark.how == D::B_ABSENT, id + " rate");
+        CHECK_MSG(v.has("track") ? same_list(w.track, w.track_n, v["track"]) : w.track_n == 0 && !w.track, id + " track");
+        break;
+      case D::W_THERMO:
+        CHECK_MSG(w.bs == num("bs", 36), id + " bs");
+        CHECK_MSG(v.has("mark") ? same_bound(w.mark, v["mark"]) : w.mark.how == D::B_ABSENT, id + " mark");
+        break;
+      case D::W_CHART:
+        CHECK_MSG(w.st == num("st", 0), id + " st");
+        CHECK_MSG(v.has("mark") ? same_bound(w.mark, v["mark"]) : w.mark.how == D::B_ABSENT, id + " mark");
+        break;
+      case D::W_IMAGE: CHECK_MSG(w.look == num("look", 0), id + " look"); break;
+      case D::W_CHOICE: {
+        CHECK_MSG(w.rows == num("rows", 1) && w.look == num("look", 0), id + " rows look");
+        CHECK_MSG(v.has("value") ? same_bound(w.value, v["value"]) : w.value.how == D::B_ABSENT, id + " value");
+        CHECK_MSG(same_list(w.icons, w.icons_n, v["icons"]) && same_list(w.cols, w.cols_n, v["cols"]), id + " lists");
+        CHECK_MSG(w.texts_n == v["texts"].size(), id + " texts");
+        for (uint32_t k = 0; k < w.texts_n; k++) CHECK_MSG(D::choice_text(w, k) == v["texts"][(size_t) k].s, id + " text");
+        const size_t most = std::max(v["texts"].size(), std::max(v["icons"].size(), v["cols"].size()));
+        CHECK_MSG(w.options == most, id + " options");
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+TEST(kit_loads) {
+  for (const char *name : {"layout_v2_kit", "layout_v2_kit.nochoice"}) {
+    g_test = name;
+    const std::string bytes = layout_bytes((std::string(name) + ".dl.json").c_str());
+    const tj::Value dl = fixture((std::string(name) + ".dl.json").c_str());
+    const tj::Value meta = fixture((std::string(name) + ".meta.json").c_str());
+    CHECK_STR(sha_hex(bytes).substr(0, 16), meta["hash"].s);
+    D::Loader ld;
+    CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+    CHECK(ld.c.version == 2);
+    CHECK(ld.c.pages == meta["counts"]["pages"].n && ld.c.normal == meta["counts"]["normal_pages"].n);
+    CHECK(ld.c.widgets == meta["counts"]["widgets"].n && ld.c.ids == meta["counts"]["widgets"].n);
+    CHECK(ld.c.slots == meta["counts"]["slots"].n);
+    Ha ha;
+    ha.boot(false);
+    CHECK(ha.hello());
+    CHECK(ha.show(bytes));
+    D::Layout *l = active();
+    if (!CHECK(l && l->model)) continue;
+    D::Model &m = *l->model;
+    // Pages: sub, ttl and theme (contract 4.8).
+    CHECK(m.npages == dl["pages"].size());
+    int themed = 0;
+    for (uint32_t p = 0; p < m.npages; p++) {
+      const tj::Value &pg = dl["pages"][(size_t) p];
+      const D::Page &mp = m.pages[p];
+      CHECK_MSG(mp.sub == (pg["sub"].n == 1 && p > 0 ? 1 : 0), "page " + std::to_string(p) + " sub");
+      CHECK_MSG(mp.ttl == (pg.has("ttl") ? pg["ttl"].n : 60), "page " + std::to_string(p) + " ttl");
+      if (!pg.has("theme")) {
+        CHECK(mp.theme == 0);
+        continue;
+      }
+      themed++;
+      CHECK(mp.theme > 0 && mp.theme < m.nthemes);
+      const D::Theme &t = m.themes[mp.theme];
+      for (int c = 0; c < D::C_COUNT; c++) {
+        const tj::Value &mine = pg["theme"][D::THEME_KEYS[c]];
+        CHECK_MSG(t.c[c] == (mine.t == tj::Value::NUM ? (uint32_t) mine.n : m.theme.c[c]), D::THEME_KEYS[c]);
+      }
+      CHECK(t.r == (pg["theme"].has("r") ? pg["theme"]["r"].n : m.theme.r));
+      CHECK(t.dark == (pg["theme"].has("dark") ? pg["theme"]["dark"].n : m.theme.dark));
+    }
+    CHECK(m.nthemes == 1 + themed && themed == 1);
+    CHECK(memcmp(&m.themes[0], &m.theme, sizeof m.theme) == 0);
+    check_v2_keys(dl, m, name);
+    // A card's style with the six colours of version 2 carries them whole.
+    const D::Widget *c7 = widget(7);
+    if (CHECK(c7 && c7->style >= 0)) {
+      const D::Tok t = D::card_tokens(m, c7);
+      const tj::Value &st = find_item(dl, 7)->operator[]("style");
+      CHECK(t.card_pr == st["card_pr"].n && t.card2_pr == st["card2_pr"].n && t.accf == st["accf"].n &&
+            t.accf_pr == st["accf_pr"].n && t.onbg_pr == st["onbg_pr"].n && t.ion == st["ion"].n);
+    }
+    // Drawn with the looks of version 1: every widget the engine draws so
+    // far is at its rectangle.
+    for (uint32_t i = 0; i < m.nw; i++) {
+      const D::Widget &w = m.w[i];
+      const std::string id = std::string(name) + " widget " + std::to_string(w.id);
+      if (w.kind == D::W_CHOICE) continue;  // drawn from package E8 on
+      if (!CHECK_MSG(w.obj, id)) continue;
+      if (w.kind == D::W_BUTTON && w.shape) continue;  // its own shape from package E5 on
+      CHECK_MSG(obj_at(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]), id + " at " + rect_text(w.obj));
+    }
+    // The values of state_v2.json's stream are all taken.
+    if (!strcmp(name, "layout_v2_kit")) {
+      const tj::Value st = fixture("state_v2.json");
+      CHECK_STR(st["hash"].s, meta["hash"].s);
+      for (const tj::Value &step : st["steps"].a)
+        for (const tj::Value &pl : step["payloads"].a) CHECK_STR(ha.set(pl.s), "");
+      CHECK_STR(ha.set(st["steps"][0]["payloads"][0].s), "");
+    }
+    hh::advance(40);
+    for (int p = 0; p < tab::page_count(); p++) {
+      tab::go_to(p);
+      hh::advance(40);
+      CHECK(tab::current_page() == p);
+      shot(std::string(name) + "_page" + std::to_string(p));
+      // Version 1 looks: the layout's wall on every page until package E9
+      // draws page themes. Page 2 holds one small card (184 x 184, about
+      // 3.6 % of the page area), so the bar is lower than shots_of_pages'.
+      const double share = share_not(hh::rgb565(m.theme.c[D::C_WALL]), 96);
+      CHECK_MSG(share > 0.025, std::string(name) + " page " + std::to_string(p) + ": " + std::to_string(share));
+    }
+    tab::go_to(0);
+    hh::advance(20);
+    g_cut_report.clear();
+    report_cuts(name);
+    const std::string path = OUT + "/cut_texts.txt";
+    FILE *f = fopen(path.c_str(), "a");
+    if (f) {
+      fprintf(f, "%s", g_cut_report.empty() ? (std::string(name) + ": no text is cut.\n").c_str() : g_cut_report.c_str());
+      fclose(f);
+    }
+    draw_and_press_all(name);
+  }
+  g_test = "kit_loads";
+}
+
+TEST(versions) {
+  // v 1 and 2 load, 3 answers version (contract 4.2, 5).
+  CHECK_STR(commit_answer(v2_card("", "", "", 1)), "");
+  CHECK_STR(commit_answer(v2_card("", "", "", 2)), "");
+  CHECK_STR(commit_answer(v2_card("", "", "", 3)), "version");
+  CHECK_STR(commit_answer(v2_card("", "", "", 0)), "version");
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":2.0}"), "");
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":1.5}"), "version");
+  CHECK_STR(commit_answer("{\"pages\":7,\"v\":3}"), "version");  // version before shape
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":true}"), "parse");
+  {
+    D::Loader ld;
+    const std::string one = v2_card("", "", "", 1), two = v2_card("", "", "", 2);
+    D::model_check(one.data(), one.size(), ld);
+    CHECK(ld.c.version == 1);
+    D::model_check(two.data(), two.size(), ld);
+    CHECK(ld.c.version == 2);
+  }
+  // Every case of commit_v2.json, each one transfer on a fresh tablet that
+  // is not paired, as in chunks.json.
+  const tj::Value f = fixture("commit_v2.json");
+  CHECK(f["cases"].size() == 13);
+  Ha ha;
+  for (const tj::Value &c : f["cases"].a) {
+    g_test = c["name"].s.c_str();
+    ha.boot(false);
+    CHECK(c["calls"].size() == c["expect"].size());
+    for (size_t i = 0; i < c["calls"].size(); i++) {
+      const tj::Value &k = c["calls"][i];
+      CHECK_STR(tab::on_layout(k["hash"].s.data(), k["hash"].s.size(), k["seq"].i(), k["total"].i(), k["size"].i(),
+                               k["data"].s.data(), k["data"].s.size()),
+                c["expect"][i].s == "ok" ? "" : c["expect"][i].s);
+    }
+    const std::string hash = c["commit_hash"].s;
+    CHECK_STR(tab::on_commit(hash.data(), hash.size(), "", 0), c["commit"].s == "ok" ? "" : c["commit"].s);
+    if (c["commit"].s == "ok") {
+      CHECK(advance_until([&] { return hash == tab::active_hash(); }, 5000));
+      CHECK(tab::page_count() > 0);
+    } else {
+      hh::advance(50);
+      CHECK_STR(tab::active_hash(), "");
+    }
+    // What the tablet keeps of lists that are too long: what HA's compile
+    // cuts them to (`cuts`), the first 8 colours, the first 16 options, the
+    // texts cut to 40 bytes at a character border (contract 4.3).
+    if (c["name"].s == "uncut_lists") {
+      for (auto &kv : f["cuts"]["widgets"].o) {
+        const D::Widget *w = widget((uint32_t) atoi(kv.first.c_str()));
+        const tj::Value &want = kv.second;
+        if (!CHECK_MSG(w, kv.first)) continue;
+        if (want.has("track")) CHECK_MSG(same_list(w->track, w->track_n, want["track"]), kv.first + " track");
+        if (want.has("icons")) CHECK_MSG(same_list(w->icons, w->icons_n, want["icons"]), kv.first + " icons");
+        if (want.has("cols")) CHECK_MSG(same_list(w->cols, w->cols_n, want["cols"]), kv.first + " cols");
+        if (want.has("texts")) {
+          CHECK_MSG(w->texts_n == want["texts"].size(), kv.first + " texts");
+          for (uint32_t k = 0; k < w->texts_n; k++)
+            CHECK_MSG(D::choice_text(*w, k) == want["texts"][(size_t) k].s, kv.first + " text " + std::to_string(k));
+        }
+      }
+    }
+  }
+  g_test = "versions";
+  // The page records of a case at the limit: page 0 is normal, the rest are
+  // detail pages with the default ttl.
+  ha.boot(false);
+  const tj::Value &c64 = f["cases"][0];
+  CHECK_STR(c64["name"].s, "pages_64");
+  CHECK(ha.show(c64["calls"][0]["data"].s));
+  if (CHECK(active() && active()->model && active()->model->npages == 64)) {
+    const D::Model &m = *active()->model;
+    CHECK(m.pages[0].sub == 0);
+    for (int p = 1; p < 64; p++) CHECK(m.pages[p].sub == 1 && m.pages[p].ttl == 60);
+  }
+}
+
+TEST(hostile_v2) {
+  struct Case {
+    const char *name;
+    std::string bytes;
+    const char *want;
+  };
+  const std::string S = "\"r\":[116,140,344,40],\"t\":\"slider\",\"value\":{\"s\":2},\"min\":0,\"max\":100,\"step\":1";
+  const std::string L = "\"r\":[116,140,344,40],\"t\":\"label\",\"text\":\"x\"";
+  const std::string B = "\"r\":[116,140,344,40],\"t\":\"button\",\"text\":\"x\",\"tap\":{\"p\":0}";
+  const std::string C = "\"r\":[116,140,344,96],\"t\":\"choice\",\"change\":{\"p\":0}";
+  const std::string T = "\"r\":[116,140,248,228],\"t\":\"thermostat\",\"value\":{\"s\":2},\"min\":7,\"max\":35,\"step\":0.5";
+  const std::string H = "\"r\":[116,140,344,104],\"t\":\"chart\",\"value\":{\"s\":5}";
+  const std::string I = "\"r\":[116,140,64,64],\"t\":\"image\",\"value\":{\"s\":4}";
+  auto w = [](const std::string &keys, const std::string &base) { return "{\"id\":2," + keys + (keys.empty() ? "" : ",") + base + "}"; };
+  std::string texts1000 = "[", texts_bad = "[";
+  for (int i = 0; i < 1000; i++) {
+    texts1000 += std::string(i ? "," : "") + "\"t" + std::to_string(i) + "\"";
+    texts_bad += std::string(i ? "," : "") + (i == 500 ? "5" : "\"t\"");
+  }
+  texts1000 += "]";
+  texts_bad += "]";
+  std::string pages64 = "[";
+  for (int p = 0; p < 64; p++)
+    pages64 += std::string(p ? "," : "") + "{\"sub\":" + (p ? "1" : "0") + ",\"theme\":{\"acc\":" + std::to_string(p * 1000) +
+               "},\"title\":\"P\",\"w\":[]}";
+  pages64 += "]";
+  const std::vector<Case> cases = {
+      // Wrong JSON types are parse (contract 4.3).
+      {"px text", v2_card(w("\"px\":\"28\"", L)), "parse"},
+      {"al bool", v2_card(w("\"al\":true", L)), "parse"},
+      {"look list", v2_card(w("\"look\":[1]", S)), "parse"},
+      {"track text", v2_card(w("\"track\":\"red\"", S)), "parse"},
+      {"track slot", v2_card(w("\"track\":{\"s\":2}", S)), "parse"},
+      {"track entry text", v2_card(w("\"track\":[1,\"a\"]", S)), "parse"},
+      {"track entry fraction", v2_card(w("\"track\":[1,2.5]", S)), "parse"},
+      {"track entry over", v2_card(w("\"track\":[1,16777216]", S)), "parse"},
+      {"track entry under", v2_card(w("\"track\":[-1,2]", S)), "parse"},
+      {"track 10th entry bad", v2_card(w("\"track\":[1,2,3,4,5,6,7,8,9,\"x\"]", S)), "parse"},
+      {"texts text", v2_card(w("\"texts\":\"abc\"", C)), "parse"},
+      {"texts entry number", v2_card(w("\"texts\":[1]", C)), "parse"},
+      {"texts entry null", v2_card(w("\"texts\":[\"a\",null]", C)), "parse"},
+      {"texts 501st entry number", v2_card(w("\"texts\":" + texts_bad, C)), "parse"},
+      {"icons negative", v2_card(w("\"icons\":[-1]", C)), "parse"},
+      {"icons over", v2_card(w("\"icons\":[1114112]", C)), "parse"},
+      {"cols over", v2_card(w("\"cols\":[16777216]", C)), "parse"},
+      {"cols text", v2_card(w("\"cols\":[\"#ff0000\"]", C)), "parse"},
+      {"c text", v2_card(w("\"c\":\"#ffffff\"", L)), "parse"},
+      {"c 16777216", v2_card(w("\"c\":16777216", L)), "parse"},
+      {"c fraction", v2_card(w("\"c\":0.5", L)), "parse"},
+      {"c negative", v2_card(w("\"c\":-1", L)), "parse"},
+      {"c bool", v2_card(w("\"c\":true", L)), "parse"},
+      {"c text slot", v2_card(w("\"c\":{\"s\":1}", L)), "parse"},
+      {"tint bool", v2_card("", "\"tint\":true,"), "parse"},
+      {"tint 16777216", v2_card("", "\"tint\":16777216,"), "parse"},
+      {"heading c text", "{\"pages\":[{\"title\":\"P\",\"w\":[{\"c\":\"x\",\"id\":1,\"r\":[0,0,9,9],\"t\":\"heading\",\"text\":\"h\"}]}],\"v\":2}", "parse"},
+      {"vis text", v2_card(w("\"vis\":\"x\"", L)), "parse"},
+      {"vis number slot", v2_card(w("\"vis\":{\"s\":2}", L)), "parse"},
+      {"un number slot", v2_card("", "\"un\":{\"s\":2},"), "parse"},
+      {"ic text", v2_card("", "\"ic\":\"x\","), "parse"},
+      {"ic bool slot", v2_card(w("\"ic\":{\"s\":3}", B)), "parse"},
+      {"lit text", v2_card("", "\"lit\":\"x\","), "parse"},
+      {"hold number", v2_card(w("\"hold\":7", L)), "parse"},
+      {"hold policy 9", v2_card(w("\"hold\":{\"p\":9}", L)), "parse"},
+      {"card hold text", v2_card("", "\"hold\":\"x\","), "parse"},
+      {"back text", v2_card(w("\"tap\":{\"back\":\"x\"}", L)), "parse"},
+      {"back fraction", v2_card(w("\"tap\":{\"back\":0.5}", L)), "parse"},
+      {"mark text", v2_card(w("\"mark\":\"x\"", T)), "parse"},
+      {"mark list slot", v2_card(w("\"mark\":{\"s\":5}", H)), "parse"},
+      {"rate bool", v2_card(w("\"rate\":true", S)), "parse"},
+      {"clock value text", v2_card(w("\"clk\":1,\"value\":\"x\"", L)), "parse"},
+      {"button value text", v2_card(w("\"value\":\"x\"", B)), "parse"},
+      {"choice value text", v2_card(w("\"texts\":[\"a\"],\"value\":\"x\"", C)), "parse"},
+      {"choice value list slot", v2_card(w("\"texts\":[\"a\"],\"value\":{\"s\":5}", C)), "parse"},
+      {"style ion over", v2_card("", "\"style\":{\"ion\":16777216},"), "parse"},
+      {"style card_pr text", v2_card("", "\"style\":{\"card_pr\":\"x\"},"), "parse"},
+      {"sub text", v2_card("", "", "\"sub\":\"1\","), "parse"},
+      {"ttl text", v2_card("", "", "\"ttl\":\"60\","), "parse"},
+      {"theme number", v2_card("", "", "\"theme\":5,"), "parse"},
+      {"theme colour text", v2_card("", "", "\"theme\":{\"acc\":\"x\"},"), "parse"},
+      {"theme colour over", v2_card("", "", "\"theme\":{\"acc\":16777216},"), "parse"},
+      {"theme r over", v2_card("", "", "\"theme\":{\"r\":401},"), "parse"},
+      // A fraction in a look key, in clk, nv or sub is parse.
+      {"px fraction", v2_card(w("\"px\":28.5", L)), "parse"},
+      {"ttl fraction", v2_card("", "", "\"ttl\":1.5,"), "parse"},
+      {"clk fraction", v2_card(w("\"clk\":1.5", L)), "parse"},
+      {"nv fraction", v2_card(w("\"nv\":0.5", S)), "parse"},
+      {"sub fraction", v2_card("", "", "\"sub\":0.5,"), "parse"},
+      {"rows fraction", v2_card(w("\"texts\":[\"a\"],\"rows\":2.5", C)), "parse"},
+      {"bs fraction", v2_card(w("\"bs\":40.5", T)), "parse"},
+      {"lit fraction", v2_card("", "\"lit\":1.5,"), "parse"},
+      // These load.
+      {"every new key null",
+       v2_card(w("\"vis\":null,\"hold\":null,\"c\":null,\"px\":null,\"al\":null,\"clk\":null", L) + "," +
+                   w("\"vis\":null,\"look\":null,\"dir\":null,\"track\":null,\"nv\":null,\"rate\":null,\"c\":null", S) + "," +
+                   w("\"vis\":null,\"texts\":null,\"icons\":null,\"cols\":null,\"value\":null,\"rows\":null,\"look\":null", C) + "," +
+                   w("\"mark\":null,\"bs\":null,\"c\":null", T) + "," + w("\"mark\":null,\"st\":null", H) + "," +
+                   w("\"look\":null,\"c\":null", I) + "," + w("\"value\":null,\"ic\":null,\"shape\":null,\"isz\":null", B),
+               "\"hold\":null,\"ic\":null,\"tint\":null,\"lit\":null,\"un\":null,", "\"sub\":null,\"ttl\":null,\"theme\":null,"),
+       ""},
+      {"constant colour 16777215", v2_card(w("\"c\":16777215", L)), ""},
+      {"colour slot", v2_card(w("\"c\":{\"s\":2}", L)), ""},
+      {"unknown clk", v2_card(w("\"clk\":7,\"value\":{\"s\":2}", L)), ""},
+      {"choice without a list", v2_card(w("", C)), ""},
+      {"choice with empty lists", v2_card(w("\"texts\":[],\"icons\":[],\"cols\":[]", C)), ""},
+      {"choice without value", v2_card(w("\"texts\":[\"a\",\"b\"]", C)), ""},
+      {"choice of 1000 texts", v2_card(w("\"texts\":" + texts1000, C)), ""},
+      {"64 pages with a theme each",
+       "{\"nav\":[],\"pages\":" + pages64 + ",\"slots\":\"\",\"theme\":{\"acc\":1},\"v\":2}", ""},
+      {"go to a missing page", v2_card(w("\"tap\":{\"go\":9},\"hold\":{\"go\":9}", L), "\"hold\":{\"go\":9},"), ""},
+      {"hold with p or back", v2_card(w("\"hold\":{\"p\":1}", L) + "," + w("\"hold\":{\"back\":1}", B)), ""},
+      {"hold on a slider is not a key there", v2_card(w("\"hold\":\"x\"", S)), ""},
+      {"back 2 does nothing", v2_card(w("\"tap\":{\"back\":2}", B)), ""},
+  };
+  for (const Case &c : cases) {
+    g_test = c.name;
+    CHECK_STR(commit_answer(c.bytes), c.want);
+  }
+  g_test = "hostile_v2";
+  Ha ha;
+  // Look keys out of range are held to the nearest value (contract 4.3).
+  {
+    const std::string held = v2_card(
+        "{\"id\":2,\"px\":3,\"al\":-5," + L + "},{\"id\":3,\"px\":1000000000,\"al\":9," + L + "},{\"id\":4,\"look\":5,\"dir\":7,\"nv\":2," + S +
+            "},{\"id\":5,\"look\":-1,\"dir\":-1,\"nv\":1," + S + "},{\"id\":6,\"texts\":[\"a\"],\"rows\":0,\"look\":3," + C +
+            "},{\"id\":7,\"texts\":[\"a\"],\"rows\":9," + C + "},{\"id\":8,\"bs\":10," + T + "},{\"id\":9,\"bs\":99," + T +
+            "},{\"id\":10,\"st\":3," + H + "},{\"id\":11,\"look\":9," + I + "},{\"id\":12,\"shape\":9,\"isz\":4," + B +
+            "},{\"id\":13,\"shape\":-2,\"isz\":-1," + B + "},{\"id\":14,\"clk\":2,\"value\":{\"s\":2}," + L + "},{\"id\":15,\"clk\":0," + L +
+            "},{\"id\":16,\"clk\":-1," + L + "},{\"id\":17,\"tap\":{\"back\":1}," + L + "}",
+        "\"lit\":7,");
+    CHECK_STR(commit_and_draw(ha, held, "held"), "");
+    auto W = [](uint32_t id) { return widget(id); };
+    if (CHECK(W(1) && W(2) && W(3) && W(4) && W(5) && W(6) && W(7) && W(8) && W(9) && W(10) && W(11) && W(12) && W(13) &&
+              W(14) && W(15) && W(16) && W(17))) {
+      CHECK(W(1)->lit == 3);
+      CHECK(W(2)->px == 14 && W(2)->al == 0 && W(3)->px == 255 && W(3)->al == 2);
+      CHECK(W(4)->look == 1 && W(4)->dir == 2 && W(4)->nv == 0 && W(5)->look == 0 && W(5)->dir == 0 && W(5)->nv == 1);
+      CHECK(W(6)->rows == 1 && W(6)->look == 1 && W(7)->rows == 4);
+      CHECK(W(8)->bs == 36 && W(9)->bs == 64 && W(10)->st == 1 && W(11)->look == 2);
+      CHECK(W(12)->shape == 2 && W(12)->isz == 1 && W(13)->shape == 0 && W(13)->isz == 0);
+      CHECK(W(14)->clk == 2 && W(14)->value.how == D::B_SLOT && W(15)->clk == 0 && W(16)->clk == 0);
+      CHECK(W(17)->tap == 3);
+    }
+  }
+  // ttl: below 0 is 0, 1 to 4 is 5, above 3600 is 3600; sub 2 counts as 0.
+  {
+    std::string pages = "[{\"title\":\"0\",\"w\":[]}";
+    const int ttls[] = {-1, 0, 1, 3, 4, 5, 3600, 4000};
+    for (int t : ttls) pages += ",{\"sub\":1,\"title\":\"d\",\"ttl\":" + std::to_string(t) + ",\"w\":[]}";
+    pages += ",{\"sub\":2,\"title\":\"s2\",\"w\":[]},{\"sub\":1,\"title\":\"none\",\"w\":[]}]";
+    CHECK_STR(commit_and_draw(ha, "{\"pages\":" + pages + ",\"v\":2}", "ttl"), "");
+    const int want[] = {0, 0, 5, 5, 5, 5, 3600, 3600};
+    if (CHECK(active() && active()->model->npages == 11)) {
+      const D::Model &m = *active()->model;
+      for (int i = 0; i < 8; i++) CHECK_MSG(m.pages[1 + i].ttl == want[i] && m.pages[1 + i].sub == 1, std::to_string(ttls[i]));
+      CHECK(m.pages[9].sub == 0 && m.pages[10].sub == 1 && m.pages[10].ttl == 60);
+    }
+  }
+  // A choice: 17 options and more keep 16; no list and empty lists load,
+  // are never built and take no touch; no value is none selected.
+  {
+    std::string t17 = "[", i17 = "[", c17 = "[";
+    for (int i = 0; i < 17; i++) {
+      t17 += std::string(i ? "," : "") + "\"o" + std::to_string(i) + "\"";
+      i17 += std::string(i ? "," : "") + "983568";
+      c17 += std::string(i ? "," : "") + std::to_string(i * 4096);
+    }
+    t17 += "]";
+    i17 += "]";
+    c17 += "]";
+    const std::string a40 = std::string(40, 'a'), a41 = std::string(41, 'a'), a255 = std::string(255, 'a');
+    const std::string e_on_border = std::string(39, 'a') + "\xC3\xA9";  // two bytes over 39 and 40: cut to 39
+    const std::string euro_on_border = std::string(38, 'a') + "\xE2\x82\xAC";  // three bytes over 38 to 40: cut to 38
+    const std::string escaped = std::string(38, 'a') + "\\u00e9z";  // an escape that decodes to two bytes: 40
+    const std::string bytes = v2_card(
+        "{\"id\":2,\"texts\":" + t17 + ",\"icons\":" + i17 + ",\"cols\":" + c17 + "," + C + "},{\"id\":3," + C +
+        "},{\"id\":4,\"texts\":[],\"icons\":[],\"cols\":[]," + C + "},{\"id\":5,\"texts\":[\"a\",\"b\"]," + C +
+        "},{\"id\":6,\"texts\":" + texts1000 + "," + C + "},{\"id\":7,\"texts\":[\"" + a40 + "\",\"" + a41 + "\",\"" + a255 +
+        "\",\"" + e_on_border + "\",\"" + euro_on_border + "\",\"" + escaped + "\",\"\"]," + C +
+        "},{\"id\":8,\"icons\":[0,983568],\"texts\":[\"x\"]," + C + "},{\"id\":9,\"texts\":[\"first\"],\"texts\":[\"p\",\"q\",\"r\"]," + C +
+        "},{\"id\":10,\"track\":[1,2,3],\"track\":[4,5]," + S + "},{\"id\":11,\"track\":[1]," + S +
+        "},{\"id\":12,\"track\":[1,2,3,4,5,6,7,8,9]," + S + "},{\"id\":13,\"track\":[]," + S + "}");
+    CHECK_STR(commit_and_draw(ha, bytes, "choices"), "");
+    D::Widget *w2 = widget(2), *w3 = widget(3), *w4 = widget(4), *w5 = widget(5), *w6 = widget(6), *w7 = widget(7),
+              *w8 = widget(8), *w9 = widget(9), *w10 = widget(10), *w11 = widget(11), *w12 = widget(12), *w13 = widget(13);
+    if (CHECK(w2 && w3 && w4 && w5 && w6 && w7 && w8 && w9 && w10 && w11 && w12 && w13)) {
+      CHECK(w2->options == 16 && w2->texts_n == 16 && w2->icons_n == 16 && w2->cols_n == 16);
+      CHECK_STR(D::choice_text(*w2, 15), "o15");
+      CHECK_STR(D::choice_text(*w2, 16), "");
+      CHECK(w2->cols[15] == 15 * 4096);
+      CHECK(w3->options == 0 && w4->options == 0 && D::Loader::objects_of(*w3) == 0 && D::Loader::objects_of(*w4) == 0);
+      CHECK(w3->obj == nullptr && w4->obj == nullptr);
+      CHECK(w5->options == 2 && w5->value.how == D::B_ABSENT && D::Loader::objects_of(*w5) == 1);
+      CHECK(w6->options == 16 && w6->texts_n == 16);
+      CHECK_STR(D::choice_text(*w6, 15), "t15");
+      CHECK(w7->texts_n == 7);
+      CHECK_STR(D::choice_text(*w7, 0), a40);
+      CHECK_STR(D::choice_text(*w7, 1), a40);
+      CHECK_STR(D::choice_text(*w7, 2), a40);
+      CHECK_STR(D::choice_text(*w7, 3), std::string(39, 'a'));
+      CHECK_STR(D::choice_text(*w7, 4), std::string(38, 'a'));
+      CHECK_STR(D::choice_text(*w7, 5), std::string(38, 'a') + "\xC3\xA9");
+      CHECK_STR(D::choice_text(*w7, 6), "");
+      CHECK(w8->options == 2 && w8->icons[0] == 0 && w8->icons[1] == 983568);
+      // A key given twice: the last one counts.
+      CHECK(w9->texts_n == 3);
+      CHECK_STR(D::choice_text(*w9, 0), "p");
+      CHECK(w10->track_n == 2 && w10->track[0] == 4 && w10->track[1] == 5);
+      CHECK(w11->track_n == 0 && !w11->track && w13->track_n == 0);
+      CHECK(w12->track_n == 8 && w12->track[7] == 8);
+    }
+    // A press on a choice that has no option does nothing and sends nothing.
+    fake::st.events.clear();
+    if (w3) hh::tap(centre_x(w3->r), centre_y(w3->r));
+    hh::advance(50);
+    CHECK(fake::events("tab1_input").empty());
+  }
+  // Every new part on rectangles of 0 x 0, 1 x 1, off the screen and
+  // shorter than two corner radii; values at and past their edges.
+  {
+    const char *rects[] = {"[116,140,0,0]", "[116,140,1,1]", "[1300,900,50,50]", "[-200,-200,100,100]", "[116,140,6,6]"};
+    std::string ws;
+    int id = 2;
+    for (const char *r : rects) {
+      const std::string rr = std::string("\"r\":") + r;
+      auto add = [&](const std::string &rest) { ws += std::string(ws.empty() ? "" : ",") + "{\"id\":" + std::to_string(id++) + "," + rr + "," + rest + "}"; };
+      add("\"t\":\"label\",\"text\":\"21:05\",\"px\":192,\"al\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"label\",\"text\":\"\",\"clk\":1,\"px\":96,\"value\":{\"s\":2}");
+      add("\"t\":\"button\",\"text\":\"x\",\"tap\":{\"p\":0},\"shape\":1,\"isz\":1,\"icon\":983568,\"c\":{\"s\":6},\"value\":{\"s\":3}");
+      add("\"t\":\"slider\",\"value\":{\"s\":2},\"min\":5,\"max\":5,\"step\":1,\"look\":1,\"dir\":1,\"track\":[1,2,3],\"rate\":{\"s\":7},\"change\":{\"p\":0}");
+      add("\"t\":\"slider\",\"value\":{\"s\":2},\"min\":9,\"max\":1,\"step\":0,\"look\":0,\"dir\":2,\"track\":[1,2,3,4,5,6,7,8],\"nv\":1,\"icon\":983568");
+      add("\"t\":\"thermostat\",\"value\":{\"s\":2},\"min\":35,\"max\":7,\"step\":0.5,\"mark\":{\"s\":6},\"bs\":64,\"c\":{\"s\":6},\"change\":{\"p\":0}");
+      add("\"t\":\"chart\",\"value\":{\"s\":5},\"kind\":1,\"mark\":{\"s\":6},\"st\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"image\",\"value\":{\"s\":4},\"look\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"choice\",\"texts\":[\"a\",\"b\",\"c\"],\"icons\":[983568,0],\"cols\":[1,2,3,4],\"rows\":4,\"value\":{\"s\":6},\"change\":{\"p\":0}");
+    }
+    const std::string bytes = v2_card(ws, "\"tint\":{\"s\":6},\"un\":{\"s\":3},\"lit\":2,\"on\":{\"s\":3},\"tap\":{\"p\":0},");
+    CHECK_STR(commit_and_draw(ha, bytes, "sizes", false), "");
+    const std::string h = tab::active_hash();
+    const char *values[] = {"[[2,1000000000],[6,1000000000],[7,1000000000]]", "[[2,-1000000000],[6,-1],[7,-1]]",
+                            "[[2,0.5],[6,0.5],[7,0.5],[3,1]]", "[[2,null],[6,null],[7,null],[3,null]]",
+                            "[[2,5],[6,16754519],[5,[1,2,3]],[4,983568],[3,0]]"};
+    for (const char *v : values) {
+      CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":" + v + "}"), "");
+      hh::advance(30);
+      draw_and_press_all("sizes");
+    }
+    // A colour slot holds a colour only while it is a whole number 0 to
+    // 0xFFFFFF (contract 4.4).
+    D::Widget *lab = widget(2);
+    if (CHECK(lab && active())) {
+      uint32_t col = 0;
+      CHECK(D::bound_colour(*active()->model, lab->c, &col) && col == 16754519);
+      for (const char *bad : {"1000000000", "-1", "0.5", "16777216", "null"}) {
+        CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[6," + bad + "]]}"), "");
+        CHECK_MSG(!D::bound_colour(*active()->model, lab->c, &col), bad);
+      }
+    }
+  }
+  // 64 pages that each carry a theme: 65 themes, each its own.
+  {
+    CHECK_STR(commit_and_draw(ha, "{\"nav\":[],\"pages\":" + pages64 + ",\"slots\":\"\",\"theme\":{\"acc\":1,\"tx\":7},\"v\":2}", "themes", false), "");
+    if (CHECK(active() && active()->model->npages == 64)) {
+      const D::Model &m = *active()->model;
+      CHECK(m.nthemes == 65);
+      for (int p = 0; p < 64; p++) {
+        const D::Theme &t = m.themes[m.pages[p].theme];
+        CHECK_MSG(m.pages[p].theme == p + 1 && t.c[D::C_ACC] == (uint32_t) p * 1000 && t.c[D::C_TX] == 7, std::to_string(p));
+      }
+      CHECK(m.themes[0].c[D::C_ACC] == 1);
+    }
+  }
+}
+
+// The per-page draw counts of a version 2 layout (contract 4.2): the 9th
+// chart and the 9th thermostat of a page are skipped like a kind the engine
+// does not know (their ids still count), the 13th track is dropped from its
+// slider. A version 1 layout keeps everything.
+TEST(page_cost_limits) {
+  auto page = [](int first_id, int charts, int arcs, int tracks, bool bad_ninth) {
+    std::string ws;
+    int id = first_id + 1;
+    auto add = [&](const std::string &rest) { ws += std::string(ws.empty() ? "" : ",") + "{\"id\":" + std::to_string(id++) + ",\"r\":[116,140,40,40]," + rest + "}"; };
+    // A slider with one colour has no track and does not count.
+    add("\"t\":\"slider\",\"value\":1,\"min\":0,\"max\":2,\"step\":1,\"track\":[255]");
+    for (int i = 0; i < charts; i++) add(std::string("\"t\":\"chart\",\"value\":[1,2]") + (i == 8 && bad_ninth ? ",\"st\":\"skipped, so never read\"" : ""));
+    for (int i = 0; i < arcs; i++) add("\"t\":\"thermostat\",\"value\":20,\"min\":7,\"max\":35,\"step\":1");
+    for (int i = 0; i < tracks; i++) add("\"t\":\"slider\",\"value\":1,\"min\":0,\"max\":2,\"step\":1,\"track\":[255,65280]");
+    return "{\"title\":\"P\",\"w\":[{\"id\":" + std::to_string(first_id) + ",\"r\":[100,84,568,640],\"t\":\"card\",\"w\":[" + ws + "]}]}";
+  };
+  // Page 0: 9, 9 and 13 (the first slider has no track). Page 1: 8, 8 and 12.
+  Ha ha;
+  for (int v : {2, 1}) {
+    // Version 1 reads the 9th chart, so a wrong key there is parse.
+    const std::string pages = "[" + page(100, 9, 9, 13, v == 2) + "," + page(200, 8, 8, 12, false) + "]";
+    if (v == 1) {
+      const std::string bad = "{\"pages\":[" + page(100, 9, 9, 13, true) + "],\"v\":1}";
+      CHECK_STR(commit_answer(bad), "parse");
+    }
+    g_test = v == 2 ? "page_cost_limits v2" : "page_cost_limits v1";
+    const std::string bytes = "{\"pages\":" + pages + ",\"v\":" + std::to_string(v) + "}";
+    D::Loader ld;
+    CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+    CHECK(ld.c.ids == 2 + 2 + 9 + 9 + 13 + 8 + 8 + 12);
+    CHECK(ld.c.drop_charts == (v == 2 ? 1u : 0u) && ld.c.drop_arcs == (v == 2 ? 1u : 0u) &&
+          ld.c.drop_tracks == (v == 2 ? 1u : 0u));
+    CHECK(ld.c.widgets == ld.c.ids - (v == 2 ? 2 : 0));
+    fake::st.logs.clear();
+    CHECK_STR(commit_and_draw(ha, bytes, g_test), "");
+    int lines = 0;
+    for (const std::string &s : fake::st.logs)
+      if (s.find("over a page's limit") != std::string::npos) lines++;
+    CHECK(lines == (v == 2 ? 1 : 0));
+    // Page 0: ids 102..110 charts, 111..119 thermostats, 120..132 tracks.
+    for (int i = 0; i < 9; i++) {
+      CHECK_MSG((widget(102 + i) != nullptr) == (v == 1 || i < 8), "chart " + std::to_string(i));
+      CHECK_MSG((widget(111 + i) != nullptr) == (v == 1 || i < 8), "thermostat " + std::to_string(i));
+    }
+    for (int i = 0; i < 13; i++) {
+      const D::Widget *s = widget(120 + i);
+      if (!CHECK(s)) continue;
+      CHECK_MSG(s->track_n == (v == 1 || i < 12 ? 2 : 0), "track " + std::to_string(i));
+    }
+    CHECK(widget(101) && widget(101)->track_n == 0);
+    // Page 1 holds exactly the limits: everything is kept.
+    for (int i = 0; i < 8; i++) CHECK(widget(202 + i) && widget(210 + i));
+    for (int i = 0; i < 12; i++) CHECK(widget(218 + i) && widget(218 + i)->track_n == 2);
+  }
+  g_test = "page_cost_limits";
+}
+
+// Layouts made from the kit by dropping, repeating and retyping keys, by
+// numbers put in place of numbers and by empty and 1 px rectangles: none
+// crashes, each answers "", parse, version or limits, and each that loads
+// is drawn (cards spec B.9).
+TEST(fuzz_keys) {
+  const tj::Value kit = fixture("layout_v2_kit.dl.json");
+  uint32_t seed = 0x2545F491u;
+  auto rnd = [&](uint32_t n) {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    return n ? seed % n : 0;
+  };
+  // Every object and array of the tree, to pick one from.
+  std::function<void(tj::Value &, std::vector<tj::Value *> &)> nodes = [&](tj::Value &v, std::vector<tj::Value *> &out) {
+    if (v.t == tj::Value::OBJ || v.t == tj::Value::ARR) out.push_back(&v);
+    for (auto &kv : v.o) nodes(kv.second, out);
+    for (auto &e : v.a) nodes(e, out);
+  };
+  auto number = [](const char *text) {
+    tj::Value n;
+    n.t = tj::Value::NUM;
+    n.s = text;
+    n.n = atof(text);
+    return n;
+  };
+  auto retype = [&](tj::Value &v) {
+    static const char *const NUMS[] = {"0", "-1", "0.5", "1000000000", "2", "17", "65", "16777216"};
+    tj::Value n;
+    switch (rnd(7)) {
+      case 0: n = number(NUMS[rnd(8)]); break;
+      case 1: n.t = tj::Value::STR; n.s = "x"; break;
+      case 2: n.t = tj::Value::NUL; break;
+      case 3: n.t = tj::Value::BOOL; n.b = true; break;
+      case 4: n.t = tj::Value::ARR; n.a.push_back(number(NUMS[rnd(8)])); break;
+      case 5: n.t = tj::Value::OBJ; n.o.push_back({"s", number(NUMS[rnd(8)])}); break;
+      default: n.t = tj::Value::ARR; break;
+    }
+    v = n;
+  };
+  const int runs = QUICK ? 1000 : 10000;
+  const int draw_every = QUICK ? 50 : 10;
+  std::map<std::string, int> answers;
+  Ha ha;
+  int loaded = 0, drawn = 0;
+  const auto started = std::chrono::steady_clock::now();
+  for (int run = 0; run < runs; run++) {
+    tj::Value t = kit;
+    const int edits = 1 + (int) rnd(4);
+    for (int e = 0; e < edits; e++) {
+      std::vector<tj::Value *> all;
+      nodes(t, all);
+      tj::Value &n = *all[rnd((uint32_t) all.size())];
+      if (n.t == tj::Value::OBJ && !n.o.empty()) {
+        const size_t k = rnd((uint32_t) n.o.size());
+        tj::Value &val = n.o[k].second;
+        switch (rnd(5)) {
+          case 0: n.o.erase(n.o.begin() + (long) k); break;              // drop
+          case 1: n.o.push_back(n.o[k]); break;                          // repeat
+          case 2: retype(val); break;                                    // retype
+          case 3:
+            if (val.t == tj::Value::NUM) {
+              static const char *const NUMS[] = {"0", "-1", "0.5", "1000000000"};
+              val = number(NUMS[rnd(4)]);
+            } else {
+              retype(val);
+            }
+            break;
+          default:
+            if (n.o[k].first == "r" || n.o[k].first == "hr") {  // an empty or 1 px rectangle
+              const bool one = rnd(2) != 0;
+              val.a[2] = number(one ? "1" : "0");
+              val.a[3] = number(one ? "1" : "0");
+            } else {
+              retype(val);
+            }
+        }
+      } else if (n.t == tj::Value::ARR && !n.a.empty()) {
+        const size_t k = rnd((uint32_t) n.a.size());
+        switch (rnd(3)) {
+          case 0: n.a.erase(n.a.begin() + (long) k); break;
+          case 1: n.a.push_back(n.a[k]); break;
+          default: retype(n.a[k]);
+        }
+      }
+    }
+    const std::string bytes = json_text(t);
+    const std::string got = commit_answer(bytes);
+    answers[got]++;
+    if (!CHECK_MSG(got == "" || got == "parse" || got == "version" || got == "limits", got)) break;
+    if (got != "") continue;
+    loaded++;
+    if (loaded % draw_every != 1) continue;
+    drawn++;
+    const std::string shown = commit_and_draw(ha, bytes, "fuzz", drawn % 4 == 1);
+    if (!CHECK_MSG(shown.empty(), "run " + std::to_string(run) + ": " + shown)) break;
+  }
+  const long long ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+  printf("  %d layouts in %lld ms: %d load (%d drawn), %d parse, %d version, %d limits\n", runs, ms, answers[""], drawn,
+         answers["parse"], answers["version"], answers["limits"]);
+  CHECK(answers[""] > runs / 20 && answers["parse"] > runs / 20);
+}
+
+// The key tables find a key with about one comparison, however many names
+// they hold: the item table knows 44 (cards spec B.2).
+TEST(keys_found_at_once) {
+  const D::KeyIndex *tables[] = {&D::ITEM_INDEX, &D::THEME_INDEX, &D::STYLE_INDEX, &D::PAGE_INDEX,
+                                 &D::TOP_INDEX,  &D::TAP_INDEX,   &D::NAV_INDEX};
+  for (const D::KeyIndex *t : tables) {
+    for (int i = 0; i < t->count; i++) {
+      tab::json::Span k{t->names[i], strlen(t->names[i]), false};
+      CHECK_MSG(t->find(k) == i, t->names[i]);
+      tab::json::Span esc{t->names[i], strlen(t->names[i]), true};
+      CHECK(t->find(esc) == -1);
+    }
+    for (const char *other : {"", "x", "zz", "texts2", "Id", "valu", "values"}) {
+      tab::json::Span k{other, strlen(other), false};
+      CHECK_MSG(t->find(k) == -1, other);
+    }
+  }
+  CHECK(D::ITEM_INDEX.count == 44);
+  const std::string bytes = layout_bytes("layout_v2_kit.dl.json");
+  D::test_counts() = D::TestCounts{};
+  D::Loader ld;
+  CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+  const D::TestCounts c = D::test_counts();
+  printf("  kit: %llu keys, %llu names compared\n", (unsigned long long) c.keys, (unsigned long long) c.key_compares);
+  CHECK(c.keys > 400);
+  CHECK_MSG(c.key_compares * 4 <= c.keys * 5, std::to_string(c.key_compares) + " compares");  // at most 1.25 a key
+}
+
+// No walk of the heap while a layout is being built (cards spec B.6): the
+// largest free block is read once per commit, in stage(); build steps read
+// free PSRAM, and tab_status and tab_hello report the block read at the
+// commit until the build ends (contract 3.1). The rest of this test comes
+// with package E9.
+TEST(offscreen_costs_nothing) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const tj::Value f = fixture("commit_v2.json");
+  CHECK(ha.show(f["cases"][0]["calls"][0]["data"].s));  // 64 pages
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK_STR(ha.send(kit), "");
+  fake::st.largest = 15000000;
+  fake::st.largest_calls = 0;
+  CHECK_STR(ha.commit("ef98088e1fda910d"), "");
+  CHECK(fake::st.largest_calls == 1 && tab::building());
+  fake::st.largest = 9000000;
+  char out[768];
+  tj::Value v;
+  int steps = 0;
+  while (tab::building() && steps < 3000) {
+    CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v) && v["mem"]["block"].n == 15000000);
+    const size_t n = tab::on_hello(NONCE, 32, "", 0, out, sizeof out);
+    CHECK(n > 0 && tj::parse(out, n, &v) && v["mem"]["block"].n == 15000000);
+    hh::advance(1);
+    steps++;
+  }
+  CHECK(steps > 3);  // the build took several steps
+  CHECK_MSG(fake::st.largest_calls == 1, std::to_string(fake::st.largest_calls) + " calls");
+  CHECK(advance_until([] { return std::string(tab::active_hash()) == "ef98088e1fda910d"; }, 5000));
+  CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v) && v["mem"]["block"].n == 9000000);
+  CHECK(fake::st.largest_calls == 2);
+  // A build that runs short of free PSRAM stops with memory, whatever the
+  // largest block was at the commit.
+  CHECK_STR(ha.send(layout_bytes("layout_all_cards.dl.json")), "");
+  fake::st.largest = 16000000;
+  CHECK_STR(ha.commit("4384f665e4dd9f62"), "");
+  fake::st.free = 1000000;
+  hh::advance(50);
+  fake::st.free = 28000000;
+  CHECK_STR(status_build(), "memory");
+  CHECK_STR(tab::active_hash(), "ef98088e1fda910d");
 }

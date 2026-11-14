@@ -23,8 +23,18 @@
 namespace tab {
 namespace detail {
 
-static const char *const ENGINE_VERSION = "0.1.0";
-static const int PROTO_LOW = 1, PROTO_HIGH = 1;
+static const char *const ENGINE_VERSION = "0.2.0";
+// The highest contract version this build tells Home Assistant it speaks.
+// It stays 1 until the engine draws all of version 2: a build from the
+// middle of that work must get version 1 layouts, which it draws as engine
+// 0.1.0 did (cards spec B.8). The host tests and a bench build set it to 2.
+#ifndef TAB_PROTO_HIGH
+#define TAB_PROTO_HIGH 1
+#endif
+static const int PROTO_LOW = 1, PROTO_HIGH = TAB_PROTO_HIGH;
+// Field 1 of the input payload and of the knock: `input_version` in
+// contract.json, 1 in both contract versions. It is not `proto`.
+static const int INPUT_VERSION = 1;
 static const uint32_t MAX_CHUNK = 16000;
 static const uint32_t CACHE_LIMIT = 128 * 1024;  // larger layouts are not stored
 static const size_t MEMORY_MARGIN = 1024 * 1024; // PSRAM kept free during a build
@@ -302,6 +312,10 @@ struct State {
   uint8_t gen_next;
   Transfer tr;
   const char *build_code;
+  // The largest free PSRAM block read when the layout being built was
+  // staged. tab_status and tab_hello report it during the build: asking the
+  // heap walks all of it (contract 3.1).
+  size_t staged_block;
   bool obj_fail;  // LVGL could not create an object during this build slice
   int page;
   // Flash cache.
@@ -437,6 +451,15 @@ inline int bound_list(Model &m, const Bound &b, const double **out) {
   return s->list_n;
 }
 
+// (2) A colour field (contract 4.4): false for no value, and for a number
+// that is not whole or not 0 to 0xFFFFFF.
+inline bool bound_colour(Model &m, const Bound &b, uint32_t *out) {
+  double v;
+  if (!bound_num(m, b, &v) || !(v >= 0 && v <= MAX_COLOUR) || v != floor(v)) return false;
+  *out = (uint32_t) v;
+  return true;
+}
+
 inline bool bound_dirty(const Bound &b) {
   return b.how == B_SLOT && b.slot >= 1 && b.slot <= MAX_SLOTS && (g.dirty[(b.slot - 1) >> 3] >> ((b.slot - 1) & 7) & 1);
 }
@@ -509,8 +532,10 @@ inline Tok card_tokens(const Model &m, const Widget *card) {
   Tok t = theme_tokens(m);
   if (!card || card->style < 0 || card->style >= (int) m.nstyles) return t;
   const CardStyle &s = m.styles[card->style];
-  uint32_t *dst[S_COUNT] = {&t.bg, &t.bg2, &t.tx, &t.tx2, &t.acc, &t.acc2, &t.acct, &t.card2, &t.line, &t.onbg, &t.ontx};
-  for (int i = 0; i < S_COUNT; i++)
+  uint32_t *dst[S_COUNT] = {&t.bg,    &t.bg2,      &t.tx,   &t.tx2,      &t.acc,      &t.acc2,
+                            &t.acct,  &t.card2,    &t.line, &t.onbg,     &t.ontx,     &t.card_pr,
+                            &t.card2_pr, &t.accf, &t.accf_pr, &t.onbg_pr, &t.ion};
+  for (int i = 0; i < S_ONTX + 1; i++)
     if (s.mask & (1u << i)) *dst[i] = s.c[i];
   t.has_bg2 = (s.mask & (1u << S_BG2)) != 0;
   if (s.has_r) t.r = s.r;
@@ -522,6 +547,9 @@ inline Tok card_tokens(const Model &m, const Widget *card) {
     t.ion = contrast(t.acc, s.c[S_ONBG]) >= 3 ? t.acc : t.ontx;
     t.onbg_pr = blend(t.ontx, s.c[S_ONBG], 0.82);
   }
+  // (2) The roles a style names itself win over those worked out above.
+  for (int i = S_CARD_PR; i < S_COUNT; i++)
+    if (s.mask & (1u << i)) *dst[i] = s.c[i];
   return t;
 }
 
