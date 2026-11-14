@@ -1525,7 +1525,8 @@ TEST(icons_match_contract) {
   const std::pair<const char *, uint32_t> mine[] = {
       {"mdi:view-dashboard", D::ICON_VIEW_DASHBOARD}, {"mdi:lan-disconnect", D::ICON_LAN_DISCONNECT},
       {"mdi:minus", D::ICON_MINUS},                   {"mdi:plus", D::ICON_PLUS},
-      {"mdi:tablet-dashboard", D::ICON_TABLET},       {ic["placeholder"].s.c_str(), D::ICON_PLACEHOLDER},
+      {"mdi:tablet-dashboard", D::ICON_TABLET},       {"mdi:arrow-left", D::ICON_ARROW_LEFT},
+      {ic["placeholder"].s.c_str(), D::ICON_PLACEHOLDER},
       {ic["fallback"].s.c_str(), D::ICON_FALLBACK}};
   for (auto &p : mine) {
     CHECK_MSG(ic["icons"].has(p.first), p.first);
@@ -1628,6 +1629,7 @@ TEST(state_stream_fixture) {
         double lo, hi, st;
         D::limits_of(m, w, &lo, &hi, &st);
         const int fill = v.is_null() ? 0 : (int) std::floor(D::fraction(v.n, lo, hi) * w.r[2] + 0.5);
+        lv_obj_update_layout(w.o2);  // a page not on screen is never laid out by the engine (cards spec B.6)
         CHECK_MSG(lv_obj_get_width(w.o2) == fill || (fill == 0 && hidden(w.o2)), id);
       }
     }
@@ -2528,10 +2530,52 @@ static std::string gen_choice_cards(int pages, int cards) {
   return s;
 }
 
+// 64 pages, 20 normal and 44 detail pages, each with a card of two labels
+// and a button: on a normal page a go to its detail page, on a detail page
+// back. Every third page has a theme of its own. Eight side bar entries.
+static std::string gen_pages64(const char *tag = "") {
+  std::string s = "{\"nav\":[";
+  for (int i = 0; i < 8; i++) s += std::string(i ? "," : "") + "{\"p\":" + std::to_string(i) + ",\"title\":\"N\"}";
+  s += "],\"pages\":[";
+  int id = 1;
+  for (int p = 0; p < 64; p++) {
+    const bool detail = p >= 20;
+    s += std::string(p ? "," : "") + "{";
+    if (detail) s += "\"sub\":1,";
+    if (p % 3 == 0) s += "\"theme\":{\"wall\":" + std::to_string(0x101010 * (p % 8) + 0x203040) + "},";
+    s += "\"title\":\"P" + std::to_string(p) + tag + "\",\"w\":[{\"id\":" + std::to_string(id) +
+         ",\"r\":[100,20,500,300],\"t\":\"card\",\"w\":[";
+    s += "{\"id\":" + std::to_string(id + 1) + ",\"r\":[116,100,300,28],\"size\":1,\"t\":\"label\",\"text\":\"One\"},";
+    s += "{\"id\":" + std::to_string(id + 2) + ",\"r\":[116,140,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Two\"},";
+    s += "{\"id\":" + std::to_string(id + 3) + ",\"r\":[116,40,128,48],\"t\":\"button\",\"tap\":" +
+         (detail ? std::string("{\"back\":1}") : "{\"go\":" + std::to_string(20 + p) + "}") + ",\"text\":\"Go\"}]}]}";
+    id += 4;
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"\",\"v\":2}";
+  return s;
+}
+
 static uint32_t count_objects(lv_obj_t *o) {
   uint32_t n = 1;
   const uint32_t k = lv_obj_get_child_count(o);
   for (uint32_t i = 0; i < k; i++) n += count_objects(lv_obj_get_child(o, (int32_t) i));
+  return n;
+}
+
+// Every object the engine has made: those under its base on the shown
+// screen and those under the screen that is never shown (cards spec B.6:
+// the pages that are not on screen, a layout being built or deleted).
+static uint32_t count_built() { return count_objects(D::g.base) + count_objects(D::g.park); }
+
+// The objects of one layout: its root (the side bar and the page on
+// screen) and every page object that hangs under the parking screen.
+static uint32_t layout_objects(const D::Layout *l) {
+  if (!l || !l->root) return 0;
+  uint32_t n = count_objects(l->root);
+  for (uint32_t p = 0; l->model && p < l->model->npages; p++) {
+    lv_obj_t *po = l->model->pages[p].obj;
+    if (po && lv_obj_get_parent(po) != l->root) n += count_objects(po);
+  }
   return n;
 }
 
@@ -2581,7 +2625,8 @@ TEST(slice_budget) {
                              {"2 cards x 1 label x 20 pages", gen_cards(20, 2, 1)},
                              {"1 card x 200 labels", gen_big_card(201)},
                              {"1 card x 2047 labels", gen_big_card(2048)},
-                             {"16 cards x 16-option choice x 3 pages", gen_choice_cards(3, 16)}};
+                             {"16 cards x 16-option choice x 3 pages", gen_choice_cards(3, 16)},
+                             {"64 pages, 44 of them detail pages", gen_pages64()}};
   Ha ha;
   for (const L &l : ls) {
     g_test = l.name;
@@ -2591,10 +2636,10 @@ TEST(slice_budget) {
     const std::string h = hash16(l.bytes);
     CHECK_STR(ha.send(l.bytes, 16000), "");
     CHECK_STR(ha.commit(h), "");
-    uint32_t before = count_objects(D::g.base), most_made = 0, slices = 0;
+    uint32_t before = count_built(), most_made = 0, slices = 0;
     for (int t = 0; t < 60000 && h != tab::active_hash(); t++) {
       hh::advance(1);
-      const uint32_t n = count_objects(D::g.base);
+      const uint32_t n = count_built();
       if (n > before) {
         slices++;
         most_made = std::max(most_made, n - before);
@@ -2608,15 +2653,15 @@ TEST(slice_budget) {
     bool all_built = a != nullptr;
     for (uint32_t i = 0; a && i < a->model->nw; i++) all_built = all_built && a->model->w[i].obj;
     CHECK(all_built);
-    const uint32_t objects = a ? count_objects(a->root) : 0;
+    const uint32_t objects = layout_objects(a);
     // Back to the small layout: the big one is deleted a slice at a time.
     CHECK_STR(ha.send(small, 16000), "");
     CHECK_STR(ha.commit(hash16(small)), "");
-    before = count_objects(D::g.base);
+    before = count_built();
     uint32_t most_gone = 0, delete_slices = 0;
     for (int t = 0; t < 60000 && (hash16(small) != tab::active_hash() || slots_in_use() > 1); t++) {
       hh::advance(1);
-      const uint32_t n = count_objects(D::g.base);
+      const uint32_t n = count_built();
       if (n < before) {
         delete_slices++;
         most_gone = std::max(most_gone, before - n);
@@ -2648,10 +2693,10 @@ TEST(delete_shares_tick_time) {
   CHECK(slots_in_use() == 1);
   fake::st.on_poll = [] { hh::g_ms += D::SLICE_MS; };
   CHECK(ha.show(small));
-  const uint32_t before = count_objects(D::g.base);
+  const uint32_t before = count_built();
   hh::advance(500);
-  CHECK_MSG(slots_in_use() == 2 && count_objects(D::g.base) == before,
-            std::to_string(before - count_objects(D::g.base)) + " objects deleted with no time left");
+  CHECK_MSG(slots_in_use() == 2 && count_built() == before,
+            std::to_string(before - count_built()) + " objects deleted with no time left");
   fake::st.on_poll = nullptr;
   CHECK(advance_until([] { return slots_in_use() == 1; }, 2000));
   CHECK(fake::st.live.size() == 2 && !fake::st.bad_release);
@@ -2935,9 +2980,9 @@ TEST(boot_builds_in_slices) {
   uint32_t worst = 0, slices = 0;
   const auto t1 = std::chrono::steady_clock::now();
   for (int i = 0; i < 2000 && std::string(tab::active_hash()).empty(); i++) {
-    const uint32_t before = count_objects(D::g.base);
+    const uint32_t before = count_built();
     hh::advance(D::TICK_MS);
-    const uint32_t after = count_objects(D::g.base);
+    const uint32_t after = count_built();
     if (after > before) {
       slices++;
       if (after - before > worst) worst = after - before;
@@ -2949,7 +2994,7 @@ TEST(boot_builds_in_slices) {
   CHECK_MSG(worst <= (uint32_t) D::SLICE_OBJECTS + 8, std::to_string(worst) + " objects in one slice");
   CHECK(slices > 100);
   printf("  %zu bytes, %u objects: begin() %.1f ms, built in %u slices, %.0f ms\n", big.size(),
-         (unsigned) count_objects(D::g.base), begin_ms, (unsigned) slices, build_ms);
+         (unsigned) count_built(), begin_ms, (unsigned) slices, build_ms);
   // Showing the stored copy writes nothing.
   hh::advance(31000);
   CHECK(fake::st.save_calls == 0 && fake::st.erase_calls == 0);
@@ -2976,6 +3021,33 @@ TEST(boot_builds_in_slices) {
   CHECK_STR(tab::active_hash(), "");
   CHECK_STR(status_build(), "build");
   CHECK(!hidden(D::g.waiting) && fake::st.flash_has);
+  // (2) A stored layout of 64 pages (cards spec B.6): its page objects are
+  // made in the slices too, so no step makes more than the limit, and it
+  // comes up on page 0 with every page there.
+  const std::string pages64 = gen_pages64();
+  shutdown();
+  reset_platform();
+  fake::st.flash_has = true;
+  fake::st.flash.assign(pages64.begin(), pages64.end());
+  tab::begin(g_fonts, fake::platform());
+  worst = slices = 0;
+  for (int i = 0; i < 2000 && std::string(tab::active_hash()).empty(); i++) {
+    const uint32_t before = count_built();
+    hh::advance(D::TICK_MS);
+    const uint32_t after = count_built();
+    if (after > before) {
+      slices++;
+      if (after - before > worst) worst = after - before;
+    }
+  }
+  CHECK_STR(tab::active_hash(), hash16(pages64));
+  CHECK_MSG(worst <= (uint32_t) D::SLICE_OBJECTS + 8, std::to_string(worst) + " objects in one slice of 64 pages");
+  CHECK(slices >= 10 && tab::current_page() == 0 && tab::page_count() == 64);
+  bool all_pages = active() != nullptr;
+  for (int p = 0; all_pages && p < 64; p++) all_pages = active()->model->pages[p].obj != nullptr;
+  CHECK(all_pages);
+  printf("  64 pages: %u objects in %u slices of at most %u\n", (unsigned) layout_objects(active()), (unsigned) slices,
+         (unsigned) worst);
 }
 
 // LVGL cannot make an object: the build stops with "build" (contract 5),
@@ -2990,7 +3062,7 @@ TEST(build_failure_is_reported) {
   const uint32_t whole = [&] {
     // How many objects the all-cards layout makes.
     CHECK(ha.show(all));
-    const uint32_t n = active() ? count_objects(active()->root) : 0;
+    const uint32_t n = layout_objects(active());
     CHECK(ha.show(small));
     hh::advance(2000);
     return n;
@@ -3001,7 +3073,7 @@ TEST(build_failure_is_reported) {
   for (const std::string &v2 : {gen_choice_cards(1, 2), layout_bytes("layout_v2_kit.dl.json")}) {
     const std::string h = hash16(v2);
     CHECK(ha.show(v2));
-    const uint32_t n = active() ? count_objects(active()->root) : 0;
+    const uint32_t n = layout_objects(active());
     int choices = 0;
     for (uint32_t i = 0; active() && i < active()->model->nw; i++) choices += active()->model->w[i].kind == D::W_CHOICE;
     CHECK(choices >= 2 && n > 4);
@@ -5358,9 +5430,10 @@ TEST(kit_loads) {
       hh::advance(40);
       CHECK(tab::current_page() == p);
       shot(std::string(name) + "_page" + std::to_string(p));
-      // Version 1 looks: the layout's wall on every page until package E9
-      // draws page themes. Page 2 holds one small card (184 x 184, about
-      // 3.6 % of the page area), so the bar is lower than shots_of_pages'.
+      // Not blank: more than the layout's wall (page 1 has a wall of its own
+      // since package E9, page_theme). Page 2 holds one small card (184 x
+      // 184, about 3.6 % of the page area), so the bar is lower than
+      // shots_of_pages'.
       const double share = share_not(hh::rgb565(m.theme.c[D::C_WALL]), 96);
       CHECK_MSG(share > 0.025, std::string(name) + " page " + std::to_string(p) + ": " + std::to_string(share));
     }
@@ -6869,15 +6942,12 @@ static std::vector<std::string> run_input_case(const tj::Value &cs) {
 // Touch cases that need a part of a later package: each is played and
 // reported, and is not a failure yet. The package turns it green and takes
 // it off this list.
-static const char *const INPUT_LATER[][2] = {
-    {"swipe_right_wraps", "E9"},
-    {"back_entry", "E9"},               {"back_button", "E9"},
-    {"detail_swipe_right_returns", "E9"}, {"detail_swipe_left_does_nothing", "E9"},
-};
+// None is left since package E9 (pages).
+static const std::vector<std::pair<const char *, const char *>> INPUT_LATER = {};
 
 static const char *input_later(const std::string &name) {
   for (const auto &row : INPUT_LATER)
-    if (name == row[0]) return row[1];
+    if (name == row.first) return row.second;
   return nullptr;
 }
 
@@ -6911,7 +6981,7 @@ TEST(input_v2_fixture) {
     CHECK_MSG(miss.empty(), name + ": " + all);
   }
   for (const auto &row : INPUT_LATER)
-    CHECK_MSG(std::find(seen.begin(), seen.end(), row[0]) != seen.end(), std::string(row[0]) + " is no case");
+    CHECK_MSG(std::find(seen.begin(), seen.end(), row.first) != seen.end(), std::string(row.first) + " is no case");
   printf("  %d cases run, %d for later packages, %d with their payload\n", run, later, counted);
   CHECK(run >= 45 && counted >= 4 && run + later == (int) seen.size());
 }
@@ -9096,4 +9166,388 @@ TEST(choice_repaint_cost) {
   hh::refresh();
   CHECK_STR(rig.set("[1,1]"), "");
   CHECK(redrawn_in(c2->r) == 0);
+}
+
+// ================================================================ pages (package E9)
+
+// A layout v2 for the page rules of contract 4.8. subs says which of the
+// five pages say `sub` 1: by default page 0 (which counts for nothing) and
+// the detail pages 1 (`ttl` 5) and 3 (`ttl` 0), between normal pages, so a
+// swipe has to skip them. The side bar names pages 0, 3, 2 and 4. Each page
+// has one card: on page 0 buttons with go 1, go 3 and back; on page 1 go 3,
+// back and one that asks first; on page 2 go 1; on page 3 back. tag makes
+// another hash.
+static std::string gen_detail_layout(const char *tag = "", const char *subs = "11010") {
+  auto button = [](int id, int x, const std::string &rest) {
+    return "{\"id\":" + std::to_string(id) + ",\"r\":[" + std::to_string(x) + ",40,128,48],\"t\":\"button\"," + rest + "}";
+  };
+  const std::string go1 = "\"tap\":{\"go\":1},\"text\":\"Go 1\"", go3 = "\"tap\":{\"go\":3},\"text\":\"Go 3\"",
+                    back = "\"tap\":{\"back\":1},\"text\":\"Back\"";
+  const std::string items[5] = {
+      button(2, 116, go1) + "," + button(3, 260, go3) + "," + button(4, 404, back),
+      button(11, 116, go3) + "," + button(12, 260, back) + "," +
+          button(13, 404, "\"confirm\":\"Sure?\",\"tap\":{\"p\":3},\"text\":\"Ask\""),
+      button(21, 116, go1), button(31, 116, back),
+      "{\"id\":41,\"r\":[116,40,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Four\"}"};
+  std::string s = "{\"nav\":[{\"p\":0,\"title\":\"A\"},{\"p\":3,\"title\":\"D\"},{\"p\":2,\"title\":\"B\"},"
+                  "{\"p\":4,\"title\":\"C\"}],\"pages\":[";
+  for (int p = 0; p < 5; p++) {
+    s += std::string(p ? "," : "") + "{";
+    if (subs[p] == '1') s += "\"sub\":1,";
+    if (p == 1) s += "\"ttl\":5,";
+    if (p == 3) s += "\"ttl\":0,";
+    s += "\"title\":\"P" + std::to_string(p) + tag + "\",\"w\":[{\"id\":" + std::to_string(100 + p) +
+         ",\"r\":[100,20,500,300],\"t\":\"card\",\"w\":[" + items[p] + "]}]}";
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"\",\"v\":2}";
+  return s;
+}
+
+static void swipe_left() { hh::drag(900, 700, 500, 690, 120); }
+static void swipe_right() { hh::drag(500, 700, 900, 700, 120); }
+
+// Contract 4.8: swipes skip detail pages and wrap over the normal ones; the
+// back entry, a swipe to the right and {"back": 1} return to the origin; a
+// go from one detail page to another keeps it; `ttl` without a touch, never
+// with `ttl` 0, standing still under a finger and while the question is
+// open; a layout switch never ends on a detail page; a restart starts on
+// page 0; `sub` on page 0 counts for nothing; a side bar entry that names a
+// detail page is not drawn and the others keep their places.
+TEST(detail_pages) {
+  Ha ha;
+  ha.boot(true);
+  CHECK(ha.hello());
+  CHECK(ha.show(gen_detail_layout()));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model *m = l->model;
+  auto page = [] { return tab::current_page(); };
+  CHECK(m->pages[0].sub == 0 && !D::is_detail(*m, 0) && D::is_detail(*m, 1) && !D::is_detail(*m, 2) &&
+        D::is_detail(*m, 3) && !D::is_detail(*m, 4));
+  CHECK(page() == 0 && !D::g.on_detail);
+  // The entry for page 3 is not drawn; the others keep their places.
+  CHECK(m->nav[1].obj == nullptr && obj_at(m->nav[0].obj, 16, 16, 64, 64) && obj_at(m->nav[2].obj, 16, 160, 64, 64) &&
+        obj_at(m->nav[3].obj, 16, 232, 64, 64));
+  CHECK(m->back.obj && hidden(m->back.obj) && m->back.page == D::BACK_ENTRY);
+  // Swipes over the normal pages 0, 2 and 4, wrapping at both ends.
+  for (int want : {2, 4, 0}) {
+    swipe_left();
+    CHECK_MSG(page() == want, "left to " + std::to_string(page()) + ", want " + std::to_string(want));
+  }
+  for (int want : {4, 2, 0}) {
+    swipe_right();
+    CHECK_MSG(page() == want, "right to " + std::to_string(page()) + ", want " + std::to_string(want));
+  }
+  // A go opens a detail page; the page it came from is the origin. The side
+  // bar shows only the back entry, in the look of the entry on screen.
+  // The stock theme has card_pr equal to onbg; a distinct card_pr shows which is drawn.
+  D::Theme &th1 = const_cast<D::Theme &>(D::page_theme(*m, 1));
+  CHECK(th1.c[D::C_CARD_PR] == th1.c[D::C_ONBG]);
+  th1.c[D::C_CARD_PR] = 0x5A2D7E;
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.on_detail && D::g.origin == 0);
+  hh::advance(40);
+  CHECK(!hidden(m->back.obj) && hidden(m->nav[0].obj) && hidden(m->nav[2].obj) && hidden(m->nav[3].obj));
+  CHECK(obj_at(m->back.obj, 16, 16, 64, 64));
+  char arrow[5];
+  D::icon_utf8(D::ICON_ARROW_LEFT, arrow);
+  CHECK_STR(label_text(m->back.icon_obj), arrow);
+  CHECK(hh::pixel(20, 48) == hh::rgb565(m->theme.c[D::C_ONBG]));
+  CHECK(lv_color_to_u32(lv_obj_get_style_text_color(m->back.icon_obj, LV_PART_MAIN)) == (0xFF000000u | m->theme.c[D::C_ACC]));
+  // Back by the entry, card_pr while it is pressed: the side bar as before.
+  finger(48, 48, true);
+  CHECK(advance_until([&] { return m->back.pressed != 0; }, 20));
+  hh::refresh();
+  CHECK(hh::pixel(20, 48) == hh::rgb565(0x5A2D7E));
+  CHECK(page() == 1);
+  finger(48, 48, false);
+  hh::advance(40);
+  CHECK(!m->back.pressed);
+  CHECK(page() == 0 && !D::g.on_detail);
+  CHECK(hidden(m->back.obj) && !hidden(m->nav[0].obj) && !hidden(m->nav[2].obj));
+  // From page 2: a go from detail page 1 to detail page 3 keeps the origin;
+  // a swipe to the left does nothing there, one to the right goes back.
+  swipe_left();
+  CHECK(page() == 2);
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  hh::tap(180, 64);
+  CHECK(page() == 3 && D::g.origin == 2);
+  swipe_left();
+  CHECK(page() == 3);
+  swipe_right();
+  CHECK(page() == 2 && !D::g.on_detail);
+  // Back by {"back": 1}; on a normal page it does nothing.
+  hh::tap(180, 64);
+  hh::tap(324, 64);
+  CHECK(page() == 2);
+  swipe_right();
+  CHECK(page() == 0);
+  hh::tap(468, 64);
+  CHECK(page() == 0);
+  CHECK(fake::events("tab1_input").empty());  // pages send nothing
+  // `ttl` 5: back after 5 s without a touch, counted from the release.
+  hh::tap(180, 64);
+  CHECK(page() == 1);
+  hh::advance(4900);
+  CHECK(page() == 1);
+  hh::advance(200);
+  CHECK(page() == 0 && !D::g.on_detail);
+  // A press starts the count again.
+  hh::tap(180, 64);
+  hh::advance(3000);
+  hh::tap(900, 600);
+  hh::advance(3000);
+  CHECK(page() == 1);
+  hh::advance(2200);
+  CHECK(page() == 0);
+  // It stands still while a finger is down.
+  hh::tap(180, 64);
+  finger(900, 600, true);
+  hh::advance(8000);
+  CHECK(page() == 1);
+  finger(900, 600, false);
+  hh::advance(4800);
+  CHECK(page() == 1);
+  hh::advance(300);
+  CHECK(page() == 0);
+  // And while the question box is open.
+  hh::tap(180, 64);
+  hh::tap(468, 64);
+  CHECK(page() == 1 && !hidden(D::g.question));
+  hh::advance(9000);
+  CHECK(page() == 1 && !hidden(D::g.question));
+  D::question_answer(false);
+  hh::advance(4800);
+  CHECK(page() == 1);
+  hh::advance(300);
+  CHECK(page() == 0);
+  // `ttl` 0: never.
+  hh::tap(180, 64);
+  hh::tap(180, 64);
+  CHECK(page() == 3 && D::g.origin == 0);
+  hh::advance(120000);
+  CHECK(page() == 3);
+  hh::tap(180, 64);
+  CHECK(page() == 0);
+  // A switch from a detail page shows the origin when it is a normal page
+  // of the new layout...
+  swipe_left();
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("b")));
+  CHECK(page() == 2 && !D::g.on_detail && D::g.origin == 2);
+  // ... else page 0 (page 2 is a detail page of this one). The tap comes
+  // at once after the switch: a page is laid out when it is shown, so its
+  // button is where it is drawn.
+  {
+    D::Widget *b21 = widget(21);
+    lv_area_t a{};
+    if (b21 && b21->obj) lv_obj_get_coords(b21->obj, &a);  // no layout pass here
+    CHECK(b21 && a.x1 == 116 && a.y1 == 40 && lv_area_get_width(&a) == 128);
+  }
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("c", "01110")));
+  CHECK(page() == 0 && !D::g.on_detail);
+  m = active()->model;
+  CHECK(m->nav[1].obj == nullptr && m->nav[2].obj == nullptr && m->nav[3].obj != nullptr);
+  // From a normal page whose index is a detail page of the new layout: page
+  // 0, and the origin is not read (it still names page 2 here, a normal page
+  // of the new layout).
+  CHECK(ha.show(gen_detail_layout("d")));
+  swipe_left();
+  hh::tap(180, 64);
+  hh::tap(324, 64);
+  swipe_left();
+  CHECK(page() == 4 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("e", "01011")));
+  CHECK(page() == 0 && D::g.origin == 0);
+  // A restart starts on page 0.
+  const std::string stored = gen_detail_layout("f");
+  CHECK(ha.show(stored));
+  swipe_left();
+  CHECK(page() == 2);
+  hh::advance(31000);
+  CHECK(fake::st.flash_has);
+  ha.boot(true, true);
+  CHECK(advance_until([&] { return hash16(stored) == tab::active_hash(); }, 3000));
+  CHECK(page() == 0 && !D::g.on_detail);
+}
+
+// Contract 4.8: the side bar, the question box, the message strip, the page
+// and every card on a page with a theme take its colours; back on a page
+// without one they take the layout's again. The root, the side bar and the
+// engine's pieces are restyled only when the theme changes.
+TEST(page_theme) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Layout *l = active();
+  D::Model &m = *l->model;
+  const D::Theme lt = m.theme, pt = m.themes[m.pages[1].theme];  // copies: the model goes with its layout
+  CHECK(m.pages[1].theme > 0 && pt.c[D::C_WALL] != lt.c[D::C_WALL] && pt.c[D::C_CARD] != lt.c[D::C_CARD]);
+  auto bg = [](lv_obj_t *o) { return lv_color_to_u32(lv_obj_get_style_bg_color(o, LV_PART_MAIN)) & 0xFFFFFF; };
+  auto fg = [](lv_obj_t *o) { return lv_color_to_u32(lv_obj_get_style_text_color(o, LV_PART_MAIN)) & 0xFFFFFF; };
+  // A point of the page that no item covers: the wall.
+  auto wall_at = [&](int p, int *x, int *y) {
+    for (int yy = 790; yy > 0; yy -= 10)
+      for (int xx = 1270; xx > 100; xx -= 10) {
+        bool free = true;
+        for (uint32_t i = 0; i < m.nw && free; i++) {
+          const D::Widget &w = m.w[i];
+          if (w.page == p && w.card < 0 && xx >= w.r[0] - 2 && xx < w.r[0] + w.r[2] + 2 && yy >= w.r[1] - 2 &&
+              yy < w.r[1] + w.r[3] + 2)
+            free = false;
+        }
+        if (free) {
+          *x = xx;
+          *y = yy;
+          return true;
+        }
+      }
+    return false;
+  };
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  if (!CHECK(wall_at(0, &x0, &y0) && wall_at(1, &x1, &y1))) return;
+  hh::advance(40);
+  CHECK(hh::pixel(x0, y0) == hh::rgb565(lt.c[D::C_WALL]) && hh::pixel(4, 700) == hh::rgb565(lt.c[D::C_CARD]));
+  // Page 1 has a theme: one restyle.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(1);
+  hh::advance(40);
+  CHECK(D::test_counts().page_themes == 1);
+  CHECK(hh::pixel(x1, y1) == hh::rgb565(pt.c[D::C_WALL]));
+  CHECK(hh::pixel(4, 700) == hh::rgb565(pt.c[D::C_CARD]) && bg(l->bar) == pt.c[D::C_CARD]);
+  CHECK(hh::pixel(20, 16 + 72 + 32) == hh::rgb565(pt.c[D::C_ONBG]));
+  CHECK(fg(m.nav[1].icon_obj) == pt.c[D::C_ACC] && fg(m.nav[0].icon_obj) == pt.c[D::C_TX2]);
+  // A card of the page: the page's card colour.
+  D::Widget *c31 = widget(31);
+  if (CHECK(c31 && c31->obj)) CHECK(bg(c31->obj) == pt.c[D::C_CARD]);
+  // The question box, opened by card 44 (it asks first).
+  D::Widget *c44 = widget(44);
+  if (!CHECK(c44)) return;
+  hh::tap(centre_x(c44->r), centre_y(c44->r));
+  CHECK(!hidden(D::g.question));
+  CHECK(bg(D::g.q_box) == pt.c[D::C_CARD] && bg(D::g.q_yes) == pt.c[D::C_ACCF] && bg(D::g.q_no) == pt.c[D::C_CARD2] &&
+        fg(D::g.q_text) == pt.c[D::C_TX]);
+  hh::advance(40);
+  CHECK(hh::pixel(380, 300) == hh::rgb565(pt.c[D::C_CARD]));
+  D::question_answer(false);
+  // The message strip.
+  D::show_strip("Strip");
+  CHECK(bg(D::g.strip) == pt.c[D::C_CARD2] && fg(D::g.strip_label) == pt.c[D::C_TX]);
+  D::hide_strip();
+  // Back to page 0: the layout's colours again, in one restyle.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(0);
+  hh::advance(40);
+  CHECK(D::test_counts().page_themes == 1);
+  CHECK(hh::pixel(x0, y0) == hh::rgb565(lt.c[D::C_WALL]) && hh::pixel(4, 700) == hh::rgb565(lt.c[D::C_CARD]));
+  CHECK(bg(D::g.q_box) == lt.c[D::C_CARD] && bg(D::g.strip) == lt.c[D::C_CARD2] && fg(m.nav[0].icon_obj) == lt.c[D::C_ACC]);
+  // Pages of one theme: no restyle. A swipe to page 1 restyles as a go does.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(2);
+  tab::go_to(0);
+  tab::go_to(0);
+  CHECK(D::test_counts().page_themes == 0);
+  swipe_left();
+  CHECK(tab::current_page() == 1 && D::test_counts().page_themes == 1 && bg(l->bar) == pt.c[D::C_CARD]);
+  // A layout that comes up on a page with a theme shows it at once.
+  CHECK(rig.ha.show(layout_bytes("layout_v2_kit.nochoice.dl.json")));
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && hh::pixel(4, 700) == hh::rgb565(pt.c[D::C_CARD]));
+}
+
+// Objects reachable from the shown screen are exactly the engine's own
+// pieces and, for the layout on screen, its root, the side bar and the page
+// on screen (cards spec B.6). "" when that holds, else what does not.
+static std::string shown_tree() {
+  lv_obj_t *scr = lv_screen_active();
+  if (scr != D::g.screen || scr == D::g.park) return "another screen is shown";
+  if (lv_obj_get_child_count(scr) != 2 || lv_obj_get_child(scr, 0) != D::g.base || lv_obj_get_child(scr, 1) != D::g.overlay)
+    return "the screen holds more than the base and the overlay";
+  D::Layout *a = active();
+  for (uint32_t i = 0; i < lv_obj_get_child_count(D::g.base); i++) {
+    lv_obj_t *c = lv_obj_get_child(D::g.base, (int32_t) i);
+    if (c != D::g.waiting && (!a || c != a->root)) return "an object under the base that is not the shown layout's";
+  }
+  uint32_t want = 1 + count_objects(D::g.overlay) + 1 + count_objects(D::g.waiting);
+  if (a && a->root) {
+    lv_obj_t *po = a->model->pages[D::g.page].obj;
+    if (lv_obj_get_child_count(a->root) != 2 || lv_obj_get_child(a->root, 0) != a->bar || lv_obj_get_child(a->root, 1) != po)
+      return "the root holds more than the side bar and the page on screen";
+    want += 1 + count_objects(a->bar) + count_objects(po);
+  }
+  if (count_objects(scr) != want)
+    return std::to_string(count_objects(scr)) + " objects on the shown screen, want " + std::to_string(want);
+  return "";
+}
+
+// The page rule on the object tree (cards spec B.6): with the kit on screen
+// on page 1 and a 64-page layout being built, then shown on page 1, then the
+// kit being deleted, the shown screen holds only the page on screen, the
+// side bar and the engine's pieces; everything else hangs under the parking
+// screen, which the engine never lays out (it stays marked for a layout pass).
+TEST(offscreen_tree) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  CHECK(ha.show(layout_bytes("layout_v2_kit.dl.json")));
+  tab::go_to(1);
+  hh::advance(40);
+  CHECK_STR(shown_tree(), "");
+  D::Layout *kit = active();
+  const std::string big = gen_pages64();
+  CHECK_STR(ha.send(big, 16000), "");
+  CHECK_STR(ha.commit(hash16(big)), "");
+  int steps = 0;
+  std::string worst;
+  uint32_t most_parked = 0;
+  while (tab::building() && steps < 5000) {
+    hh::advance(1);
+    steps++;
+    const std::string t = shown_tree();
+    if (!t.empty() && worst.empty()) worst = "step " + std::to_string(steps) + ": " + t;
+    most_parked = std::max(most_parked, count_objects(D::g.park));
+    D::Layout *s = D::staged_layout();
+    if (s && s->root && lv_obj_get_screen(s->root) != D::g.park && worst.empty()) worst = "the layout being built is shown";
+  }
+  CHECK_STR(worst, "");
+  CHECK(steps > 10);
+  CHECK(advance_until([&] { return hash16(big) == tab::active_hash(); }, 5000));
+  CHECK(tab::current_page() == 1);
+  CHECK_STR(shown_tree(), "");
+  // The kit is being deleted under the parking screen.
+  CHECK(kit->state == D::L_RETIRING && kit->root && lv_obj_get_screen(kit->root) == D::g.park);
+  // Every page that is not on screen is parked, and the engine laid none out.
+  D::Layout *a = active();
+  int parked = 0;
+  for (uint32_t p = 0; p < a->model->npages; p++)
+    parked += a->model->pages[p].obj && lv_obj_get_screen(a->model->pages[p].obj) == D::g.park;
+  CHECK(parked == 63);
+  CHECK(D::g.park->scr_layout_inv == 1);
+  const uint32_t on_screen = count_objects(lv_screen_active()), all = count_built();
+  printf("  64 pages: %u objects on the shown screen of %u, at most %u parked during the build\n", (unsigned) on_screen,
+         (unsigned) all, (unsigned) most_parked);
+  CHECK(on_screen * 5 < all);
+  CHECK(advance_until([] { return slots_in_use() == 1; }, 3000));
+  CHECK_STR(shown_tree(), "");
+  // Pages on screen one after the other: always one page under the root, and
+  // its widgets at their rectangles once shown.
+  for (int p : {2, 20, 0, 41, 19}) {
+    tab::go_to(p);
+    hh::advance(40);
+    CHECK_MSG(shown_tree().empty(), "page " + std::to_string(p) + ": " + shown_tree());
+    const D::Page &pg = a->model->pages[p];
+    for (uint32_t i = pg.first; i < (uint32_t) pg.first + pg.count; i++) {
+      const D::Widget &w = a->model->w[i];
+      if (w.kind == D::W_CARD) CHECK_MSG(obj_at(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]), "page " + std::to_string(p));
+    }
+  }
+  CHECK(D::g.park->scr_layout_inv == 1);
+  // A tab_clear parks the layout on screen for its deletion.
+  CHECK_STR(ha.clear(), "");
+  CHECK_STR(shown_tree(), "");
+  CHECK(advance_until([] { return slots_in_use() == 0; }, 3000));
+  CHECK(lv_obj_get_child_count(D::g.park) == 0);
 }

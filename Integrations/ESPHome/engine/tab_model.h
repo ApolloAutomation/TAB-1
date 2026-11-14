@@ -34,6 +34,7 @@ struct TestCounts {
   uint64_t look_updates;  // card_look_update runs
   uint64_t colour_updates;  // widget_colour_update runs
   uint64_t choice_cells;    // cells a choice drew
+  uint64_t page_themes;     // (2) times the root, side bar and engine pieces took another page's theme
 };
 inline TestCounts &test_counts() {
   static TestCounts c;
@@ -334,6 +335,7 @@ struct Model {
   uint8_t nnav, nthemes;
   uint32_t objects;  // estimate of LVGL objects, for the memory check
   Nav nav[MAX_NAV];
+  Nav back;  // (2) the side bar's back entry, made when the layout has a detail page
 };
 
 struct Counts {
@@ -1355,7 +1357,8 @@ inline Model *model_fill(const char *data, size_t n, const Counts &counts, void 
   m->nstyles = (uint16_t) counts.styles;
   m->nlooks = (uint16_t) counts.cards;
   m->nthemes = (uint8_t) counts.themes;
-  m->objects = counts.objects + counts.pages + 2;
+  // (2) The root, the side bar, a page object each, and the back entry's two.
+  m->objects = counts.objects + counts.pages + 2 + (counts.normal < counts.pages ? 2 : 0);
   Loader ld;
   ld.data = data;
   ld.n = n;

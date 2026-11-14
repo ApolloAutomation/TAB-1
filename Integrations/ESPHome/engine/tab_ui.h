@@ -901,7 +901,10 @@ inline void on_nav_event(lv_event_t *e) {
       paint_nav(*l);
       break;
     case LV_EVENT_CLICKED:
-      if (n->page < l->model->npages) show_page(*l, n->page);
+      if (n->page == BACK_ENTRY)
+        page_back(*l);
+      else if (n->page < l->model->npages)
+        show_page(*l, n->page);
       break;
     default:
       break;
@@ -2255,14 +2258,20 @@ inline lv_obj_t *page_obj(Layout &l, int page) {
   return (l.model && page >= 0 && page < l.model->npages) ? l.model->pages[page].obj : nullptr;
 }
 
+// The side bar's entries (contract 4.7) in the theme of the page on screen
+// (4.8). (2) On a detail page only the back entry shows, in the look of the
+// entry on screen; on a normal page every entry but it.
 inline void paint_nav(Layout &l) {
   if (!l.model) return;
   Model &m = *l.model;
-  const Tok t = theme_tokens(m);
   const int page = l.state == L_ACTIVE ? g.page : -1;
+  const Tok t = theme_tokens(page_theme(m, page));
+  const bool detail = is_detail(m, page);
   for (int i = 0; i < m.nnav; i++) {
     Nav &n = m.nav[i];
     if (!n.obj) continue;
+    set_hidden(n.obj, detail);
+    if (detail) continue;
     const bool act = n.page == page;
     if (n.pressed) {
       set_bg(n.obj, t.card_pr);
@@ -2271,14 +2280,56 @@ inline void paint_nav(Layout &l) {
     } else {
       style_num(n.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
     }
+    set_radius(n.obj, t.r2);
     set_text_colour(n.icon_obj, act ? t.acc : t.tx2);
+  }
+  if (m.back.obj) {
+    set_hidden(m.back.obj, !detail);
+    if (detail) {
+      set_bg(m.back.obj, m.back.pressed ? t.card_pr : t.onbg);
+      set_radius(m.back.obj, t.r2);
+      set_text_colour(m.back.icon_obj, t.acc);
+    }
   }
 }
 
+// (2) Whether a layout has a detail page; only then is the back entry made.
+inline bool has_detail(const Model &m) {
+  for (int p = 1; p < (int) m.npages; p++)
+    if (is_detail(m, p)) return true;
+  return false;
+}
+
+// The objects build_root makes: the root, the side bar, two for each entry
+// that is drawn, and two for the back entry.
+inline uint32_t root_objects(const Model &m) {
+  uint32_t n = 2 + (has_detail(m) ? 2 : 0);
+  for (int i = 0; i < m.nnav; i++) n += is_detail(m, m.nav[i].page) ? 0 : 2;
+  return n;
+}
+
+// One side bar entry at place i: a button with an icon 28 (contract 4.7).
+inline bool build_entry(lv_obj_t *bar, Nav &n, int i, int r2, uint32_t icon) {
+  n.obj = plain(bar);
+  if (!n.obj) return false;
+  place(n.obj, 16, 16 + 72 * i, 64, 64);
+  set_radius(n.obj, r2);
+  set_clickable(n.obj, true);
+  add_events(n.obj, on_nav_event, &n);
+  n.icon_obj = icon_box(n.obj, 0, 0, 64, 64, 28);
+  set_icon(n.icon_obj, 28, icon);
+  return n.icon_obj != nullptr;
+}
+
+// The root and the side bar, made under g.park: a layout being built hangs
+// under the screen that is never shown (cards spec B.6). The page objects
+// come in the build's slices (build_page).
 inline void build_root(Layout &l) {
   Model &m = *l.model;
   const Tok t = theme_tokens(m);
-  l.root = plain(g.base);
+  l.shown = -1;
+  l.theme_shown = 0;
+  l.root = plain(g.park);
   if (!l.root) return;
   place(l.root, 0, 0, SCREEN_W, SCREEN_H);
   set_bg(l.root, m.theme.c[C_WALL]);
@@ -2288,25 +2339,28 @@ inline void build_root(Layout &l) {
   if (!l.bar) return;
   place(l.bar, 0, 0, 96, SCREEN_H);
   set_bg(l.bar, m.theme.c[C_CARD]);
+  // (2) An entry that names a detail page is not drawn; the others keep
+  // their places (contract 4.2).
   for (int i = 0; i < m.nnav; i++) {
     Nav &n = m.nav[i];
-    n.obj = plain(l.bar);
-    if (!n.obj) return;
-    place(n.obj, 16, 16 + 72 * i, 64, 64);
-    set_radius(n.obj, t.r2);
-    set_clickable(n.obj, true);
-    add_events(n.obj, on_nav_event, &n);
-    n.icon_obj = icon_box(n.obj, 0, 0, 64, 64, 28);
-    set_icon(n.icon_obj, 28, n.icon ? n.icon : ICON_VIEW_DASHBOARD);
+    if (is_detail(m, n.page)) continue;
+    if (!build_entry(l.bar, n, i, t.r2, n.icon ? n.icon : ICON_VIEW_DASHBOARD)) return;
   }
-  const int target = g.page < m.npages ? g.page : 0;
-  for (int p = 0; p < m.npages; p++) {
-    lv_obj_t *po = plain(l.root);
-    if (!po) return;
-    place(po, 0, 0, SCREEN_W, SCREEN_H);
-    if (p != target) lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
-    m.pages[p].obj = po;
+  if (has_detail(m)) {
+    m.back.page = BACK_ENTRY;
+    if (!build_entry(l.bar, m.back, 0, t.r2, ICON_ARROW_LEFT)) return;
+    lv_obj_add_flag(m.back.obj, LV_OBJ_FLAG_HIDDEN);
   }
+}
+
+// One page object, under g.park and hidden until show_page moves it under
+// the root. Made in the build's slices, one object each (cards spec B.6).
+inline void build_page(Layout &l, int page) {
+  lv_obj_t *po = plain(g.park);
+  if (!po) return;
+  place(po, 0, 0, SCREEN_W, SCREEN_H);
+  lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
+  l.model->pages[page].obj = po;
 }
 
 inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy) {
@@ -2548,19 +2602,34 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
   if (l.b_stage == 0) {
     build_root(l);
     if (g.obj_fail) return false;
-    objects += 2 + m.npages + 2u * m.nnav;
+    objects += root_objects(m);
     l.b_stage = 1;
     l.b_item = 0;
     l.b_child = 0;
+    l.b_page = 0;
   }
+  // (2) Page objects are made under the slice rule too, each before the
+  // first item of its page (cards spec B.6): 64 pages are not one step.
+  auto pages_up_to = [&](uint32_t last) {
+    while (l.b_page <= last && l.b_page < m.npages) {
+      if (spent(1)) return false;
+      build_page(l, l.b_page);
+      if (g.obj_fail) return false;
+      objects++;
+      l.b_page++;
+    }
+    return true;
+  };
   while (l.b_stage == 1) {
     if (l.b_item >= m.nw) {
+      if (!pages_up_to(m.npages)) return false;  // pages without items
       l.b_stage = 2;
       break;
     }
     Widget &w = m.w[l.b_item];
     const uint32_t left = m.nw - 1u - l.b_item;
     const uint32_t kids = w.kind == W_CARD ? (w.children < left ? w.children : left) : 0;
+    if (l.b_child == 0 && !pages_up_to(w.page)) return false;
     lv_obj_t *parent = page_obj(l, w.page);
     if (l.b_child == 0) {
       const uint32_t cost = parent ? Loader::objects_of(w) : 0;
@@ -2636,26 +2705,72 @@ inline bool delete_step(Layout &l, Budget &b) {
   return true;
 }
 
+// (2) The root, the side bar and the engine's own pieces in the theme of the
+// page on screen (contract 4.8), set only when that theme differs from the
+// one they show.
+inline void paint_page_theme(Layout &l, int page) {
+  Model &m = *l.model;
+  const uint8_t th = m.pages[page].theme;
+  if (th == l.theme_shown) return;
+  TAB_COUNT(page_themes);
+  l.theme_shown = th;
+  const Theme &t = page_theme(m, page);
+  set_bg(l.root, t.c[C_WALL]);
+  set_bg(l.bar, t.c[C_CARD]);
+  restyle_overlay();
+}
+
+// Shows a page of the layout on screen: its object moves under the root, the
+// one shown before back under g.park (cards spec B.6), and what went stale
+// on it while it was away is painted first. (2) Opening a detail page from a
+// normal page keeps that page as the origin; a detail page opened from
+// another keeps the origin it has (contract 4.8).
 inline void show_page(Layout &l, int page) {
   if (!l.model || page < 0 || page >= l.model->npages) return;
-  if (l.state == L_ACTIVE) {
-    paint_stale_page(l, page);  // what changed while it was not on screen
-    for (int p = 0; p < l.model->npages; p++) {
-      lv_obj_t *po = l.model->pages[p].obj;
-      if (!po || p == page) continue;
-      lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
+  if (l.state != L_ACTIVE) return;
+  Model &m = *l.model;
+  const bool detail = is_detail(m, page);
+  if (detail && !g.on_detail) g.origin = g.page;
+  if (detail) g.idle_ms = 0;
+  paint_stale_page(l, page);  // what changed while it was not on screen
+  if (l.shown != page) {
+    lv_obj_t *old = page_obj(l, l.shown);
+    if (old) {
+      lv_obj_add_flag(old, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_parent(old, g.park);
     }
-    if (l.model->pages[page].obj) lv_obj_remove_flag(l.model->pages[page].obj, LV_OBJ_FLAG_HIDDEN);
-    g.page = page;
-    paint_nav(l);
+    lv_obj_t *po = page_obj(l, page);
+    if (po && l.root) {
+      lv_obj_set_parent(po, l.root);
+      lv_obj_remove_flag(po, LV_OBJ_FLAG_HIDDEN);
+    }
+    l.shown = (int16_t) page;
+    // A parked page was never laid out. The pass the next refresh would make
+    // over the shown screen runs now, so a touch right after the switch
+    // finds the page's objects where they are drawn. Never for g.park.
+    if (g.screen && l.root && lv_obj_get_screen(l.root) == g.screen) lv_obj_update_layout(g.screen);
   }
+  g.page = page;
+  g.on_detail = detail;
+  paint_page_theme(l, page);
+  paint_nav(l);
+}
+
+// (2) Back to the page a detail page was opened from: the back entry, a
+// swipe to the right, `tap {"back": 1}`, or `ttl` (contract 4.8). Nothing
+// on a normal page.
+inline void page_back(Layout &l) {
+  if (!l.model || l.state != L_ACTIVE || !g.on_detail) return;
+  const int origin = g.origin;
+  show_page(l, origin >= 0 && origin < l.model->npages && !is_detail(*l.model, origin) ? origin : 0);
 }
 
 // ---------------------------------------------------------------- engine screens
 
+// The engine's own pieces take the theme of the page on screen (contract 4.8).
 inline uint32_t ui_colour(int role) {
   Layout *a = active_layout();
-  if (a && a->model) return a->model->theme.c[role];
+  if (a && a->model) return page_theme(*a->model, g.page).c[role];
   switch (role) {
     case C_WALL: return DEF_WALL;
     case C_CARD: return DEF_CARD;
@@ -2670,7 +2785,10 @@ inline uint32_t ui_colour(int role) {
 
 inline int ui_radius(bool inner) {
   Layout *a = active_layout();
-  if (a && a->model) return inner ? a->model->theme.r2 : a->model->theme.r;
+  if (a && a->model) {
+    const Theme &t = page_theme(*a->model, g.page);
+    return inner ? t.r2 : t.r;
+  }
   return inner ? 10 : 16;
 }
 
@@ -2714,6 +2832,9 @@ inline void restyle_overlay() {
 inline void ui_begin() {
   g.screen = lv_screen_active();
   lv_obj_remove_flag(g.screen, LV_OBJ_FLAG_SCROLLABLE);
+  // (2) The second screen (cards spec B.6): created, never loaded.
+  g.park = lv_obj_create(nullptr);
+  if (g.park) lv_obj_remove_flag(g.park, LV_OBJ_FLAG_SCROLLABLE);
   g.base = plain(g.screen);
   place(g.base, 0, 0, SCREEN_W, SCREEN_H);
 
@@ -2781,6 +2902,8 @@ inline void ui_begin() {
 inline void ui_teardown() {
   if (g.overlay) lv_obj_delete(g.overlay);
   if (g.base) lv_obj_delete(g.base);
+  if (g.park) lv_obj_delete(g.park);
+  g.park = nullptr;
   g.overlay = g.base = g.waiting = g.mark = g.headline = g.hint = g.hint2 = g.strip = g.strip_label = nullptr;
   g.question = g.q_box = g.q_text = g.q_no = g.q_yes = nullptr;
   g.erase_screen = g.e_title = g.e_text = g.e_erase = g.e_cancel = nullptr;  // children of the overlay

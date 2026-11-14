@@ -200,6 +200,9 @@ static const uint32_t ICON_PLUS = 984085;            // mdi:plus
 static const uint32_t ICON_PLACEHOLDER = 985462;     // mdi:image-outline
 static const uint32_t ICON_FALLBACK = 984613;        // mdi:help-circle-outline
 static const uint32_t ICON_TABLET = 986830;          // mdi:tablet-dashboard
+static const uint32_t ICON_ARROW_LEFT = 983117;      // mdi:arrow-left, (2) the back entry
+// (2) Nav.page of the side bar's back entry (contract 4.7).
+static const uint16_t BACK_ENTRY = 0xFFFF;
 
 // Colours of the engine's own screens before any layout arrives: the
 // editor's defaults (styles.js).
@@ -246,6 +249,12 @@ struct Layout {
   uint16_t d_page;   // delete progress
   uint16_t stale;    // widgets with a stale mark (shown layout only, cards spec B.4)
   uint16_t s_page;   // the page the next stale slice starts on
+  // (2) Pages (cards spec B.6). Only the root, with the side bar and the page
+  // on screen, hangs under the shown screen; every other page object, and
+  // the root of a layout being built or deleted, under g.park.
+  uint16_t b_page;      // build progress: the next page object to make
+  int16_t shown;        // the page whose object is under the root; -1 none
+  uint8_t theme_shown;  // the theme (Model.themes index) the root and side bar show
 };
 
 // What one slice may still spend: objects, and milliseconds since start.
@@ -326,6 +335,12 @@ struct State {
   size_t staged_block;
   bool obj_fail;  // LVGL could not create an object during this build slice
   int page;
+  // (2) Detail pages (contract 4.8, cards spec B.6): the normal page the one
+  // on screen was opened from, whether the page on screen is a detail page,
+  // and the time without a touch counted towards its `ttl`.
+  int origin;
+  bool on_detail;
+  uint32_t idle_ms, idle_tick;
   // Flash cache.
   char stored[17];
   uint32_t save_at;  // 0: nothing scheduled
@@ -335,6 +350,9 @@ struct State {
   bool flash_copy;
   // Screens.
   lv_obj_t *screen, *base, *overlay, *waiting, *mark;
+  // (2) A second screen that is never loaded: LVGL neither lays it out nor
+  // searches it for a touch (cards spec B.6). Nothing may lay it out.
+  lv_obj_t *park;
   lv_obj_t *headline, *hint, *hint2;  // the waiting screen's state, next step and its second line
   lv_obj_t *strip, *strip_label;
   lv_obj_t *question, *q_box, *q_text, *q_no, *q_yes;
@@ -411,6 +429,9 @@ inline void say(int level, const char *fmt, ...) {
   va_end(ap);
   g.pf.log(level, line);
 }
+
+// (2) A detail page: `sub` 1 and not page 0 (contract 4.2, 4.8).
+inline bool is_detail(const Model &m, int page) { return page > 0 && page < (int) m.npages && m.pages[page].sub; }
 
 inline Layout *layout_at(int i) { return (i >= 0 && i < LAYOUTS) ? &g.lay[i] : nullptr; }
 inline Layout *active_layout() { return layout_at(g.active); }
@@ -710,6 +731,7 @@ void build_abort(Layout &l);
 bool delete_step(Layout &l, Budget &b);
 void show_layout(Layout &l);
 void show_page(Layout &l, int page);
+void page_back(Layout &l);
 void paint_widget(Layout &l, Widget &w);
 void paint_dirty(Layout &l);
 void paint_stale(Layout &l, uint32_t start);

@@ -281,7 +281,11 @@ inline void retire(int idx) {
   Layout *l = layout_at(idx);
   if (!l || l->state == L_FREE || l->state == L_RETIRING) return;
   if (g.q_open && g.q_layout == idx) question_close();
-  if (l->root) lv_obj_add_flag(l->root, LV_OBJ_FLAG_HIDDEN);
+  if (l->root) {
+    lv_obj_add_flag(l->root, LV_OBJ_FLAG_HIDDEN);
+    // (2) A layout being deleted hangs under g.park (cards spec B.6).
+    if (g.park) lv_obj_set_parent(l->root, g.park);
+  }
   l->state = L_RETIRING;
   l->d_page = 0;
   if (g.active == idx) g.active = -1;
@@ -320,8 +324,15 @@ inline void activate(int idx) {
   // (2) A card press or a hold in progress is dropped at the swap (cards spec B.5).
   g.cp_layout = -1;
   g.held = true;
-  const int page = (g.page >= 0 && g.page < n.model->npages) ? g.page : 0;
+  // (2) Never a detail page after a switch (contract 4.8): from a detail
+  // page the origin, from a normal page the same index; page 0 when that is
+  // no normal page of the new layout. From a normal page g.origin is not read.
+  int page = g.on_detail ? g.origin : g.page;
+  if (page < 0 || page >= n.model->npages || is_detail(*n.model, page)) page = 0;
   g.page = page;
+  g.origin = page;
+  g.on_detail = false;
+  if (n.root && g.base) lv_obj_set_parent(n.root, g.base);
   show_page(n, page);
   show_layout(n);
   g.save_at = strcmp(g.stored, n.hash) != 0 ? later(CACHE_DELAY_MS) : 0;
@@ -344,7 +355,7 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
   const char *code = model_check(reinterpret_cast<const char *>(bytes), size, ld);
   if (*code) return code;
   const size_t msize = model_size(ld.c);
-  const size_t objects = ld.c.objects + ld.c.pages + 2;
+  const size_t objects = ld.c.objects + ld.c.pages + 2 + (ld.c.normal < ld.c.pages ? 2 : 0);
   const size_t need = msize + objects * OBJECT_BYTES + MEMORY_MARGIN;
   // The one look at the largest block for this layout (it walks the heap).
   const size_t block_now = g.pf.largest_block ? g.pf.largest_block() : 0;
@@ -582,6 +593,10 @@ inline void input(Layout &l, Widget &w, char event, bool has_value, double value
 inline void widget_tapped(Layout &l, Widget &w) {
   if (w.tap == 2) {
     show_page(l, w.tap_v);
+    return;
+  }
+  if (w.tap == 3) {
+    page_back(l);  // (2) on a detail page; elsewhere nothing (contract 4.3)
     return;
   }
   if (w.tap != 1) return;
@@ -1036,12 +1051,21 @@ inline void swipe_tick() {
   const int dx = (int) (p.x - g.start.x), dy = (int) (p.y - g.start.y);
   if (abs(dx) < SWIPE_PX || abs(dx) < 2 * abs(dy)) return;
   g.swallowed = true;
-  const int n = a->model->npages;
-  if (n > 1) {
-    int page = g.page + (dx < 0 ? 1 : -1);
-    if (page < 0) page = n - 1;
-    if (page >= n) page = 0;
-    show_page(*a, page);
+  if (g.on_detail) {
+    // (2) On a detail page a swipe to the right goes back; one to the left
+    // does nothing (contract 4.8).
+    if (dx > 0) page_back(*a);
+  } else {
+    // (2) Over the normal pages only, wrapping (contract 4.8).
+    const int n = a->model->npages;
+    int page = g.page;
+    for (int k = 0; k < n; k++) {
+      page += dx < 0 ? 1 : -1;
+      if (page < 0) page = n - 1;
+      if (page >= n) page = 0;
+      if (!is_detail(*a->model, page)) break;
+    }
+    if (page != g.page) show_page(*a, page);
   }
   lv_indev_wait_release(in);
 }
@@ -1138,6 +1162,24 @@ inline void hold_tick() {
   show_page(*a, page);
 }
 
+// (2) Back from a detail page after `ttl` seconds without a touch (contract
+// 4.8). A press starts the count again; it stands still while a finger is
+// down or the question box is open. `ttl` 0: never.
+inline void page_tick() {
+  const uint32_t t = now(), dt = t - g.idle_tick;
+  g.idle_tick = t;
+  Layout *a = active_layout();
+  if (!g.on_detail || !a || !a->model || g.page < 0 || g.page >= (int) a->model->npages) return;
+  const uint32_t ttl = a->model->pages[g.page].ttl;
+  if (finger_down()) {
+    g.idle_ms = 0;
+    return;
+  }
+  if (g.q_open || ttl == 0) return;
+  g.idle_ms += dt;
+  if (g.idle_ms >= ttl * 1000u) page_back(*a);
+}
+
 inline void timer_cb(lv_timer_t *) {
   const uint32_t start = now();
   poll_connection();
@@ -1155,6 +1197,7 @@ inline void timer_cb(lv_timer_t *) {
   swipe_tick();
   card_press_tick();
   hold_tick();
+  page_tick();
 }
 
 // ---------------------------------------------------------------- hold to erase

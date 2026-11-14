@@ -589,7 +589,10 @@ This is why the bench file has a fixed key.
   the 3 s run out sends its value at that moment, as if you had let go; a
   slider that asks first shows "The dashboard changed. Try again" instead.
   The page you were on stays if the new dashboard has it.
-- **Pages:** the side bar on the left, or a swipe left or right.
+- **Pages:** the side bar on the left, or a swipe left or right. A detail
+  page (opened by a tap or a hold on a card) has a back arrow in the side
+  bar; a swipe to the right goes back too, and so does a minute (or the
+  dashboard's own time) without a touch.
 - **Home Assistant away:** the dashboard and its last values stay. After 10 s
   a "not connected" mark shows at the bottom of the side bar. A tap shows
   "Home Assistant is not connected" (or, without Wi-Fi, the Wi-Fi bar's
@@ -757,6 +760,25 @@ tapped option as selected until the value comes (back on a bad ack or after
 4 s), policy 1 flashes the tapped cell for 300 ms, policy 2 shows the
 outline (tests `choice_looks`, `choice_feedback`, `choice_repaint_cost`,
 `choice_selected_by_value`).
+
+Pages (contract 4.8). Only the page on screen, the side bar and the
+engine's own pieces hang under the screen LVGL shows. Every other page
+object, the whole of a dashboard being built and one being deleted hang
+under a second screen that is never loaded (`g.park`), which LVGL never
+lays out or searches for a touch, so a build step or a layout pass costs
+the same however many pages exist. `show_page` moves the page's object
+under the root and the one before back, paints what went stale on it, lays
+out the shown screen at once (so a touch right after the switch finds the
+page) and, when the page's theme differs from the one shown, restyles the
+page background, the side bar, the question box and the message strip.
+Nothing in the engine lays out the second screen. Page objects are made in
+the build's slices like widgets, so 64 pages are no single step. A detail
+page (`sub` 1, never page 0) is skipped by swipes; the back entry, a swipe
+to the right, `tap {"back": 1}` and `ttl` seconds without a touch go back
+to the normal page it was opened from. The `ttl` count stands still while
+a finger is down or the question box is open. A dashboard switch never
+shows a detail page (tests `detail_pages`, `page_theme`, `offscreen_tree`,
+`offscreen_costs_nothing`).
 
 It also builds and runs `tests/test_fast_display.cpp` the same two ways.
 That test takes the rotation out of `fast_display.h` (with
