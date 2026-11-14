@@ -2,9 +2,17 @@ name: CI
 
 on:
   pull_request:
+  # Also after each merge, so beta and main show the state of what landed.
+  push:
+    branches:
+      - beta
+      - main
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  # A new commit on a pull request cancels the pull request's older run.
+  # Each push run is a group of its own (its run id), so no push to beta or
+  # main is cancelled or dropped and every merge keeps its result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -43,3 +51,48 @@ jobs:
       - name: Check the engine package
         working-directory: Integrations/ESPHome
         run: python3 -B tools/check_engine_package.py
+
+  engine-tests:
+    name: Dashboard engine host tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      # The LVGL the firmware builds with. ESPHome 2026.10.2's lvgl component
+      # asks for lvgl/lvgl 9.5.0 (LVGL_VERSION), and the build's
+      # dependencies.lock takes it from the ESP component registry, whose
+      # package is this commit (the v9.5.0 tag). Only src/ and the files at
+      # the top are checked out. When the ESPHome version (build.yml) brings
+      # another LVGL, change this commit, the version in
+      # engine_tests/tools/fetch_lvgl.sh and CI_LVGL_VERSION and
+      # CI_LVGL_COMMIT in tools/check_engine_package.py together.
+      - name: Checkout LVGL 9.5.0
+        uses: actions/checkout@v6
+        with:
+          repository: lvgl/lvgl
+          ref: 85aa60d18b3d5e5588d7b247abf90198f07c8a63 # v9.5.0
+          path: lvgl
+          persist-credentials: false
+          sparse-checkout: src
+      # The test harness writes its screenshots with zlib.
+      - name: Install the zlib headers
+        run: dpkg -s zlib1g-dev > /dev/null 2>&1 || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends zlib1g-dev; }
+      # Everything run.sh builds and runs: the engine tests, built optimised
+      # and with AddressSanitizer and UBSan, warnings as errors, with the
+      # runner's GCC.
+      - name: Run the engine host tests
+        working-directory: Integrations/ESPHome
+        env:
+          TAB_LVGL_SRC: ${{ github.workspace }}/lvgl
+          # run.sh's own settings, plus no stack-use-after-return detection.
+          # The sanitizer runtime turns that on by default on Linux (macOS
+          # leaves it off), and with GCC it makes the sanitizer build several
+          # hundred times slower, so its timing checks fail
+          # (boot_builds_in_slices, escaped_slots_are_fast).
+          ASAN_OPTIONS: abort_on_error=0:halt_on_error=1:detect_stack_use_after_return=0
+        run: engine_tests/run.sh

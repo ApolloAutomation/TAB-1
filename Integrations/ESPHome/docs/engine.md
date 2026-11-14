@@ -22,6 +22,7 @@ The screen is landscape, 1280 × 800. Pages switch at once, with no animation.
 | `tools/gen_engine_fonts.py` | Writes the font list in `Engine.yaml` from the contract. |
 | `tools/check_engine_package.py` | Checks the package against the contract and builds it. |
 | `../../.github/workflows/build.yml` | Builds `TAB-1-engine.yaml` and publishes it for the tablets' update. |
+| `../../.github/workflows/ci.yml` | Checks every pull request and every push to `beta` and `main` (see "What CI runs"). |
 | `../../.github/release-drafter.yml` | Release notes settings; the shared build workflow needs this file. |
 
 The contract between the tablet and Home Assistant is
@@ -621,7 +622,7 @@ python3 -B tools/gen_engine_fonts.py --check
 # After a contract change: write the font list again
 python3 -B tools/gen_engine_fonts.py
 
-# Package checks only (what CI runs): Python 3.12, standard library only
+# Package checks only (CI runs these too): Python 3.12, standard library only
 python3 -B tools/check_engine_package.py
 
 # Also the flash queue and update lock tests on this computer
@@ -643,7 +644,8 @@ package to install: it reads the YAML itself, the way PyYAML's safe loader
 does, and refuses what it does not read), no network, no ESPHome and no
 compiler. That run holds every check that needs no toolchain, the files-hash
 guard among them, and the self-tests of its own rules (the YAML reader, the
-files rule, the restart rule, the docs check, the compile warning gate).
+files rule, the restart rule, the docs check, the ci.yml rule, the compile
+warning gate).
 Where PyYAML happens to be installed it also compares its reading of every
 YAML file with PyYAML's. `--help` says the same.
 
@@ -671,9 +673,15 @@ and the recorded SHA-256 of its files with their `all` hash ("Old copies of
 the package's files"; a self-test checks two branches merged at one number),
 and the release: `build.yml` publishes the tablet file with a pinned
 ESPHome version equal to `min_version` in both engine files,
-`.github/release-drafter.yml` is there, and `ci.yml` builds the tablet
-file on that pinned version only, still builds `TAB-1.yaml`, and runs these
-static checks. `--host` also builds the update lock's decisions on this computer and
+`.github/release-drafter.yml` is there, and `ci.yml` runs on every pull
+request and every push to `beta` and `main` (no filter that leaves some
+out), builds the tablet file on that pinned version only, still builds
+`TAB-1.yaml`, runs these static checks, and runs `engine_tests/run.sh`
+with LVGL from `lvgl/lvgl` at the commit of LVGL 9.5.0 (the only version
+`engine_tests/tools/fetch_lvgl.sh` takes) and read access only, none of
+it skippable or able to pass without running (a self-test checks that
+rule on made-up workflows).
+`--host` also builds the update lock's decisions on this computer and
 tests them, runs the preprocessor over `ota_lock.h` for each file's update
 settings and for settings it must refuse, and builds the headers with an
 older copy of each, or one from before the numbers, in its place: each must
@@ -714,6 +722,39 @@ in this folder's `.esphome` and the copy's build folder (components already
 resolved there). ESP-IDF components that ESPHome's local component store
 lacks must then come from a folder you name in
 `IDF_COMPONENT_LOCAL_STORAGE_URL`.
+
+### What CI runs
+
+`.github/workflows/ci.yml` runs on every pull request and every push to
+`beta` and `main`. Its jobs:
+
+- `TAB-1.yaml` built on the shared workflow's ESPHome versions, and
+  `TAB-1-engine.yaml` on the pinned 2026.10.2 only.
+- The package check's static mode (`python3 -B
+  tools/check_engine_package.py`, no flags).
+- The host tests: everything `engine_tests/run.sh` builds and runs (the
+  engine tests, built optimised and with AddressSanitizer and UBSan),
+  with the runner's default compiler (GCC), warnings as errors.
+  LVGL comes from `lvgl/lvgl` at commit
+  `85aa60d18b3d5e5588d7b247abf90198f07c8a63`, the v9.5.0 tag, which the job
+  hands to `run.sh` in `TAB_LVGL_SRC`. That is the firmware's LVGL: ESPHome
+  2026.10.2's `lvgl` component asks for lvgl/lvgl 9.5.0, and the firmware
+  build's `dependencies.lock` takes the ESP component registry's package of
+  that commit, the same files as
+  `.esphome/build/apollo-tab-1/managed_components/lvgl__lvgl`.
+
+The host tests job sets `ASAN_OPTIONS` to `run.sh`'s own settings plus
+`detect_stack_use_after_return=0`. On Linux the sanitizer runtime turns that
+detection on (macOS leaves it off), and with GCC it makes the sanitizer
+build several hundred times slower, so `boot_builds_in_slices` and
+`escaped_slots_are_fast` fail on time. Set the same when you run `run.sh`
+with GCC on Linux.
+
+`--host`, `--config` and `--compile` of the package check do not run in
+CI. When a new ESPHome version brings another LVGL, change the commit in
+`ci.yml`, the version in `engine_tests/tools/fetch_lvgl.sh`, and
+`CI_LVGL_VERSION` and `CI_LVGL_COMMIT` in `tools/check_engine_package.py`
+together; the package check or the host tests fail while they disagree.
 
 ### Size
 
