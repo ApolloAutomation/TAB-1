@@ -1059,6 +1059,17 @@ inline bool point_in(const int16_t r[4], lv_point_t p) {
   return p.x >= r[0] && p.x < r[0] + r[2] && p.y >= r[1] && p.y < r[1] + r[3];
 }
 
+// (2) A round button and a badge take a press in their centred circle's
+// square, where their object is (cards spec B.4); outside it the press is
+// the card's, for a hold as for a tap.
+inline bool point_in_box(const Widget &w, lv_point_t p) {
+  int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+  if (w.kind == W_BUTTON) button_box(w, &bx, &by, &bw, &bh);
+  if (w.kind == W_IMAGE) image_box(w, &bx, &by, &bw, &bh);
+  const int16_t r[4] = {(int16_t) (w.r[0] + bx), (int16_t) (w.r[1] + by), (int16_t) bw, (int16_t) bh};
+  return point_in(r, p);
+}
+
 inline bool point_on(lv_obj_t *o, lv_point_t p) {
   if (!o) return false;
   lv_area_t a;
@@ -1083,7 +1094,7 @@ inline int hold_page(Layout &l, lv_point_t p) {
     for (int k = c.children; k >= 1; k--) {
       if (i + k >= end) continue;
       const Widget &w = m.w[i + k];
-      if (!widget_there(m, w) || !point_in(w.r, p)) continue;
+      if (!widget_there(m, w) || !point_in(w.r, p) || !point_in_box(w, p)) continue;
       if ((w.kind == W_SLIDER || w.kind == W_CHOICE) && w.change) return -1;
       if (w.kind == W_THERMO && w.change && (point_on(w.o2, p) || point_on(w.o3, p))) return -1;
       if (w.hold == 2) return w.hold_v;

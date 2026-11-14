@@ -203,9 +203,11 @@ struct Widget {
   uint32_t c_now, c_on;
   // (2) Touch of version 2 (cards spec B.5).
   uint8_t quiet;     // as last painted: hidden, faded or in a card that is not available (a card: `un`)
-  uint8_t ring;      // card: the width of the border of `lit` 2 drawn now over its own; 0 none
+  uint8_t ring;      // card: the width of the border of `lit` 2 drawn now over its own; button: of the
+                     // border inside a selected one; 0 none
   uint16_t ovr_slot; // card: the slot whose optimistic bool the card shows (contract 7.4); 0 none
   uint16_t ovr_from; // card: the widget of the card whose tap set it (the card, a switch, a button)
+  uint32_t ring_c;   // button: the colour of that border
 };
 
 // (2) One card's colours: its tokens, fixed at the build (a card is on one

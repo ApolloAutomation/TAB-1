@@ -5265,15 +5265,18 @@ TEST(kit_loads) {
       CHECK(t.card_pr == st["card_pr"].n && t.card2_pr == st["card2_pr"].n && t.accf == st["accf"].n &&
             t.accf_pr == st["accf_pr"].n && t.onbg_pr == st["onbg_pr"].n && t.ion == st["ion"].n);
     }
-    // Drawn with the looks of version 1: every widget the engine draws so
-    // far is at its rectangle.
+    // Every widget the engine draws so far is at its rectangle, a round
+    // button and a badge at their circle's square.
     for (uint32_t i = 0; i < m.nw; i++) {
       const D::Widget &w = m.w[i];
       const std::string id = std::string(name) + " widget " + std::to_string(w.id);
       if (w.kind == D::W_CHOICE) continue;  // drawn from package E8 on
       if (!CHECK_MSG(w.obj, id)) continue;
-      if (w.kind == D::W_BUTTON && w.shape) continue;  // its own shape from package E5 on
-      CHECK_MSG(obj_at(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]), id + " at " + rect_text(w.obj));
+      // A round button and a badge: the centred circle's square (package E5).
+      int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+      if (w.kind == D::W_BUTTON) D::button_box(w, &bx, &by, &bw, &bh);
+      if (w.kind == D::W_IMAGE) D::image_box(w, &bx, &by, &bw, &bh);
+      CHECK_MSG(obj_at(w.obj, w.r[0] + bx, w.r[1] + by, bw, bh), id + " at " + rect_text(w.obj));
     }
     // The values of state_v2.json's stream are all taken.
     if (!strcmp(name, "layout_v2_kit")) {
@@ -6053,6 +6056,61 @@ TEST(maths_fixture) {
   }
   CHECK(images >= 480);
   CHECK_MSG(bad == 0, std::to_string(bad) + " image colours differ, the first: " + first);
+
+  // (package E5) An image's box and icon size by look; a rectangle of no
+  // size draws nothing.
+  bad = 0;
+  int boxes = 0, empty = 0;
+  for (const tj::Value &v : f["image"].a) {
+    D::Widget w{};
+    w.kind = D::W_IMAGE;
+    w.look = (uint8_t) v["look"].i();
+    w.r[2] = (int16_t) v["w"].i();
+    w.r[3] = (int16_t) v["h"].i();
+    int x, y, bw, bh;
+    D::image_box(w, &x, &y, &bw, &bh);
+    const std::string what = "look " + v["look"].s + " " + v["w"].s + "x" + v["h"].s;
+    const tj::Value &e = v["expect"];
+    if (e.is_null()) {
+      empty++;
+      if (bw > 0 && bh > 0) miss(what + ": drawn");
+      continue;
+    }
+    boxes++;
+    if (D::image_icon_size(w.look, w.r[2], w.r[3]) != e["icon_px"].i()) miss(what + ": icon size");
+    if (e["box"].is_null()) {
+      if (w.look != 2) miss(what + ": a box");
+      continue;
+    }
+    if (w.look == 2 || x != e["box"][0].i() || y != e["box"][1].i() || bw != e["box"][2].i() || bh != e["box"][3].i())
+      miss(what + ": box " + std::to_string(x) + "," + std::to_string(y) + "," + std::to_string(bw) + "," +
+           std::to_string(bh));
+  }
+  CHECK(boxes >= 480 && empty >= 100);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " image boxes differ, the first: " + first);
+
+  // (package E5) The label size rule before the width is checked, the small
+  // colour and the sizes tried in turn while the text is too wide.
+  bad = 0;
+  CHECK(f["label"].size() >= 25);
+  for (const tj::Value &v : f["label"].a) {
+    const int px = v["px"].is_null() ? 0 : v["px"].i();
+    bool small = false;
+    const int got = D::label_size(v["size"].i(), px, v["text"].s.c_str(), &small);
+    const tj::Value &e = v["expect"];
+    const std::string what = "px " + (v["px"].is_null() ? std::string("none") : v["px"].s) + " size " + v["size"].s +
+                             " \"" + v["text"].s + "\"";
+    if (got != e["px"].i()) miss(what + ": " + std::to_string(got));
+    if (small != (e["small"].n == 1)) miss(what + ": small");
+    std::vector<int> chain;
+    for (int s = D::label_smaller(got); s; s = D::label_smaller(s)) chain.push_back(s);
+    bool same = chain.size() == e["smaller"].size();
+    for (size_t i = 0; same && i < chain.size(); i++) same = chain[i] == e["smaller"][i].i();
+    if (!same) miss(what + ": smaller");
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " label sizes differ, the first: " + first);
+  // The engine's list of digit glyphs is contract.json's.
+  CHECK_STR(D::DIGITS_GLYPHS, tj::load(CDIR + "/contract.json")["fonts"]["digits_glyphs"].s);
 }
 
 // The card's look as its state gives it now, worked out apart from the record.
@@ -7272,4 +7330,511 @@ TEST(visible_by_value) {
   }
   // Without the key a widget always shows (the label next to them).
   CHECK(!hidden(widget(51)->obj) && widget(51)->vis.how == D::B_ABSENT);
+}
+
+// ================================================================ label, button, switch, image, heading (package E5)
+//
+// Contract 4.7: a label's `px` (with the digit sizes and the width check),
+// `al` and `c`; a button's selected look, swatch (`c`), `shape`, `isz` and
+// `ic`; a card header's `ic`; the badge and the bare image; a heading's `c`
+// on the page's theme.
+
+// The first and last column in [x, x + w) of rows [y, y + h) whose pixels
+// differ from bg (the text's ink); -1 when there is none.
+static void ink_columns(int x, int y, int w, int h, uint32_t bg, int *first, int *last) {
+  *first = *last = -1;
+  const uint16_t b = hh::rgb565(bg);
+  for (int cx = x; cx < x + w; cx++)
+    for (int cy = y; cy < y + h; cy++)
+      if (hh::pixel(cx, cy) != b) {
+        if (*first < 0) *first = cx;
+        *last = cx;
+        break;
+      }
+}
+
+// A card with labels: `on` slot 1, `tint` slot 2, a text slot 3, a colour
+// slot 4, in DISTINCT_THEME, whose tx2 stands out on a tinted fill (so FS is
+// tx2 and FT is tx there, two different colours).
+static const char *LABEL_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,300,28],\"size\":0,\"t\":\"label\",\"text\":\"small\"},"
+    "{\"id\":3,\"r\":[116,170,300,28],\"size\":1,\"t\":\"label\",\"text\":\"medium\"},"
+    "{\"id\":4,\"px\":15,\"r\":[116,200,300,28],\"size\":1,\"t\":\"label\",\"text\":\"px 15\"},"
+    "{\"id\":5,\"px\":16,\"r\":[116,230,300,28],\"size\":0,\"t\":\"label\",\"text\":\"px 16\"},"
+    "{\"id\":6,\"px\":96,\"r\":[116,262,520,120],\"size\":1,\"t\":\"label\",\"text\":{\"s\":3}},"
+    "{\"id\":7,\"px\":192,\"r\":[416,140,236,118],\"size\":1,\"t\":\"label\",\"text\":\"21:05\"},"
+    "{\"id\":8,\"px\":48,\"r\":[116,384,120,60],\"size\":1,\"t\":\"label\",\"text\":\"1234567890123456\"},"
+    "{\"al\":1,\"id\":9,\"r\":[252,384,200,28],\"size\":1,\"t\":\"label\",\"text\":\"Mid\"},"
+    "{\"al\":2,\"id\":10,\"r\":[252,414,200,28],\"size\":1,\"t\":\"label\",\"text\":\"End\"},"
+    "{\"c\":{\"s\":4},\"id\":11,\"r\":[460,384,190,28],\"size\":1,\"t\":\"label\",\"text\":\"Own\"},"
+    "{\"id\":12,\"px\":96,\"r\":[460,414,190,60],\"size\":1,\"t\":\"label\",\"text\":\"42\"}";
+
+// The label size rule against the tablet's fonts, the small colour by `px`,
+// FS and FT on a filled tinted card, `al`, `c`, a line higher than its box,
+// and the font set only when the text needs another (cards spec B.4, rule 3).
+TEST(label_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tint\":{\"s\":2},", LABEL_WIDGETS, "bntn"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,null],[3,\"12:34\"],[4,null]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1);
+  D::Widget *small = widget(2), *medium = widget(3), *p15 = widget(4), *p16 = widget(5), *big = widget(6);
+  D::Widget *wide = widget(7), *cut = widget(8), *mid = widget(9), *end = widget(10), *own = widget(11),
+            *tall = widget(12);
+  if (!CHECK(card && small && medium && p15 && p16 && big && wide && cut && mid && end && own && tall)) return;
+  const D::CardLook *k = D::card_look(m, card);
+
+  // Sizes: `size` alone, `px` of a text size, a digit size, the width check.
+  CHECK(font_of(small->obj) == D::text_font(14) && font_of(medium->obj) == D::text_font(18));
+  CHECK(font_of(p15->obj) == D::text_font(15) && font_of(p16->obj) == D::text_font(16));
+  CHECK(font_of(big->obj) == D::digits_font(96));
+  // 21:05 at 192 is wider than its 236 px; at 96 it fits.
+  CHECK_MSG(D::text_width(D::digits_font(192), "21:05", 5) > 236 && D::text_width(D::digits_font(96), "21:05", 5) <= 236,
+            std::to_string(D::text_width(D::digits_font(192), "21:05", 5)) + " and " +
+                std::to_string(D::text_width(D::digits_font(96), "21:05", 5)));
+  CHECK(font_of(wide->obj) == D::digits_font(96) && !wide->cut);
+  // Too wide at 48 too: 34, cut with an ellipsis.
+  CHECK(font_of(cut->obj) == D::text_font(34) && cut->cut);
+  const std::string ct = label_text(cut->obj);
+  CHECK(ct.size() >= 3 && ct.compare(ct.size() - 3, 3, "\xE2\x80\xA6") == 0);
+  // A line higher than its box starts at the box's top.
+  CHECK(D::line_height(D::digits_font(96)) > 60 && font_of(tall->obj) == D::digits_font(96));
+  CHECK(lv_obj_get_style_pad_top(tall->obj, LV_PART_MAIN) == 0);
+  CHECK(lv_obj_get_style_pad_top(big->obj, LV_PART_MAIN) == (120 - D::line_height(D::digits_font(96))) / 2);
+
+  // Colours off, on, and on with a tint: 14 and 15 px are small.
+  auto colours_are = [&](uint32_t sm, uint32_t tx, const std::string &when) {
+    CHECK_MSG(text_colour(small->obj) == sm && text_colour(p15->obj) == sm, when + " small " + hex6(text_colour(small->obj)));
+    CHECK_MSG(text_colour(medium->obj) == tx && text_colour(p16->obj) == tx && text_colour(big->obj) == tx,
+              when + " text " + hex6(text_colour(medium->obj)));
+  };
+  colours_are(k->t.tx2, k->t.tx, "off");
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(k->k.filled && k->k.FS == k->t.ontx && k->k.FT == k->t.ontx);
+  colours_are(k->t.ontx, k->t.ontx, "on");
+  CHECK_STR(rig.set("[2,16711680]"), "");
+  CHECK(k->k.filled && k->k.FS == k->t.tx2 && k->k.FT == k->t.tx && k->k.FS != k->k.FT);
+  colours_are(k->k.FS, k->k.FT, "on with a tint");
+  // `c`: legible on the card's background now, with its text colour now.
+  // 0x808080 stands out on the card (0x202020) and not on its fill.
+  CHECK(text_colour(own->obj) == k->k.FT);
+  CHECK_STR(rig.set("[2,null],[4,8421504]"), "");
+  const uint32_t on_fill = D::legible(8421504, k->k.F, k->k.FT);
+  CHECK(k->k.filled && text_colour(own->obj) == on_fill && own->c_has && on_fill != 8421504);
+  CHECK_STR(rig.set("[1,0]"), "");
+  CHECK(text_colour(own->obj) == 8421504 && D::legible(8421504, k->t.bg, k->t.tx) == 8421504);
+
+  // `al`: left, centre and right in the box.
+  CHECK(lv_obj_get_style_text_align(mid->obj, LV_PART_MAIN) == LV_TEXT_ALIGN_CENTER);
+  CHECK(lv_obj_get_style_text_align(end->obj, LV_PART_MAIN) == LV_TEXT_ALIGN_RIGHT);
+  CHECK(lv_obj_get_style_text_align(medium->obj, LV_PART_MAIN) != LV_TEXT_ALIGN_CENTER &&
+        lv_obj_get_style_text_align(medium->obj, LV_PART_MAIN) != LV_TEXT_ALIGN_RIGHT);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  int f0, l0, f1, l1, f2, l2;
+  ink_columns(116, 170, 300, 28, k->t.bg, &f0, &l0);
+  ink_columns(252, 384, 200, 28, k->t.bg, &f1, &l1);
+  ink_columns(252, 414, 200, 28, k->t.bg, &f2, &l2);
+  CHECK_MSG(f0 >= 116 && f0 <= 120, std::to_string(f0));
+  CHECK_MSG(f1 > 252 + 60 && l1 < 452 - 60 && abs((f1 - 252) - (452 - 1 - l1)) <= 3,
+            std::to_string(f1) + ".." + std::to_string(l1));
+  CHECK_MSG(f2 > 252 + 120 && l2 >= 452 - 4 && l2 <= 451, std::to_string(f2) + ".." + std::to_string(l2));
+
+  // The font follows the text: digits, then a word (34), then digits again.
+  // It is set only when it changes, so a new time of the same size lays
+  // nothing out.
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::test_counts() = D::TestCounts{};
+  CHECK_STR(rig.set("[3,\"12:35\"]"), "");
+  CHECK(font_of(big->obj) == D::digits_font(96) && label_text(big->obj) == "12:35" && !layout_pending());
+  CHECK_MSG(D::test_counts().style_sets == 1, std::to_string(D::test_counts().style_sets));  // the text
+  CHECK_STR(rig.set("[3,\"Kitchen\"]"), "");
+  CHECK(font_of(big->obj) == D::text_font(34));
+  CHECK(lv_obj_get_style_pad_top(big->obj, LV_PART_MAIN) == (120 - D::line_height(D::text_font(34))) / 2);
+  hh::refresh();
+  CHECK_STR(rig.set("[3,\"21.5\xC2\xB0\"]"), "");
+  CHECK(font_of(big->obj) == D::digits_font(96));
+  CHECK_STR(rig.set("[3,\"\xE2\x88\x92" "5\"]"), "");  // U+2212 is no digit glyph
+  CHECK(font_of(big->obj) == D::text_font(34));
+  hh::refresh();
+  // A repaint with unchanged state sets nothing and works out nothing.
+  D::test_counts() = D::TestCounts{};
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && !layout_pending());
+}
+
+// A heading's `c` and its text colour come from the theme of its page: the
+// kit's page 1 has its own, and a heading with `c` on such a page is legible
+// on that page's wall.
+TEST(heading_colours) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *h1 = widget(1), *h30 = widget(30);
+  if (!CHECK(h1 && h30)) return;
+  const D::Theme &t0 = D::page_theme(m, 0), &t1 = D::page_theme(m, 1);
+  CHECK(t1.c[D::C_TX] != m.theme.c[D::C_TX] && t1.c[D::C_WALL] != m.theme.c[D::C_WALL]);
+  const uint32_t want1 = D::legible(5030794, t0.c[D::C_WALL], t0.c[D::C_TX]);
+  CHECK(text_colour(h1->o1) == want1 && text_colour(h1->o2) == want1);
+  CHECK(text_colour(h30->o2) == t1.c[D::C_TX]);
+  // `c` on a page with its own theme.
+  std::string themed = two_pages("", LAMP_WIDGETS, "bbn");
+  const std::string from = "{\"title\":\"Q\",\"w\":[{\"id\":90,";
+  const size_t at = themed.find(from);
+  if (!CHECK(at != std::string::npos)) return;
+  themed.replace(at, from.size(),
+                 "{\"theme\":{\"tx\":1382429,\"wall\":15659251},\"title\":\"Q\",\"w\":[{\"c\":{\"s\":3},\"icon\":983772,"
+                 "\"id\":90,");
+  if (!CHECK(rig.up(themed, false))) return;
+  D::Model &m2 = *active()->model;
+  D::Widget *h = widget(90);
+  if (!CHECK(h && h->page == 1)) return;
+  CHECK_STR(rig.set("[3,16766474]"), "");
+  hh::advance(20);
+  const uint32_t own = D::legible(16766474, 15659251, 1382429);
+  CHECK(own != D::legible(16766474, m2.theme.c[D::C_WALL], m2.theme.c[D::C_TX]));
+  CHECK_MSG(text_colour(h->o2) == own && text_colour(h->o1) == own, hex6(text_colour(h->o2)));
+  CHECK_STR(rig.set("[3,null]"), "");
+  hh::advance(20);
+  CHECK(text_colour(h->o2) == 1382429 && text_colour(h->o1) == 1382429);
+}
+
+// Buttons of every new look, on a card whose `on` shares slot 2 with a
+// button, the swatch and a switch: slots 1 b, 2 b, 3 n (the swatch's
+// colour), 4 b (the bare button's value), 5 i (`ic`).
+static const char *BUTTON_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,160,48],\"t\":\"button\",\"tap\":{\"p\":0},\"text\":\"Sel\",\"value\":{\"s\":2}},"
+    "{\"c\":{\"s\":3},\"id\":3,\"r\":[292,140,160,48],\"t\":\"button\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"icon\":984101,\"id\":4,\"isz\":1,\"r\":[468,140,120,80],\"shape\":1,\"t\":\"button\",\"tap\":{\"p\":1},"
+    "\"text\":\"No\"},"
+    "{\"icon\":983512,\"id\":5,\"r\":[116,240,160,48],\"shape\":2,\"t\":\"button\",\"tap\":{\"p\":0},"
+    "\"value\":{\"s\":4}},"
+    "{\"ic\":{\"s\":5},\"icon\":983568,\"id\":6,\"r\":[292,240,160,48],\"t\":\"button\",\"tap\":{\"p\":1},"
+    "\"text\":\"Fan\"},"
+    "{\"id\":7,\"r\":[468,240,120,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":2}}";
+
+static std::string glyph(uint32_t cp) {
+  char b[5];
+  D::icon_utf8(cp, b);
+  return b;
+}
+
+// Contract 7.4 for a button with a bound `value` (policy 0: the other state
+// at once, back on an ack that is not ok or after 4 s without one, kept
+// after an ok ack until the value comes), with the card's `on` and a switch
+// of the same slot; a card whose `on` has no value. And contract 4.7: the
+// selected look (accf, acct, pressed accf_pr, the 2 px border in acct when
+// accf does not stand out on the card's background now), the swatch, the
+// round and the bare shape, `isz` and `ic` on a button and a card header.
+TEST(button_selected_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"ic\":{\"s\":5},\"on\":{\"s\":2},\"tap\":{\"p\":0},", BUTTON_WIDGETS, "bbnbi"), false)))
+    return;
+  CHECK_STR(rig.set("[1,0],[2,0],[3,16728128],[4,0],[5,0]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *sel = widget(2), *sw = widget(3), *round = widget(4), *bare = widget(5),
+            *fan = widget(6), *swi = widget(7);
+  if (!CHECK(card && sel && sw && round && bare && fan && swi)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  const int sy = 164;  // the middle row of the first row of buttons
+  auto looks = [&](bool on, const std::string &when) {
+    hh::refresh();
+    bool ok = (k->k.filled == 1) == on && D::button_selected(m, *sel) == on && D::button_selected(m, *sw) == on &&
+              knob_at(swi) == (on ? 32 : 4);
+    ok = ok && bg_colour(sel->obj) == (on ? k->k.AF : k->t.card2) && text_colour(sel->o2) == (on ? k->k.AT : k->t.tx);
+    ok = ok && hh::pixel(124, sy) == hh::rgb565(on ? k->k.AF : k->t.card2);
+    // The swatch: background c, content readable(c); selected, a 3 px
+    // border inside in the card's text colour now.
+    ok = ok && bg_colour(sw->obj) == 16728128 && sw->ring == (on ? 3 : 0);
+    ok = ok && hh::pixel(293, sy) == hh::rgb565(on ? k->k.text : 16728128) &&
+         hh::pixel(294, sy) == hh::rgb565(on ? k->k.text : 16728128) && hh::pixel(296, sy) == hh::rgb565(16728128);
+    CHECK_MSG(ok, when);
+  };
+  looks(false, "at rest");
+  CHECK(sw->c_has && sw->c_now == 16728128 && sw->c_on == D::readable(16728128));
+  CHECK_STR(rig.set("[2,1]"), "");
+  looks(true, "value 1");
+  CHECK(k->k.text == k->t.ontx && sel->ring == 0);  // accf stands out: no border
+  CHECK_STR(rig.set("[2,0]"), "");
+  looks(false, "value 0");
+
+  // The button's tap: at once on the button, the swatch, the card and the
+  // switch of its slot. Not ok: back at once.
+  hh::tap(196, sy);
+  CHECK_STR(sent_words(), "2t");
+  looks(true, "tapped");
+  rig.ha.ack(last_input_counter(), false, "failed");
+  looks(false, "ack not ok");
+  // No ack: back after 4 s.
+  rig.settle();
+  hh::tap(196, sy);
+  hh::advance(3800);
+  looks(true, "3.8 s without an ack");
+  hh::advance(300);
+  looks(false, "4.1 s without an ack");
+  // An ok ack: the state stays until the value comes.
+  rig.settle();
+  hh::tap(196, sy);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(sel->ovr == 2);
+  looks(true, "ok ack");
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(sel->ovr == 0);
+  looks(true, "the value came");
+  // The swatch's tap flips the same slot.
+  rig.settle();
+  hh::tap(372, sy);
+  CHECK_STR(sent_words(), "3t");
+  looks(false, "the swatch tapped");
+  hh::advance(4100);
+  looks(true, "the swatch's flip ended");
+  // A card whose `on` has no value: the button's value counts as 0, so its
+  // tap shows 1 on the button and on the card, and goes back after 4 s.
+  rig.settle();
+  CHECK_STR(rig.set("[2,null]"), "");
+  looks(false, "no value");
+  hh::tap(196, sy);
+  CHECK_STR(sent_words(), "2t");
+  looks(true, "no value, tapped");
+  hh::advance(4100);
+  looks(false, "no value, 4.1 s");
+  rig.settle();
+  CHECK_STR(rig.set("[2,0]"), "");
+
+  // Pressed: card2_pr (on: onbg_pr); selected accf_pr; a swatch
+  // mix(readable(c), c, 85).
+  auto pressed_bg = [&](D::Widget *w, int x, int y) {
+    finger(x, y, true);
+    hh::advance(20);
+    hh::refresh();
+    const uint32_t got = bg_colour(w->obj);
+    const uint16_t pix = hh::pixel(x, y);
+    finger(x, y, false);
+    hh::advance(30);
+    rig.settle();
+    rig.set("[2,0],[4,0]");
+    hh::advance(20);
+    return std::make_pair(got, pix);
+  };
+  auto p = pressed_bg(sel, 124, sy);
+  CHECK(p.first == k->t.card2_pr && p.second == hh::rgb565(k->t.card2_pr));
+  CHECK_STR(rig.set("[2,1]"), "");
+  p = pressed_bg(sel, 124, sy);  // the tap flips it to 0 at the release; pressed while 1
+  CHECK(p.first == k->k.AP && p.second == hh::rgb565(k->k.AP));
+  p = pressed_bg(sw, 300, sy);
+  CHECK(p.first == D::mix(D::readable(16728128), 16728128, 85) && p.first != 16728128);
+
+  // Bare: no background at rest (the card shows through), pressed card2_pr,
+  // on: onbg_pr; selected fills accf.
+  hh::refresh();
+  CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->t.bg));
+  p = pressed_bg(bare, 120, 244);
+  CHECK(p.first == k->t.card2_pr && p.second == hh::rgb565(k->t.card2_pr));
+  CHECK_STR(rig.set("[2,1]"), "");  // the card is filled
+  hh::refresh();
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->k.F));
+  finger(120, 244, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->k.FP) && k->k.FP == k->t.onbg_pr);
+  finger(120, 244, false);
+  hh::advance(30);
+  rig.settle();
+  CHECK_STR(rig.set("[2,0],[4,1]"), "");
+  hh::refresh();
+  CHECK(D::button_selected(m, *bare) && hh::pixel(120, 244) == hh::rgb565(k->k.AF));
+  CHECK(text_colour(bare->o1) == k->k.AT);
+  CHECK_STR(rig.set("[4,0]"), "");
+
+  // Round: the circle of side min(w, h), centred, no text; `isz` 1 gives the
+  // largest icon not above min(w, h) / 2 (28 for 80).
+  CHECK(obj_at(round->obj, 488, 140, 80, 80) && round->o2 == nullptr);
+  CHECK(lv_obj_get_style_radius(round->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+  CHECK(font_of(round->o1) == D::icon_font(28) && label_text(round->o1) == glyph(984101));
+  hh::refresh();
+  CHECK(hh::pixel(490, 142) == hh::rgb565(k->t.bg) && hh::pixel(492, 180) == hh::rgb565(k->t.card2));
+  // A press beside the circle, inside the rectangle, is the card's.
+  hh::tap(472, 210);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  CHECK_STR(rig.set("[2,0]"), "");
+  hh::tap(528, 180);
+  CHECK_STR(sent_words(), "4t");
+  rig.settle();
+
+  // `ic`: the icon while it has a value above 0, on a button and in the
+  // card's header; 0 gives `icon` back.
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  CHECK_STR(rig.set("[5,985117]"), "");
+  CHECK(label_text(fan->o1) == glyph(985117) && label_text(card->o1) == glyph(985117));
+  CHECK_STR(rig.set("[5,0]"), "");
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  CHECK_STR(rig.set("[5,null]"), "");
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  // Without `isz` a button's icon is 24.
+  CHECK(font_of(fan->o1) == D::icon_font(24));
+
+  // A repaint with unchanged state sets nothing and works out nothing.
+  CHECK_STR(rig.set("[2,1],[4,1]"), "");
+  D::test_counts() = D::TestCounts{};
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0);
+
+  // accf that does not stand out on the card (contrast below 1.3): a 2 px
+  // border in acct inside a selected button, only while the card's
+  // background now is the one it does not stand out on.
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},", BUTTON_WIDGETS, "bbnbi", "{\"accf\":2302755}"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,null],[4,0],[5,0]"), "");
+  hh::advance(20);
+  D::Model &m2 = *active()->model;
+  sel = widget(2);
+  card = widget(1);
+  const D::CardLook *k2 = D::card_look(m2, card);
+  CHECK(k2->k.AF == 2302755 && D::contrast(k2->k.AF, k2->t.bg) < 1.3 && k2->k.sel_border);
+  hh::refresh();
+  CHECK(sel->ring == 2 && hh::pixel(117, sy) == hh::rgb565(k2->k.AT) && hh::pixel(119, sy) == hh::rgb565(k2->k.AF));
+  // The swatch slot without a value: a plain selected button, with the border.
+  CHECK(!widget(3)->c_has && widget(3)->ring == 2);
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(D::contrast(k2->k.AF, k2->k.background) >= 1.3 && !k2->k.sel_border);
+  hh::refresh();
+  CHECK(sel->ring == 0 && hh::pixel(117, sy) == hh::rgb565(k2->k.AF));
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  hh::refresh();
+  CHECK(sel->ring == 0 && hh::pixel(117, sy) == hh::rgb565(k2->t.card2));
+}
+
+// The image's looks (contract 4.7, "Image, badge and bare"): the badge is
+// the centred circle with a wash of K and the largest icon not above 0.6 of
+// it; the bare image has no box and the largest icon not above min(w, h);
+// K by state (plain, filled, lit 1); pressed card2_pr (on: onbg_pr) with
+// radius r2; the pulse without a box; the placeholder without a value; a
+// hold beside the circle is the card's.
+static const char *IMAGE_WIDGETS =
+    "{\"id\":2,\"look\":1,\"r\":[116,140,120,80],\"t\":\"image\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"c\":{\"s\":3},\"id\":3,\"look\":2,\"r\":[252,140,120,80],\"t\":\"image\",\"tap\":{\"p\":0},\"value\":984463},"
+    "{\"id\":4,\"r\":[388,140,64,64],\"t\":\"image\",\"value\":984463},"
+    "{\"hold\":{\"go\":1},\"id\":5,\"look\":1,\"r\":[116,240,120,80],\"t\":\"image\",\"value\":984463}";
+
+TEST(image_looks) {
+  for (int lit : {0, 1}) {
+    KitRig rig;
+    const std::string keys = "\"lit\":" + std::to_string(lit) + ",\"on\":{\"s\":1},";
+    if (!CHECK(rig.up(two_pages(keys, IMAGE_WIDGETS, "bin"), false))) return;
+    CHECK_STR(rig.set("[1,0],[2,984211],[3,null]"), "");
+    hh::advance(20);
+    D::Model &m = *active()->model;
+    D::Widget *card = widget(1), *badge = widget(2), *bare = widget(3), *box = widget(4), *held = widget(5);
+    if (!CHECK(card && badge && bare && box && held)) return;
+    const D::CardLook *k = D::card_look(m, card);
+    const std::string at = "lit " + std::to_string(lit);
+    // Places and icon sizes: the badge 80 (0.6 * 80 = 48), bare 72, the box 28.
+    CHECK_MSG(obj_at(badge->obj, 136, 140, 80, 80) && obj_at(bare->obj, 252, 140, 120, 80), at);
+    CHECK(lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+    CHECK(font_of(badge->o1) == D::icon_font(48) && font_of(bare->o1) == D::icon_font(72) &&
+          font_of(box->o1) == D::icon_font(28));
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+    // Plain: circle card2, icon tx2; bare icon tx2 legible on the card.
+    auto plain_now = [&] {
+      return bg_colour(badge->obj) == k->t.card2 && text_colour(badge->o1) == k->t.tx2 &&
+             text_colour(bare->o1) == D::legible(k->t.tx2, k->t.bg, k->t.tx) && text_colour(box->o1) == k->t.acc2;
+    };
+    CHECK_MSG(plain_now(), at);
+    hh::refresh();
+    CHECK(hh::pixel(140, 180) == hh::rgb565(k->t.card2) && hh::pixel(137, 141) == hh::rgb565(k->t.bg));
+    CHECK(hh::pixel(254, 142) == hh::rgb565(k->t.bg));
+    // On: K is ion while filled (lit 0), acc with lit 1.
+    CHECK_STR(rig.set("[1,1]"), "");
+    const uint32_t K = lit == 0 ? k->k.FI : k->k.A;
+    const uint32_t wash = D::mix(K, k->k.background, 80);
+    CHECK_MSG(bg_colour(badge->obj) == wash && text_colour(badge->o1) == D::legible(K, wash, k->k.text), at);
+    CHECK(text_colour(bare->o1) == D::legible(K, k->k.background, k->k.text));
+    CHECK(wash != k->t.card2);
+    hh::refresh();
+    CHECK(hh::pixel(140, 180) == hh::rgb565(wash));
+    // `c` wins over the state.
+    CHECK_STR(rig.set("[3,16729402]"), "");
+    CHECK(text_colour(bare->o1) == D::legible(16729402, k->k.background, k->k.text));
+    // Pressed: card2_pr, on: onbg_pr, radius r2.
+    finger(140, 180, true);
+    hh::advance(20);
+    CHECK(bg_colour(badge->obj) == (k->k.filled ? k->k.FP : k->t.card2_pr) &&
+          lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == k->t.r2);
+    finger(140, 180, false);
+    hh::advance(30);
+    rig.settle();
+    CHECK(lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+    finger(256, 144, true);
+    hh::advance(20);
+    hh::refresh();
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_COVER &&
+          hh::pixel(256, 150) == hh::rgb565(k->k.filled ? k->k.FP : k->t.card2_pr));
+    finger(256, 144, false);
+    hh::advance(30);
+    rig.settle();
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+    // No value: the placeholder, faded.
+    CHECK_STR(rig.set("[2,null]"), "");
+    CHECK(label_text(badge->o1) == glyph(D::ICON_PLACEHOLDER) && lv_obj_get_style_opa(badge->obj, LV_PART_MAIN) == LV_OPA_40);
+    CHECK_STR(rig.set("[2,984211]"), "");
+    CHECK(label_text(badge->o1) == glyph(984211));
+    // The widget's own hold in its circle; beside it the card's, which has
+    // none. (No hold opens while the erase watch of the first 10 s runs.)
+    CHECK(advance_until([] { return D::g.erase_timer == nullptr; }, D::ERASE_ARM_MS + 1000));
+    press_for(176, 280, 700);
+    CHECK(tab::current_page() == 1);
+    tab::go_to(0);
+    hh::advance(20);
+    press_for(118, 242, 700);
+    CHECK(tab::current_page() == 0 && sent_words().empty());
+    // A repaint with unchanged state sets nothing and works out nothing.
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+    for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+    CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0);
+  }
+  // The pulse: no box or badge, the icon acct.
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":1},", IMAGE_WIDGETS, "bin"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,984211],[3,null]"), "");
+  hh::advance(20);
+  D::Widget *card = widget(1), *badge = widget(2), *box = widget(4);
+  const D::CardLook *k = D::card_look(*active()->model, card);
+  hh::tap(500, 420);
+  CHECK(card->fb == 2);
+  CHECK(lv_obj_get_style_bg_opa(badge->obj, LV_PART_MAIN) == LV_OPA_TRANSP && text_colour(badge->o1) == k->k.AT);
+  CHECK(lv_obj_get_style_bg_opa(box->obj, LV_PART_MAIN) == LV_OPA_TRANSP && text_colour(box->o1) == k->k.AT);
+  hh::advance(320);
+  CHECK(card->fb == 0 && bg_colour(badge->obj) == k->t.card2 && lv_obj_get_style_bg_opa(badge->obj, LV_PART_MAIN) == LV_OPA_COVER);
+}
+
+// A switch's `c` (contract 4.7): at value 1 the track is legible(c, the
+// card's background now, its text colour now) and the knob readable of it;
+// at 0, and without a colour, the look of version 1.
+TEST(switch_colour) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *sw = widget(28), *card = widget(22);
+  if (!CHECK(sw && card)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  CHECK_STR(rig.set("[21,1],[22,5030794]"), "");
+  const uint32_t track = D::legible(5030794, k->k.background, k->k.text);
+  CHECK(bg_colour(sw->o1) == track && bg_colour(sw->o2) == D::readable(track));
+  hh::refresh();
+  CHECK(hh::pixel(sw->r[0] + 6, centre_y(sw->r)) == hh::rgb565(track));
+  CHECK_STR(rig.set("[22,16766474]"), "");
+  const uint32_t track2 = D::legible(16766474, k->k.background, k->k.text);
+  CHECK(track2 != track && bg_colour(sw->o1) == track2 && bg_colour(sw->o2) == D::readable(track2));
+  CHECK_STR(rig.set("[22,null]"), "");
+  CHECK(bg_colour(sw->o1) == k->k.A && bg_colour(sw->o2) == k->k.AT);
+  CHECK_STR(rig.set("[21,0],[22,5030794]"), "");
+  CHECK(bg_colour(sw->o1) == k->t.card2 && bg_colour(sw->o2) == k->t.tx2);
 }

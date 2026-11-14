@@ -448,6 +448,117 @@ inline int image_icon_px(int w, int h) {
   return 24;
 }
 
+// (2) The largest of 72, 48, 28, 24 that is not above limit; 24 when none
+// is (contract 4.7, the fifth rule for formulas).
+inline int largest_icon(double limit) {
+  static const int SIZES[4] = {72, 48, 28, 24};
+  for (int px : SIZES)
+    if (px <= limit) return px;
+  return 24;
+}
+
+// (2) The square of side min(w, h) centred in a rectangle: a round button
+// and a badge (contract 4.7). x and y are from the rectangle's corner.
+inline void centred_square(int w, int h, int *x, int *y, int *side) {
+  const int s = w < h ? w : h;
+  *side = s > 0 ? s : 0;
+  *x = (int) px_round((w - *side) / 2.0);
+  *y = (int) px_round((h - *side) / 2.0);
+}
+
+// (2) The drawn box of an image (contract 4.7, "Image, badge and bare"): the
+// rectangle for look 0, the centred circle for a badge. The bare look has no
+// box; its object is the rectangle, for the press and its pressed look.
+inline void image_box(const Widget &w, int *x, int *y, int *bw, int *bh) {
+  *x = *y = 0;
+  *bw = w.r[2];
+  *bh = w.r[3];
+  if (w.look == 1) {
+    centred_square(w.r[2], w.r[3], x, y, bw);
+    *bh = *bw;
+  }
+}
+
+// (2) The icon size of an image by its look: min(w, h) / 2 for the box,
+// 0.6 of the circle for a badge, min(w, h) bare.
+inline int image_icon_size(int look, int w, int h) {
+  const int s = w < h ? w : h;
+  if (look == 1) return largest_icon(0.6 * s);
+  if (look == 2) return largest_icon(s);
+  return image_icon_px(w, h);
+}
+
+// (2) The drawn box of a button: the centred circle for `shape` 1, else
+// the rectangle. And its icon size: 24, or with `isz` 1 the largest of 72,
+// 48, 28, 24 that is not above min(w, h) / 2.
+inline void button_box(const Widget &w, int *x, int *y, int *bw, int *bh) {
+  *x = *y = 0;
+  *bw = w.r[2];
+  *bh = w.r[3];
+  if (w.shape == 1) {
+    centred_square(w.r[2], w.r[3], x, y, bw);
+    *bh = *bw;
+  }
+}
+
+inline int button_icon_px(const Widget &w) { return w.isz == 1 ? image_icon_px(w.r[2], w.r[3]) : 24; }
+
+// ---------------------------------------------------------------- (2) label sizes
+
+// contract.json fonts.digits_glyphs, as UTF-8: what the digit sizes hold.
+static const char *const DIGITS_GLYPHS = "0123456789.,-:\xC2\xB0%+ ";
+
+inline bool digits_only(const char *text) {
+  const size_t gn = strlen(DIGITS_GLYPHS), n = text ? strlen(text) : 0;
+  for (size_t i = 0; i < n;) {
+    uint32_t cp;
+    i = utf8_next(text, n, i, &cp);
+    bool found = false;
+    for (size_t j = 0; j < gn && !found;) {
+      uint32_t g2;
+      j = utf8_next(DIGITS_GLYPHS, gn, j, &g2);
+      found = g2 == cp;
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+// The size a label is drawn at, before its width is checked (contract 4.7,
+// "Label with px"): without `px` (0) its `size` gives 14, 18 or 34. With
+// `px`: a digit size (48, 96, 192) when every character of the text is a
+// digit glyph and `px` reaches it, else the largest text size not above
+// `px`, at least 14. *small: drawn at 14 or 15, in the small colour.
+inline int label_size(int size, int px, const char *text, bool *small) {
+  int chosen;
+  if (px <= 0) {
+    chosen = size == 0 ? 14 : size == 2 ? 34 : 18;
+  } else if (px >= 48 && digits_only(text)) {
+    chosen = px >= 192 ? 192 : px >= 96 ? 96 : 48;
+  } else {
+    static const int TEXT[7] = {14, 15, 16, 18, 20, 28, 34};
+    chosen = 14;
+    for (int t : TEXT)
+      if (t <= px) chosen = t;
+  }
+  if (small) *small = chosen == 14 || chosen == 15;
+  return chosen;
+}
+
+// The size tried next while the text at a digit size is wider than the
+// rectangle: 192, 96, 48, 34. 0: none, the text is cut.
+inline int label_smaller(int px) { return px == 192 ? 96 : px == 96 ? 48 : px == 48 ? 34 : 0; }
+
+inline const lv_font_t *label_font_of(int px) { return px >= 48 ? digits_font(px) : text_font(px); }
+
+// The size rule with the width checked against the fonts the tablet has.
+inline int label_px(const Widget &w, const char *text, bool *small) {
+  int px = label_size(w.size, w.px, text, small);
+  const size_t n = text ? strlen(text) : 0;
+  while (label_smaller(px) && text_width(label_font_of(px), text, n) > w.r[2]) px = label_smaller(px);
+  return px;
+}
+
 // ---------------------------------------------------------------- events
 
 inline Layout *layout_of_ptr(const void *p) {
@@ -866,24 +977,43 @@ inline bool card_pulses(Model &m, const Widget &w) {
 inline void paint_label(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, card_of(m, w));
-  uint32_t colour = w.size == 0 ? (k.k.filled ? k.k.FS : k.t.tx2) : k.k.text;
+  const char *text = "";
+  bound_text(m, w.text, &text);
+  // (2) The font is picked here, as `px` with a digit size depends on the
+  // text. It is set only when it differs: a font change lays the screen out
+  // (cards spec B.4). A line higher than the box starts at its top.
+  bool small = false;
+  const lv_font_t *font = label_font_of(label_px(w, text, &small));
+  if (font && font != lv_obj_get_style_text_font(w.obj, LV_PART_MAIN)) {
+    set_font(w.obj, font);
+    const int pad = (w.r[3] - line_height(font)) / 2;
+    style_num(w.obj, LV_STYLE_PAD_TOP, pad > 0 ? pad : 0);
+  }
+  uint32_t colour = small ? (k.k.filled ? k.k.FS : k.t.tx2) : k.k.text;
   if (w.c_has) colour = w.c_now;
   if (card_pulses(m, w)) colour = k.k.AT;
   set_text_colour(w.obj, colour);
   fade(w.obj, k.unavailable);
-  const char *text = "";
-  bound_text(m, w.text, &text);
   w.cut = set_text(w.obj, text, w.r[2]);
 }
 
-inline void layout_button(Layout &l, Widget &w, const char *text) {
+// (2) The icon a button or a card header shows: `ic` while it has a value
+// above 0, else `icon` (contract 4.3).
+inline uint32_t shown_icon(Model &m, const Widget &w) {
+  double v;
+  if (w.ic.how != B_ABSENT && bound_num(m, w.ic, &v) && v > 0 && v <= 0x10FFFF) return (uint32_t) v;
+  return w.icon;
+}
+
+inline void layout_button(Layout &l, Widget &w, const char *text, uint32_t icon) {
   (void) l;
-  const int W = w.r[2], H = w.r[3];
+  int bx, by, W, H;
+  button_box(w, &bx, &by, &W, &H);
   const lv_font_t *tf = text_font(15);
-  const lv_font_t *ifont = icon_font(24);
+  const lv_font_t *ifont = icon_font(button_icon_px(w));
   const int ih = line_height(ifont), th = line_height(tf);
   const bool has_icon = w.o1 != nullptr, has_text = w.o2 != nullptr;
-  const int iw = has_icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, w.icon), 0) : 0;
+  const int iw = has_icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, icon), 0) : 0;
   if (has_icon && has_text && H >= 64) {
     const int group = ih + 6 + th;
     const int y0 = (H - group) / 2;
@@ -906,25 +1036,71 @@ inline void layout_button(Layout &l, Widget &w, const char *text) {
   }
 }
 
+inline bool button_selected(Model &m, Widget &w);
+
+// (2) The border inside a selected button (contract 4.7): 2 px in `acct`
+// when `accf` does not stand out on the card, 3 px in the card's text colour
+// on a swatch. Drawn over the button, so its border width and the place of
+// its icon and text never change.
+inline void on_button_ring(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  if (!w || !w->ring) return;
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = LV_OPA_TRANSP;
+  d.border_width = w->ring;
+  d.border_color = lv_color_hex(w->ring_c);
+  d.border_opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  d.radius = lv_obj_get_style_radius(w->obj, LV_PART_MAIN);
+  lv_draw_rect(lv_event_get_layer(e), &d, &a);
+}
+
 inline void paint_button(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, card_of(m, w));
   const bool filled = k.k.filled;
   const bool pulse = w.fb == 2;
-  uint32_t bg = k.t.card2;
-  if (pulse)
+  // (2) Selected (`value` 1), a swatch (`c`), bare (`shape` 2).
+  const bool selected = button_selected(m, w);
+  const bool swatch = w.c_has != 0;
+  bool has_bg = true;
+  uint32_t bg = k.t.card2, fg = k.t.tx;
+  if (pulse) {
     bg = k.k.AF;
-  else if (w.pressed)
+    fg = k.k.AT;
+  } else if (swatch) {
+    bg = w.pressed ? mix(w.c_on, w.c_now, 85) : w.c_now;
+    fg = w.c_on;
+  } else if (selected) {
+    bg = w.pressed ? k.k.AP : k.k.AF;
+    fg = k.k.AT;
+  } else if (w.pressed) {
     bg = filled ? k.k.FP : k.t.card2_pr;
-  set_bg(w.obj, bg);
+  } else if (w.shape == 2) {
+    has_bg = false;
+  }
+  if (has_bg)
+    set_bg(w.obj, bg);
+  else
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
   fade(w.obj, k.unavailable);
-  const uint32_t fg = pulse ? k.k.AT : k.t.tx;
   set_text_colour(w.o1, fg);
   set_text_colour(w.o2, fg);
   set_outline(w.obj, w.fb == 1, filled ? k.k.FI : k.k.A);
+  const uint8_t ring = !selected ? 0 : swatch ? 3 : k.k.sel_border ? 2 : 0;
+  const uint32_t ring_c = ring == 3 ? k.k.text : ring == 2 ? k.k.AT : 0;
+  if (ring != w.ring || ring_c != w.ring_c) {
+    w.ring = ring;
+    w.ring_c = ring_c;
+    lv_obj_invalidate(w.obj);  // drawn by on_button_ring
+  }
+  const uint32_t icon = shown_icon(m, w);
+  if (w.o1) set_icon(w.o1, button_icon_px(w), icon);
   const char *text = "";
   bound_text(m, w.text, &text);
-  layout_button(l, w, text);
+  layout_button(l, w, text, icon);
 }
 
 // A bool of a switch or a button now: the value the widget's own tap shows,
@@ -1053,16 +1229,25 @@ inline void paint_image(Layout &l, Widget &w) {
   const bool has = bound_num(m, w.value, &v);
   fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
-  // (2) While its card pulses an image has no box and its icon is acct.
+  // (2) While its card pulses an image has no box or badge and its icon is
+  // acct. Its colours by look (box, badge, bare) are kept in the widget
+  // (widget_colour_update): c_now the box or circle, c_on the icon.
   const bool pulse = card_pulses(m, w);
-  if (pulse)
+  const bool boxed = w.look != 2;
+  if (pulse) {
     style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
-  else
-    set_bg(w.obj, w.pressed ? k.t.card2_pr : k.t.card2);
-  const int px = image_icon_px(w.r[2], w.r[3]);
-  // The box of look 0; badge and bare looks come with their own drawing.
-  set_text_colour(w.o1, pulse ? k.k.AT : w.look == 0 && w.c_has ? w.c_on : k.t.acc2);
-  set_icon(w.o1, px, has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
+  } else if (w.pressed) {
+    // Pressed (only with `tap`): card2_pr, on: onbg_pr, radius r2. Version
+    // 1's box keeps card2_pr.
+    set_bg(w.obj, w.look != 0 && k.k.filled ? k.k.FP : k.t.card2_pr);
+  } else if (boxed) {
+    set_bg(w.obj, w.c_has ? w.c_now : k.t.card2);
+  } else {
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
+  }
+  if (w.look == 1) set_radius(w.obj, w.pressed ? k.t.r2 : LV_RADIUS_CIRCLE);
+  set_text_colour(w.o1, pulse ? k.k.AT : w.c_has ? w.c_on : k.t.acc2);
+  set_icon(w.o1, image_icon_size(w.look, w.r[2], w.r[3]), has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
   set_outline(w.obj, w.fb == 1, k.k.A);
 }
 
@@ -1128,6 +1313,8 @@ inline void paint_card(Layout &l, Widget &w) {
   if (w.tap || w.fb) set_outline(w.obj, w.fb == 1, k.k.filled ? k.k.FI : k.k.A);
   set_text_colour(w.o1, pulse ? k.k.AT : k.k.header_icon);
   set_text_colour(w.o2, pulse ? k.k.AT : k.k.text);
+  // (2) `ic` replaces the header icon while it has a value above 0.
+  if (w.o1) set_icon(w.o1, 24, shown_icon(m, w));
   fade(w.o1, k.unavailable);
   fade(w.o2, k.unavailable);
   if (w.o2) {
@@ -1317,29 +1504,37 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
   const int x = w.r[0] - ox, y = w.r[1] - oy, W = w.r[2], H = w.r[3];
   switch (w.kind) {
     case W_LABEL: {
+      // The size of `size`; with `px` paint_label picks the font by the text.
       const int px = w.size == 0 ? 14 : w.size == 2 ? 34 : 18;
-      w.obj = text_box(parent, x, y, W, H, text_font(px), false);
+      w.obj = text_box(parent, x, y, W, H, text_font(px), w.al == 1);
+      if (w.obj && w.al == 2) lv_obj_set_style_text_align(w.obj, LV_TEXT_ALIGN_RIGHT, 0);
       break;
     }
     case W_BUTTON: {
       w.obj = plain(parent);
       if (!w.obj) return;
-      place(w.obj, x, y, W, H);
-      set_radius(w.obj, look_for(*l.model, card_of(*l.model, w)).t.r2);
-      const lv_font_t *ifont = icon_font(24);
+      // (2) Round: the box is the centred circle, and it shows no text.
+      int bx, by, BW, BH;
+      button_box(w, &bx, &by, &BW, &BH);
+      place(w.obj, x + bx, y + by, BW, BH);
+      set_radius(w.obj, w.shape == 1 ? LV_RADIUS_CIRCLE : look_for(*l.model, card_of(*l.model, w)).t.r2);
+      const int ipx = button_icon_px(w);
+      const lv_font_t *ifont = icon_font(ipx);
       // The glyph that is drawn: the fallback when the font lacks w.icon. The
       // text room beside it uses the same width, as layout_button does.
       const int iw = w.icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, w.icon), 0) : 0;
       if (w.icon) {
-        w.o1 = icon_box(w.obj, 0, 0, iw > 0 ? iw : 24, line_height(ifont), 24);
-        set_icon(w.o1, 24, w.icon);
+        w.o1 = icon_box(w.obj, 0, 0, iw > 0 ? iw : ipx, line_height(ifont), ipx);
+        set_icon(w.o1, ipx, w.icon);
       }
-      if (w.text.how != B_ABSENT) {
-        const bool stacked = w.icon && H >= 64;
-        const int tw = W - 12 - (w.icon && !stacked ? iw + 6 : 0);
-        w.o2 = text_box(w.obj, 6, 0, tw > 0 ? tw : 1, stacked ? line_height(text_font(15)) : H, text_font(15),
+      if (w.text.how != B_ABSENT && w.shape != 1) {
+        const bool stacked = w.icon && BH >= 64;
+        const int tw = BW - 12 - (w.icon && !stacked ? iw + 6 : 0);
+        w.o2 = text_box(w.obj, 6, 0, tw > 0 ? tw : 1, stacked ? line_height(text_font(15)) : BH, text_font(15),
                         !w.icon || stacked);
       }
+      // Only a button that can be selected draws the border inside.
+      if (w.value.how != B_ABSENT) lv_obj_add_event_cb(w.obj, on_button_ring, LV_EVENT_DRAW_MAIN_END, &w);
       break;
     }
     case W_SWITCH: {
@@ -1415,10 +1610,14 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
     case W_IMAGE: {
       w.obj = plain(parent);
       if (!w.obj) return;
-      place(w.obj, x, y, W, H);
-      set_radius(w.obj, look_for(*l.model, card_of(*l.model, w)).t.r2);
-      const int px = image_icon_px(W, H);
-      w.o1 = icon_box(w.obj, 0, 0, W, H, px);
+      // (2) A badge's box is the centred circle; a bare image keeps the
+      // rectangle for its press and draws no box.
+      int bx, by, BW, BH;
+      image_box(w, &bx, &by, &BW, &BH);
+      place(w.obj, x + bx, y + by, BW, BH);
+      set_radius(w.obj, w.look == 1 ? LV_RADIUS_CIRCLE : look_for(*l.model, card_of(*l.model, w)).t.r2);
+      const int px = image_icon_size(w.look, W, H);
+      w.o1 = icon_box(w.obj, 0, 0, BW, BH, px);
       break;
     }
     default:
