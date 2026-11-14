@@ -14,6 +14,7 @@
 #include "frames.h"
 #include "host_fonts.h"
 #include "src/core/lv_obj_private.h"  // repaint_cost reads whether a layout pass is due
+#include "src/display/lv_display_private.h"  // and which areas are drawn again
 
 #include <algorithm>
 #include <array>
@@ -6109,6 +6110,87 @@ TEST(maths_fixture) {
     if (!same) miss(what + ": smaller");
   }
   CHECK_MSG(bad == 0, std::to_string(bad) + " label sizes differ, the first: " + first);
+
+  // (package E6) The slider: the amount and the value under a finger, and
+  // where a value is drawn, for both looks, the three directions, tracks of
+  // 0, 2, 7 and 8 colours, and rectangles of no size, 1 px and thin ones.
+  bad = 0;
+  int presses = 0, sends = 0, knobs = 0, bars = 0, tracks = 0;
+  CHECK(f["slider"].size() >= 300);
+  for (const tj::Value &v : f["slider"].a) {
+    const tj::Value &r = v["rect"];
+    const D::SliderGeom g = D::slider_geom(r[2].i(), r[3].i(), (uint8_t) v["look"].i(), (uint8_t) v["dir"].i(),
+                                           (uint8_t) v["track"].i(), v["r2"].i());
+    const double lo = v["min"].n, hi = v["max"].n, step = v["step"].n;
+    const std::string what = "look " + v["look"].s + " dir " + v["dir"].s + " track " + v["track"].s + " " +
+                             v["rect_name"].s + " " + v["min"].s + ".." + v["max"].s;
+    for (const tj::Value &p : v["presses"].a) {
+      presses++;
+      const std::string at = what + " at " + p[0].s + "," + p[1].s;
+      const double amount = D::slider_amount_at(g, D::slider_along(g, r[0].i(), r[1].i(), p[0].n, p[1].n));
+      if (amount != p[2].n) miss(at + ": amount " + std::to_string(amount));
+      const bool sent = D::slider_sends(g, lo, hi);
+      if (sent) sends++;
+      if (sent != !p[3].is_null()) miss(at + (sent ? ": sends" : ": sends nothing"));
+      else if (sent && D::clamp_step(lo + amount * (hi - lo), lo, hi, step) != p[3].n) miss(at + ": value");
+    }
+    for (const tj::Value &sh : v["shapes"].a) {
+      const tj::Value &e = sh["expect"];
+      const bool has = !sh["value"].is_null();
+      const std::string at = what + " value " + (has ? sh["value"].s : "none") + " change " + sh["change"].s;
+      if (g.L != e["L"].i() || g.S != e["S"].i() || (e.has("R") && g.R != e["R"].i())) miss(at + ": L S R");
+      const int pos = D::slider_shown(g, has, sh["value"].n, lo, hi);
+      if (e.has("knob")) {
+        knobs++;
+        if (e["knob"].is_null() ? pos != -1 : pos != e["knob"].i()) miss(at + ": knob " + std::to_string(pos));
+      } else if (e.has("fill")) {
+        bars++;
+        const int fill = pos > 0 ? pos : 0;
+        const bool handle = sh["change"].n == 1 && D::bar_handle(fill);
+        if (fill != e["fill"].i() || D::bar_drawn(g, fill) != e["drawn"].i()) miss(at + ": fill " + std::to_string(fill));
+        if (e["handle"].is_null() ? handle : (!handle || fill - 12 != e["handle"][0].i() || fill - 8 != e["handle"][1].i()))
+          miss(at + ": handle");
+        if (D::bar_icon_room(g) != !e["icon_centre"].is_null() || (D::bar_icon_room(g) && e["icon_centre"].i() != 24))
+          miss(at + ": icon");
+        if (D::bar_icon_on_fill(g, fill) != (e["icon_on_fill"].n == 1)) miss(at + ": icon on the fill");
+      } else {
+        tracks++;
+        int a1, b0;
+        D::track_caps(g, &a1, &b0);
+        const tj::Value &caps = e["caps"];
+        if (caps[0][0].i() != 0 || caps[0][1].i() != a1 || caps[1][0].i() != b0 || caps[1][1].i() != g.L)
+          miss(at + ": caps " + std::to_string(a1) + " " + std::to_string(b0));
+        const size_t n = g.x1 > g.x0 ? (size_t) g.colours - 1 : 0;
+        bool same = e["pieces"].size() == n;
+        for (size_t k = 0; same && k < n; k++) {
+          int from, to;
+          D::track_piece(g.colours, g.x0, g.x1, (int) k, &from, &to);
+          same = from == e["pieces"][k][0].i() && to == e["pieces"][k][1].i();
+        }
+        if (!same) miss(at + ": pieces");
+        if (e["mark"].is_null() ? pos != -1 : pos != e["mark"].i()) miss(at + ": mark " + std::to_string(pos));
+      }
+    }
+  }
+  CHECK(presses >= 2000 && sends >= 1000 && knobs >= 200 && bars >= 400 && tracks >= 2000);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " slider vectors differ, the first: " + first);
+
+  // (package E6) The pieces of a track, n - 1 of them from x0 to x1, none
+  // when x1 is not above x0.
+  bad = 0;
+  CHECK(f["track"].size() >= 30);
+  for (const tj::Value &v : f["track"].a) {
+    const int n = v["n"].i(), x0 = v["x0"].i(), x1 = v["x1"].i();
+    const size_t count = n >= 2 && x1 > x0 ? (size_t) n - 1 : 0;
+    bool same = v["expect"].size() == count;
+    for (size_t k = 0; same && k < count; k++) {
+      int from, to;
+      D::track_piece(n, x0, x1, (int) k, &from, &to);
+      same = from == v["expect"][k][0].i() && to == v["expect"][k][1].i();
+    }
+    if (!same) miss("track " + v["n"].s + " " + v["x0"].s + " " + v["x1"].s);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " track pieces differ, the first: " + first);
   // The engine's list of digit glyphs is contract.json's.
   CHECK_STR(D::DIGITS_GLYPHS, tj::load(CDIR + "/contract.json")["fonts"]["digits_glyphs"].s);
 }
@@ -6409,6 +6491,53 @@ TEST(repaint_cost) {
   CHECK(D::card_look(*active()->model, card2)->k.filled == 0);
   CHECK(D::test_counts().style_sets > 0);
   CHECK(!layout_pending());
+
+  // (package E6) A moving bar: no style call, no layout pass, and only the
+  // strip between the old and the new end of the fill is drawn again. The
+  // two bars of slot 7 (cards 1 and 2), and the upright one of card 3.
+  hh::refresh();
+  lv_display_t *disp = lv_display_get_default();
+  D::Widget *bar1 = widget(6), *bar2 = widget(11), *up = widget(15);
+  if (!CHECK(bar1 && bar2 && up && bar1->sl_pos == (int) D::px_round(0.8 * 344))) return;
+  // The rectangles drawn again, as the parts of each that meet r.
+  auto redrawn = [&](const int16_t r[4], int *along) {
+    int from = 1 << 20, to = -(1 << 20), n = 0;
+    for (uint32_t i = 0; i < disp->inv_p; i++) {
+      if (disp->inv_area_joined[i]) continue;
+      const lv_area_t &a = disp->inv_areas[i];
+      if (a.x2 < r[0] || a.x1 >= r[0] + r[2] || a.y2 < r[1] || a.y1 >= r[1] + r[3]) continue;
+      n++;
+      from = std::min(from, (int) a.x1);
+      to = std::max(to, (int) a.x2 + 1);
+    }
+    *along = to - from;
+    return n;
+  };
+  reset();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,70]]}"), "");
+  CHECK(bar1->sl_pos == (int) D::px_round(0.7 * 344) && bar2->sl_pos == bar1->sl_pos);
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending());
+  int along = 0;
+  // 34 px moved, with the radius, the handle and a pixel each side: under 60.
+  CHECK(redrawn(bar1->r, &along) >= 1 && along > 34 && along < 60);
+  CHECK(redrawn(bar2->r, &along) >= 1 && along > 34 && along < 60);
+  hh::refresh();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,75]]}"), "");
+  CHECK(redrawn(up->r, &along) >= 1 && along <= up->r[2] + 28);
+  int tall = 1 << 20, top = -(1 << 20);
+  for (uint32_t i = 0; i < disp->inv_p; i++) {
+    const lv_area_t &a = disp->inv_areas[i];
+    if (disp->inv_area_joined[i] || a.x2 < up->r[0] || a.x1 >= up->r[0] + up->r[2]) continue;
+    tall = std::min(tall, (int) a.y1);
+    top = std::max(top, (int) a.y2 + 1);
+  }
+  CHECK_MSG(top - tall < 40, std::to_string(top - tall) + " rows of the upright bar");  // 10 px moved
+  CHECK(!layout_pending() && D::test_counts().style_sets == 0);
+  hh::refresh();
+  // The same value again draws nothing.
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,75]]}"), "");
+  CHECK(redrawn(bar1->r, &along) == 0 && redrawn(up->r, &along) == 0);
 }
 
 // ================================================================ cards as buttons (package E4)
@@ -6550,8 +6679,7 @@ static std::vector<std::string> run_input_case(const tj::Value &cs) {
 // reported, and is not a failure yet. The package turns it green and takes
 // it off this list.
 static const char *const INPUT_LATER[][2] = {
-    {"upright_slider", "E6"},           {"track_slider_is_never_a_swipe", "E6"},
-    {"bar_track_half_rounds_up", "E6"}, {"choice_cell", "E8"},
+    {"choice_cell", "E8"},
     {"choice_gap", "E8"},               {"choice_hold_is_none", "E8"},
     {"choice_released_in_another_cell", "E8"}, {"choice_second_row", "E8"},
     {"choice_asks_first", "E8"},        {"swipe_right_wraps", "E9"},
@@ -6597,7 +6725,7 @@ TEST(input_v2_fixture) {
   for (const auto &row : INPUT_LATER)
     CHECK_MSG(std::find(seen.begin(), seen.end(), row[0]) != seen.end(), std::string(row[0]) + " is no case");
   printf("  %d cases run, %d for later packages, %d with their payload\n", run, later, counted);
-  CHECK(run >= 42 && counted >= 3 && run + later == (int) seen.size());
+  CHECK(run >= 45 && counted >= 4 && run + later == (int) seen.size());
 }
 
 // The kit on a paired tablet with a session, page 0 on screen, and the
@@ -7235,7 +7363,8 @@ TEST(unavailable_card) {
   CHECK(bar->faded && opa(bar->obj) == LV_OPA_40);
   CHECK_STR(rig.set("[8,1]"), "");
   CHECK(D::card_unavailable(m, *c7) && D::card_unavailable(m, *bar));
-  CHECK(all_at(LV_OPA_40) && opa(bar->o1) == LV_OPA_COVER && opa(bar->o3) == LV_OPA_COVER);
+  // The bar is one drawn object (package E6): no part of it to fade twice.
+  CHECK(all_at(LV_OPA_40) && !bar->o1 && !bar->o2 && !bar->o3);
   // The 40% is set once: repainting sets nothing.
   D::test_counts() = D::TestCounts{};
   for (uint32_t k = 0; k <= c7->children; k++) D::paint_widget(*active(), m.w[c7 - m.w + k]);
@@ -7837,4 +7966,304 @@ TEST(switch_colour) {
   CHECK(bg_colour(sw->o1) == k->k.A && bg_colour(sw->o2) == k->k.AT);
   CHECK_STR(rig.set("[21,0],[22,5030794]"), "");
   CHECK(bg_colour(sw->o1) == k->t.card2 && bg_colour(sw->o2) == k->t.tx2);
+}
+
+// ================================================================ the slider (package E6)
+//
+// Contract 4.7, "Slider" and the (2) rows after it; cards spec B.4 and B.5.
+// The geometry itself is checked against maths.json in maths_fixture.
+
+// Sliders of every look and direction on card 1 of two_pages (slots "nnn"):
+// knobs from the left, the bottom and the top; a bar from the top; a knob
+// with a track of 2 colours and an upright bar with one of 8; a knob whose
+// track of 1 colour is no track and a bar whose 9 colours keep 8; a knob and
+// a bar with `nv`; and two pairs of the same track, one with `nv` (drawn at
+// full opacity without a value) and one without (faded).
+static const char *SLIDER_WIDGETS =
+    "{\"change\":{\"p\":0},\"id\":2,\"max\":100,\"min\":0,\"r\":[116,140,200,40],\"step\":1,\"t\":\"slider\","
+    "\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":1,\"id\":3,\"max\":100,\"min\":0,\"r\":[340,140,40,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":2,\"id\":4,\"max\":100,\"min\":0,\"r\":[400,140,40,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":2,\"icon\":983263,\"id\":5,\"look\":1,\"max\":100,\"min\":0,\"r\":[460,140,60,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"id\":6,\"max\":100,\"min\":0,\"r\":[116,200,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,255],\"value\":{\"s\":2}},"
+    "{\"change\":{\"p\":0},\"dir\":1,\"id\":7,\"look\":1,\"max\":100,\"min\":0,\"r\":[540,140,60,200],\"step\":1,"
+    "\"t\":\"slider\",\"track\":[16711680,65280,255,16776960,65535,16711935,16777215,0],\"value\":{\"s\":2}},"
+    "{\"id\":8,\"max\":100,\"min\":0,\"r\":[116,260,200,40],\"step\":1,\"t\":\"slider\",\"track\":[65280],"
+    "\"value\":{\"s\":2}},"
+    "{\"id\":9,\"look\":1,\"max\":100,\"min\":0,\"r\":[340,360,300,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[1,2,3,4,5,6,7,8,9],\"value\":{\"s\":2}},"
+    "{\"change\":{\"p\":0},\"id\":10,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,320,200,40],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":3}},"
+    "{\"change\":{\"p\":2},\"id\":11,\"look\":1,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,380,200,40],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":3}},"
+    "{\"id\":12,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,430,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,16776960,65280,65535,255,16711935,16711680],\"value\":{\"s\":3}},"
+    "{\"id\":13,\"max\":100,\"min\":0,\"r\":[340,430,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,16776960,65280,65535,255,16711935,16711680],\"value\":{\"s\":3}},"
+    "{\"id\":14,\"look\":1,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,472,200,10],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16746770,16775677,13623551],\"value\":{\"s\":3}},"
+    "{\"id\":15,\"look\":1,\"max\":100,\"min\":0,\"r\":[340,472,200,10],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16746770,16775677,13623551],\"value\":{\"s\":3}}";
+
+// The value field of the last input sent, or "" for none.
+static std::string last_input_value() {
+  const auto ev = fake::events("tab1_input");
+  if (ev.empty()) return "";
+  const auto f = fields_of(ev.back().d);
+  return f.size() == 9 ? f[6] + "=" + f[8] : "";
+}
+
+// The channels of an RGB565 pixel, 0 to 31 (green halved to 5 bits' scale).
+static void channels(uint16_t p, double c[3]) {
+  c[0] = p >> 11;
+  c[1] = ((p >> 5) & 63) / 2.0;
+  c[2] = p & 31;
+}
+
+// How far a pixel is from a colour, the largest channel difference.
+static double colour_gap(uint16_t p, uint32_t colour) {
+  double a[3], b[3];
+  channels(p, a);
+  channels(hh::rgb565(colour), b);
+  double d = 0;
+  for (int i = 0; i < 3; i++) d = fmax(d, fabs(a[i] - b[i]));
+  return d;
+}
+
+// Value from the finger for the three directions and both looks, with and
+// without a track; tracks of 2 and 8 colours as drawn, 1 colour (no track)
+// and 9 (the first 8); `nv`; a faded track as one picture; a drag on a bar
+// ended by a forced swap; the colours a bar is drawn in.
+TEST(slider_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("", SLIDER_WIDGETS, "nnn"), false))) return;
+  CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  hh::advance(50);
+  D::Model &m = *active()->model;
+  D::Widget *w[16] = {};
+  for (int i = 2; i <= 15; i++) {
+    w[i] = widget((uint32_t) i);
+    if (!CHECK_MSG(w[i] && w[i]->obj, std::to_string(i))) return;
+  }
+  // One object for a bar and for any slider with a track; the four of
+  // version 1 for a knob, also one whose track of 1 colour is no track.
+  for (int i : {2, 3, 4, 8, 10}) CHECK_MSG(D::Loader::objects_of(*w[i]) == 4 && w[i]->o1 && w[i]->o3, std::to_string(i));
+  for (int i : {5, 6, 7, 9, 11, 12, 13, 14, 15})
+    CHECK_MSG(D::Loader::objects_of(*w[i]) == 1 && !w[i]->o1 && !w[i]->o2 && !w[i]->o3 &&
+                  lv_obj_get_child_count(w[i]->obj) == 0,
+              std::to_string(i));
+  CHECK(w[8]->track_n == 0 && !w[8]->track && w[6]->track_n == 2 && w[7]->track_n == 8);
+  CHECK(w[9]->track_n == 8 && w[9]->track[7] == 8);
+
+  // Value from the finger: along the axis of each direction, from x0 to x1
+  // with a track (x0 = R: 7 on the knob look, min(r2, S div 2) on a bar).
+  struct Press {
+    int id, x, y;
+    const char *want;
+  } presses[] = {
+      {2, 116 + 150, 160, "c=75"},             // from the left: 150 of 200
+      {3, 360, 140 + 200 - 50, "c=25"},        // from the bottom: 50 of 200
+      {4, 420, 140 + 50, "c=25"},              // from the top: 50 of 200
+      {5, 490, 140 + 150, "c=75"},             // a bar from the top
+      {6, 116 + 7 + 93, 220, "c=50"},          // (100 - 7) / 186
+      {7, 570, 140 + 200 - 55, "c=25"},        // (55 - 10) / 180, from the bottom
+      {6, 116 + 3, 220, "c=0"},                // on the start cap: 0
+      {6, 116 + 197, 220, "c=100"},            // on the end cap: 100
+      {10, 116 + 50, 340, "c=25"},             // nv: no value, and it takes input
+      {11, 116 + 150, 400, "c=75"},
+  };
+  for (const Press &p : presses) {
+    fake::st.events.clear();
+    hh::tap(p.x, p.y);
+    hh::advance(20);
+    CHECK_MSG(last_input_value() == p.want, std::to_string(p.id) + ": " + last_input_value() + ", want " + p.want);
+    CHECK_MSG(fake::events("tab1_input").size() == 1 && tab::current_page() == 0, std::to_string(p.id));
+    // Policy 2 (bar 11): the waiting outline on the drawn object until the answer.
+    if (p.id == 11) CHECK(w[11]->fb == 1 && lv_obj_get_style_outline_width(w[11]->obj, LV_PART_MAIN) == 2);
+    rig.settle();
+    CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  }
+  hh::advance(D::PROGRESS_TIMEOUT_MS);  // the value bar 11 sent is shown no more
+  // A drag that starts on an upright slider moves it and is never a swipe.
+  fake::st.events.clear();
+  hh::drag(360, 300, 300, 180, 200);
+  hh::advance(20);
+  CHECK_STR(last_input_value(), "c=80");
+  CHECK(tab::current_page() == 0);
+  rig.settle();
+  CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  hh::advance(20);
+
+  // The knob from the bottom: the fill grows upwards to the knob.
+  lv_obj_update_layout(w[3]->obj);
+  CHECK(lv_obj_get_height(w[3]->o2) == 80 && lv_obj_get_y(w[3]->o2) == 120 && lv_obj_get_y(w[3]->o3) == 200 - 80 - 11);
+  CHECK(lv_obj_get_height(w[4]->o2) == 80 && lv_obj_get_y(w[4]->o2) == 0 && lv_obj_get_y(w[4]->o3) == 80 - 11);
+  CHECK(lv_obj_get_x(w[3]->o1) == 13 && lv_obj_get_width(w[3]->o1) == 14);
+
+  // Tracks as drawn: each cap in its colour, the pieces fading from the
+  // start, the mark white on the place of the value.
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(118, 220), 0xFF0000) <= 1 && colour_gap(hh::pixel(116 + 198, 220), 0x0000FF) <= 1);
+  CHECK(colour_gap(hh::pixel(116 + 100, 220), 0xFFFFFF) <= 1);  // the mark at 7 + 0.5 * 186 = 100
+  CHECK(colour_gap(hh::pixel(116 + 40, 220), 0xFF0000) > 4 && colour_gap(hh::pixel(116 + 40, 220), 0x0000FF) > 4);
+  // From the bottom, 8 colours: the bottom cap in the first, the top cap in
+  // the last; piece 0 (10 to 35) red at its start and green at its end.
+  const int bottom = 140 + 200;
+  CHECK(colour_gap(hh::pixel(570, bottom - 3), 0xFF0000) <= 1 && colour_gap(hh::pixel(570, 140 + 3), 0x000000) <= 1);
+  CHECK(colour_gap(hh::pixel(552, bottom - 11), 0xFF0000) < colour_gap(hh::pixel(552, bottom - 11), 0x00FF00));
+  CHECK(colour_gap(hh::pixel(552, bottom - 34), 0x00FF00) < colour_gap(hh::pixel(552, bottom - 34), 0xFF0000));
+  // The mark of the upright bar: 12 along, S + 4 across, at 10 + 0.5 * 180 = 100.
+  CHECK(colour_gap(hh::pixel(570, bottom - 100), 0xFFFFFF) <= 1);
+  CHECK(colour_gap(hh::pixel(540 - 1, bottom - 100), 0x15181D) <= 1);  // 2 px past the side, its border
+
+  // `nv`: without a value at full opacity, the track only; without `nv` faded.
+  auto opa = [](D::Widget *x) { return (int) lv_obj_get_style_opa(x->obj, LV_PART_MAIN); };
+  CHECK(opa(w[10]) == LV_OPA_COVER && !w[10]->faded && hidden(w[10]->o2) && hidden(w[10]->o3));
+  CHECK(opa(w[11]) == LV_OPA_COVER && !w[11]->faded && w[11]->sl_pos == 0);
+  CHECK(opa(w[12]) == LV_OPA_COVER && w[12]->sl_pos == -1 && opa(w[13]) == LV_OPA_40 && w[13]->faded);
+  const D::CardLook *k = D::card_look(m, widget(1));
+  if (!CHECK(k)) return;
+  CHECK(colour_gap(hh::pixel(116 + 100, 400), k->t.card2) <= 1);  // a bar with nv and no value: the track
+  CHECK_STR(rig.set("[3,30]"), "");
+  CHECK(!hidden(w[10]->o3) && w[12]->sl_pos == D::slider_pos_of(D::slider_geom(200, 40, 0, 0, 7, 10), 0.3));
+  CHECK_STR(rig.set("[3,null]"), "");
+
+  // A faded track is one picture: each pixel of the faded copy is 40% of
+  // the one drawn at full opacity over the card, no part through another.
+  hh::refresh();
+  auto one_picture = [&](int x0, int x1, int y0, int y1, int dx) {
+    int worst = 0, seen = 0;
+    double bg[3];
+    channels(hh::rgb565(k->t.bg), bg);
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++) {
+        double full[3], faded[3];
+        channels(hh::pixel(x, y), full);
+        channels(hh::pixel(x + dx, y), faded);
+        if (full[0] == bg[0] && full[1] == bg[1] && full[2] == bg[2]) continue;
+        seen++;
+        for (int i = 0; i < 3; i++) {
+          const double want = 0.4 * full[i] + 0.6 * bg[i];
+          if (fabs(faded[i] - want) > 1.6) worst++;
+        }
+      }
+    return seen > 100 && worst == 0;
+  };
+  CHECK_MSG(one_picture(116, 316, 430, 470, 224), "the knob look's track");
+  CHECK_MSG(one_picture(116, 316, 472, 482, 224), "a bar's track");
+
+  // A bar's colours, from the widget's own (worked out at the build): the
+  // fill c_now, the handle c_on = readable(fill); the icon tx2 below 48.
+  CHECK_STR(rig.set("[1,60]"), "");
+  hh::refresh();
+  D::Widget *bar = w[5];
+  const int fill = (int) D::px_round(0.6 * 200);
+  CHECK(bar->sl_pos == fill && bar->sl_fill == bar->c_now && bar->c_on == D::readable(bar->c_now));
+  CHECK(colour_gap(hh::pixel(470, 140 + fill / 2), bar->c_now) == 0);
+  CHECK(colour_gap(hh::pixel(490, 140 + fill - 10), bar->c_on) == 0);  // the handle, fill - 12 to fill - 8
+  CHECK(colour_gap(hh::pixel(490, 140 + fill + 20), k->t.card2) == 0);  // the track past the fill
+  // The icon, centred 24 from the start edge: readable(fill) on a fill of
+  // 48 or more, else tx2 (the card is not filled).
+  auto icon_pixels = [&](uint32_t colour) {
+    int n = 0, sum = 0;
+    for (int y = 140; y < 140 + 60; y++)
+      for (int x = 490 - 16; x < 490 + 16; x++)
+        if (hh::pixel(x, y) == hh::rgb565(colour)) {
+          n++;
+          sum += y - 140;
+        }
+    // Its pixels centre on 24 from the start edge (the top: dir 2).
+    return n > 20 && std::abs(2 * sum - 48 * n) <= 3 * n ? n : 0;
+  };
+  CHECK(bar->sl_icon == bar->c_on && icon_pixels(bar->c_on) > 20);
+  CHECK_STR(rig.set("[1,20]"), "");
+  hh::refresh();
+  CHECK(bar->sl_pos == 40 && bar->sl_icon == k->t.tx2 && icon_pixels(k->t.tx2) > 20);
+  CHECK_STR(rig.set("[1,60]"), "");
+
+  // A drag on a bar ended by a forced swap sends the value under the finger.
+  fake::st.events.clear();
+  const std::string small = layout_bytes("layout_small.dl.json");
+  hh::press(490, 150);
+  hh::move(490, 140 + 120);  // 120 of 200 from the top: 60
+  hh::move(490, 140 + 170);  // 85
+  CHECK_STR(rig.ha.send(small), "");
+  CHECK_STR(rig.ha.commit(hash16(small)), "");
+  hh::advance(D::SWAP_WAIT_MS + 600);
+  CHECK_STR(tab::active_hash(), hash16(small));
+  const auto ev = fake::events("tab1_input");
+  CHECK_MSG(ev.size() == 1 && ev[0].d.find("|" + rig.hash + "|5|c|0|85") != std::string::npos,
+            ev.empty() ? std::string("nothing sent") : ev[0].d);
+  hh::release();
+  hh::advance(50);
+  CHECK(fake::events("tab1_input").size() == 1);
+
+  // Nothing is sent by a slider whose max is not above its min, nor by one
+  // whose track has no length (a knob look 12 long: x1 = 5 is below x0 = 7).
+  const std::string none =
+      "{\"change\":{\"p\":0},\"id\":2,\"max\":5,\"min\":5,\"r\":[116,140,200,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":3,\"look\":1,\"max\":{\"s\":2},\"min\":5,\"r\":[116,200,200,40],\"step\":1,"
+      "\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":4,\"max\":100,\"min\":0,\"r\":[116,260,12,40],\"step\":1,\"t\":\"slider\","
+      "\"track\":[255,65280],\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":5,\"max\":100,\"min\":0,\"r\":[116,320,12,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}}";
+  if (!CHECK(rig.up(two_pages("", none, "nn"), false))) return;
+  CHECK_STR(rig.set("[1,5],[2,3]"), "");
+  for (const auto &p : {std::make_pair(200, 160), std::make_pair(200, 220), std::make_pair(122, 280)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(sent_words().empty(), std::to_string(p.second) + ": " + sent_words());
+  }
+  // Without a track the same 12 px send (the run is the length).
+  hh::tap(122, 340);
+  hh::advance(20);
+  CHECK_STR(sent_words(), "5c");
+
+  // In a card that is not available, the 40% is one picture too: under the
+  // mark and under the fill nothing of the track is drawn, so each shows as
+  // 40% of its colour over the card.
+  const std::string un =
+      "{\"id\":2,\"max\":100,\"min\":0,\"r\":[116,140,300,40],\"step\":1,\"t\":\"slider\","
+      "\"track\":[255,65280],\"value\":{\"s\":1}},"
+      "{\"id\":3,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,200,300,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}}";
+  // A white track on a dark card, so a track under a part would show.
+  if (!CHECK(rig.up(two_pages("\"un\":{\"s\":2},", un, "nb", "{\"card2\":16777215}"), false))) return;
+  CHECK_STR(rig.set("[1,50],[2,1]"), "");
+  hh::refresh();
+  D::Widget *mk = widget(2), *fl = widget(3);
+  const D::CardLook *uk = D::card_look(*active()->model, widget(1));
+  if (!CHECK(mk && fl && uk && uk->unavailable && mk->sl_pos == 150 && fl->sl_pos == 150)) return;
+  CHECK((int) lv_obj_get_style_opa(mk->obj, LV_PART_MAIN) == LV_OPA_40);
+  auto over_card = [&](uint16_t got, uint32_t colour) {
+    double g[3], c[3], b[3];
+    channels(got, g);
+    channels(hh::rgb565(colour), c);
+    channels(hh::rgb565(uk->t.bg), b);
+    for (int i = 0; i < 3; i++)
+      if (fabs(g[i] - (0.4 * c[i] + 0.6 * b[i])) > 1.6) return false;
+    return true;
+  };
+  CHECK_MSG(over_card(hh::pixel(116 + 150, 160), 0xFFFFFF), "the mark");
+  CHECK_MSG(over_card(hh::pixel(116 + 75, 220), fl->c_now), "the fill");
+  CHECK_MSG(over_card(hh::pixel(116 + 225, 220), uk->t.card2), "the track past the fill");
+  CHECK_STR(rig.set("[2,0]"), "");
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(116 + 150, 160), 0xFFFFFF) == 0 && colour_gap(hh::pixel(116 + 75, 220), fl->c_now) == 0);
+
+  // On the kit's filled card 1: the track in FP, the fill legible(c, FP, FT).
+  if (!CHECK(rig.up())) return;
+  hh::refresh();
+  D::Widget *kb = widget(6);
+  const D::CardLook *kk = D::card_look(*active()->model, widget(2));
+  if (!CHECK(kb && kk && kk->k.filled)) return;
+  CHECK(kb->sl_track == kk->k.FP && kb->c_now == D::legible(16754519, kk->k.FP, kk->k.text));
+  CHECK(colour_gap(hh::pixel(kb->r[0] + kb->r[2] - 20, centre_y(kb->r)), kk->k.FP) == 0);
+  CHECK(colour_gap(hh::pixel(kb->r[0] + 100, kb->r[1] + 6), kb->c_now) == 0);
 }

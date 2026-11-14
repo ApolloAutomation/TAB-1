@@ -192,6 +192,14 @@ inline void set_width(lv_obj_t *o, int32_t w) {
   lv_obj_set_width(o, w);
 }
 
+inline void set_height(lv_obj_t *o, int32_t h) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_HEIGHT, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == h) return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_height(o, h);
+}
+
 inline void set_hidden(lv_obj_t *o, bool hide) {
   if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hide) return;
   TAB_COUNT(style_sets);
@@ -503,6 +511,97 @@ inline void button_box(const Widget &w, int *x, int *y, int *bw, int *bh) {
 
 inline int button_icon_px(const Widget &w) { return w.isz == 1 ? image_icon_px(w.r[2], w.r[3]) : 24; }
 
+// ---------------------------------------------------------------- (2) slider geometry
+
+// A slider along its axis (contract 4.7, "Slider" and the (2) rows after
+// it), as distances from the start edge: L the length along the axis, S the
+// other side, R the radius of a track (7 for the knob look, min(r2, S div 2)
+// for a bar), x0 and x1 where a track's mark can be, run the length a
+// finger moves over. colours is the track's count, 0 without a track.
+struct SliderGeom {
+  int L, S, R, x0, x1, run;
+  uint8_t look, dir, colours;
+};
+
+inline SliderGeom slider_geom(int w, int h, uint8_t look, uint8_t dir, uint8_t colours, int r2) {
+  SliderGeom g{};
+  if (w < 0) w = 0;
+  if (h < 0) h = 0;
+  if (r2 < 0) r2 = 0;
+  g.look = look;
+  g.dir = dir;
+  g.colours = colours >= 2 ? colours : 0;
+  g.L = dir == 0 ? w : h;
+  g.S = dir == 0 ? h : w;
+  g.R = look == 0 ? 7 : (r2 < g.S / 2 ? r2 : g.S / 2);
+  g.x0 = g.R;
+  g.x1 = g.L - g.R;
+  g.run = g.colours ? g.x1 - g.x0 : g.L;
+  return g;
+}
+
+// A point's distance from the start edge along the axis, in a rectangle at
+// (x, y) of the size of g: the left edge, the bottom edge or the top edge.
+inline double slider_along(const SliderGeom &g, int x, int y, double px, double py) {
+  if (g.dir == 0) return px - x;
+  if (g.dir == 1) return (double) y + g.L - py;
+  return py - y;
+}
+
+// The amount under a finger, 0 to 1: along the whole length, or with a
+// track from x0 to x1. 0 for a slider with no length to move over.
+inline double slider_amount_at(const SliderGeom &g, double along) {
+  if (g.run <= 0) return 0;
+  const double a = (along - (g.colours ? g.x0 : 0)) / g.run;
+  return !(a > 0) ? 0 : a > 1 ? 1 : a;
+}
+
+// Whether a release sends: the slider has a length to move over and its
+// max is above its min (contract 4.7, the fourth rule for formulas).
+inline bool slider_sends(const SliderGeom &g, double lo, double hi) { return g.run > 0 && hi > lo; }
+
+// Where an amount is drawn, from the start edge: the knob's centre or the
+// end of a bar's fill, round(amount * L); with a track the mark's centre,
+// round(x0 + amount * (x1 - x0)).
+inline int slider_pos_of(const SliderGeom &g, double amount) {
+  if (g.colours) return (int) px_round(g.x0 + amount * (g.x1 - g.x0));
+  return (int) px_round(amount * g.L);
+}
+
+// Where a slider's value is drawn: the knob's centre, the end of a bar's
+// fill or a track's mark; -1 without a value, and for a track also when it
+// has no run or the max is not above the min (no mark, contract 4.7).
+inline int slider_shown(const SliderGeom &g, bool has, double v, double lo, double hi) {
+  if (!has || (g.colours && (g.x1 <= g.x0 || !(hi > lo)))) return -1;
+  return slider_pos_of(g, fraction(v, lo, hi));
+}
+
+// Piece k (from 0) of a track of n colours: from x0 + floor(k * (x1 - x0) /
+// (n - 1)) to the same for k + 1. Only for x1 above x0.
+inline void track_piece(int n, int x0, int x1, int k, int *from, int *to) {
+  const int span = x1 - x0;
+  *from = x0 + k * span / (n - 1);
+  *to = x0 + (k + 1) * span / (n - 1);
+}
+
+// The two caps of a track: [0, min(x0, L)] in the first colour and from x1
+// (x0 when x1 is not above it) to L in the last.
+inline void track_caps(const SliderGeom &g, int *a1, int *b0) {
+  *a1 = g.x0 < g.L ? g.x0 : g.L;
+  const int e = g.x1 > g.x0 ? g.x1 : g.x0;
+  *b0 = e > 0 ? e : 0;
+}
+
+// The fill of a bar as drawn: none at 0, else at least 2R long.
+inline int bar_drawn(const SliderGeom &g, int fill) { return fill <= 0 ? 0 : fill > 2 * g.R ? fill : 2 * g.R; }
+
+// The handle of a bar with `change`: from fill - 12 to fill - 8, shown from
+// a fill of 28. The icon: centred 24 from the start edge when S >= 32, in
+// the colour on the fill from a fill of 48.
+inline bool bar_handle(int fill) { return fill >= 28; }
+inline bool bar_icon_room(const SliderGeom &g) { return g.S >= 32; }
+inline bool bar_icon_on_fill(const SliderGeom &g, int fill) { return g.S >= 32 && fill >= 48; }
+
 // ---------------------------------------------------------------- (2) label sizes
 
 // contract.json fonts.digits_glyphs, as UTF-8: what the digit sizes hold.
@@ -577,15 +676,30 @@ inline void after_press() {
   if (lv_display_get_default()) lv_refr_now(nullptr);
 }
 
+// (2) A slider's geometry, with the r2 of its card's colours.
+inline SliderGeom slider_geom_of(Model &m, const Widget &w) {
+  const CardLook *k = card_look(m, card_of(m, w));
+  return slider_geom(w.r[2], w.r[3], w.look, w.dir, w.track_n, k ? k->t.r2 : 0);
+}
+
+// (2) Whether the slider's release sends (contract 4.7): a slider whose
+// track has no length, or whose max is not above its min, sends nothing.
+inline bool slider_can_send(Model &m, Widget &w) {
+  double lo, hi, step;
+  limits_of(m, w, &lo, &hi, &step);
+  return slider_sends(slider_geom_of(m, w), lo, hi);
+}
+
+// The value under the finger: the amount along the axis for every look and
+// direction, from x0 to x1 with a track (contract 4.7).
 inline void slider_value_at(Layout &l, Widget &w, lv_indev_t *indev) {
   if (!indev) return;
   lv_point_t p;
   lv_indev_get_point(indev, &p);
   lv_area_t a;
   lv_obj_get_coords(w.obj, &a);
-  const int width = lv_area_get_width(&a);
-  double amount = width > 0 ? (double) (p.x - a.x1) / width : 0;
-  amount = amount < 0 ? 0 : amount > 1 ? 1 : amount;
+  const SliderGeom g = slider_geom_of(*l.model, w);
+  const double amount = slider_amount_at(g, slider_along(g, a.x1, a.y1, p.x, p.y));
   double lo, hi, step;
   limits_of(*l.model, w, &lo, &hi, &step);
   w.drag_value = clamp_step(lo + amount * (hi - lo), lo, hi, step);
@@ -966,6 +1080,180 @@ inline void on_thermo_draw(lv_event_t *e) {
   lv_draw_arc(layer, &arc);
 }
 
+// (2) The screen area of a slider's part: from d0 to d1 along the axis and
+// from c0 to c1 across it, in the slider's coordinates a.
+inline lv_area_t slider_area(const lv_area_t &a, const SliderGeom &g, int d0, int d1, int c0, int c1) {
+  lv_area_t r;
+  if (g.dir == 0) {
+    r.x1 = a.x1 + d0;
+    r.x2 = a.x1 + d1 - 1;
+    r.y1 = a.y1 + c0;
+    r.y2 = a.y1 + c1 - 1;
+    return r;
+  }
+  r.x1 = a.x1 + c0;
+  r.x2 = a.x1 + c1 - 1;
+  if (g.dir == 2) {
+    r.y1 = a.y1 + d0;
+    r.y2 = a.y1 + d1 - 1;
+  } else {
+    r.y1 = a.y1 + g.L - d1;
+    r.y2 = a.y1 + g.L - d0 - 1;
+  }
+  return r;
+}
+
+// Draws d on [d0, d1) along by [c0, c1) across, with only the part from k0
+// to k1 along kept (a cap is the rounded track kept to its own length).
+inline void slider_rect(lv_layer_t *layer, const lv_area_t &a, const SliderGeom &g, const lv_draw_rect_dsc_t &d, int d0,
+                        int d1, int c0, int c1, int k0, int k1) {
+  if (d1 <= d0 || c1 <= c0 || k1 <= k0) return;
+  const lv_area_t r = slider_area(a, g, d0, d1, c0, c1);
+  const lv_area_t keep = slider_area(a, g, k0, k1, c0 - 2, c1 + 2);
+  const lv_area_t clip = layer->_clip_area;
+  lv_area_t now;
+  now.x1 = clip.x1 > keep.x1 ? clip.x1 : keep.x1;
+  now.y1 = clip.y1 > keep.y1 ? clip.y1 : keep.y1;
+  now.x2 = clip.x2 < keep.x2 ? clip.x2 : keep.x2;
+  now.y2 = clip.y2 < keep.y2 ? clip.y2 : keep.y2;
+  if (now.x1 > now.x2 || now.y1 > now.y2) return;
+  layer->_clip_area = now;
+  lv_draw_rect(layer, &d, &r);
+  layer->_clip_area = clip;
+}
+
+// The same, leaving out the run from s0 to s1 along: while the slider is
+// faded the track is not drawn under the fill or the mark, so no part shows
+// through another and 40% is one picture (contract 4.7).
+inline void slider_rect_but(lv_layer_t *layer, const lv_area_t &a, const SliderGeom &g, const lv_draw_rect_dsc_t &d,
+                            int d0, int d1, int c0, int c1, int k0, int k1, int s0, int s1) {
+  if (s1 <= s0) {
+    slider_rect(layer, a, g, d, d0, d1, c0, c1, k0, k1);
+    return;
+  }
+  slider_rect(layer, a, g, d, d0, d1, c0, c1, k0, k1 < s0 ? k1 : s0);
+  slider_rect(layer, a, g, d, d0, d1, c0, c1, k0 > s1 ? k0 : s1, k1);
+}
+
+inline uint32_t track_colour(const Widget &w, int i) { return (uint32_t) w.track[i]; }
+
+// (2) A bar (look 1), or any slider with a track (contract 4.7): one object
+// whose picture this draws from the state paint_slider kept (sl_pos) and the
+// colours of the records: the track, the fill, the handle, the icon and the
+// mark. A track is its two caps (the rounded track kept to each cap) and
+// n - 1 pieces with a two-stop fade along the axis; none of them overlaps
+// another (cards spec B.4).
+inline void on_slider_draw(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model) return;
+  Model &m = *l->model;
+  const CardLook &k = look_for(m, card_of(m, *w));
+  lv_layer_t *layer = lv_event_get_layer(e);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  const SliderGeom g = slider_geom(lv_area_get_width(&a), lv_area_get_height(&a), w->look, w->dir, w->track_n, k.t.r2);
+  if (g.L <= 0 || g.S <= 0) return;
+  const lv_opa_t opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  const bool faded = opa < LV_OPA_MAX;
+  const int pos = w->sl_pos;
+  // Across: 14 thick and centred for the knob look, the whole side for a bar.
+  const int c0 = w->look == 0 ? (g.S - 14) / 2 : 0, c1 = w->look == 0 ? c0 + 14 : g.S;
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = opa;
+  d.border_opa = opa;
+  if (g.colours && w->track) {
+    const int n = g.colours;
+    const int half = w->look == 0 ? 11 : 6;
+    const int s0 = pos >= 0 && faded ? pos - half : 0, s1 = pos >= 0 && faded ? pos + half : 0;
+    int a1, b0;
+    track_caps(g, &a1, &b0);
+    d.radius = g.R;
+    d.bg_color = lv_color_hex(track_colour(*w, 0));
+    slider_rect_but(layer, a, g, d, 0, g.L, c0, c1, 0, a1, s0, s1);
+    d.bg_color = lv_color_hex(track_colour(*w, n - 1));
+    slider_rect_but(layer, a, g, d, 0, g.L, c0, c1, b0, g.L, s0, s1);
+    if (g.x1 > g.x0) {
+      d.radius = 0;
+      d.bg_grad.dir = g.dir == 0 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER;
+      d.bg_grad.stops_count = 2;
+      for (int i = 0; i + 1 < n; i++) {
+        int from, to;
+        track_piece(n, g.x0, g.x1, i, &from, &to);
+        // The fade runs from the start: upwards for a slider from the bottom.
+        const uint32_t first = track_colour(*w, g.dir == 1 ? i + 1 : i);
+        const uint32_t second = track_colour(*w, g.dir == 1 ? i : i + 1);
+        d.bg_color = lv_color_hex(first);
+        d.bg_grad.stops[0].color = lv_color_hex(first);
+        d.bg_grad.stops[0].opa = LV_OPA_COVER;
+        d.bg_grad.stops[0].frac = 0;
+        d.bg_grad.stops[1].color = lv_color_hex(second);
+        d.bg_grad.stops[1].opa = LV_OPA_COVER;
+        d.bg_grad.stops[1].frac = 255;
+        slider_rect_but(layer, a, g, d, from, to, c0, c1, from, to, s0, s1);
+      }
+      d.bg_grad.dir = LV_GRAD_DIR_NONE;
+      d.bg_grad.stops_count = 0;
+    }
+    if (pos < 0) return;
+    // The mark: white with a 2 px border in 0x15181D inside; a circle of 22
+    // on the knob look, 12 along by S + 4 across with radius 6 on a bar.
+    d.bg_color = lv_color_hex(0xFFFFFF);
+    d.border_color = lv_color_hex(0x15181D);
+    d.border_width = 2;
+    if (w->look == 0) {
+      const int cc = c0 + 7;
+      d.radius = LV_RADIUS_CIRCLE;
+      slider_rect(layer, a, g, d, pos - 11, pos + 11, cc - 11, cc + 11, pos - 11, pos + 11);
+    } else {
+      d.radius = 6;
+      slider_rect(layer, a, g, d, pos - 6, pos + 6, -2, g.S + 2, pos - 6, pos + 6);
+    }
+    return;
+  }
+  // A bar: the track, then the fill from the start, its handle and the icon.
+  const int fill = pos > 0 ? pos : 0;
+  const int drawn = bar_drawn(g, fill);
+  const int end = drawn < g.L ? drawn : g.L;
+  d.radius = g.R;
+  d.bg_color = lv_color_hex(w->sl_track);
+  slider_rect_but(layer, a, g, d, 0, g.L, 0, g.S, 0, g.L, 0, faded ? end : 0);
+  if (drawn > 0) {
+    d.bg_color = lv_color_hex(w->sl_fill);
+    slider_rect(layer, a, g, d, 0, drawn, 0, g.S, 0, end);
+  }
+  if (w->change && bar_handle(fill)) {
+    d.radius = 2;
+    d.bg_color = lv_color_hex(w->c_on);
+    slider_rect(layer, a, g, d, fill - 12, fill - 8, 8, g.S - 8, 0, g.L);
+  }
+  if (w->icon && bar_icon_room(g)) {
+    const lv_font_t *font = icon_font(24);
+    char buf[5];
+    icon_utf8(icon_or_fallback(font, w->icon), buf);
+    lv_draw_label_dsc_t t;
+    lv_draw_label_dsc_init(&t);
+    t.font = font;
+    t.color = lv_color_hex(w->sl_icon);
+    t.opa = opa;
+    t.align = LV_TEXT_ALIGN_CENTER;
+    t.text = buf;
+    t.text_local = 1;
+    const int lh = line_height(font);
+    lv_area_t box = slider_area(a, g, 0, 48, 0, g.S);
+    if (g.dir == 0) {
+      box.y1 = a.y1 + (g.S - lh) / 2;
+      box.y2 = box.y1 + lh - 1;
+    } else {
+      const int32_t cy = (box.y1 + box.y2 + 1) / 2;
+      box.y1 = cy - lh / 2;
+      box.y2 = box.y1 + lh - 1;
+    }
+    lv_draw_label(layer, &t, &box);
+  }
+}
+
 // ---------------------------------------------------------------- painting
 
 // (2) The card of a widget pulses (contract 4.7, "Card, pulse").
@@ -1153,6 +1441,53 @@ inline bool slider_value(Model &m, Widget &w, double *v) {
   return bound_num(m, w.value, v);
 }
 
+// (2) A bar or a slider with a track (one drawn object): keeps where the
+// fill ends or the mark is and the colours, and invalidates only what
+// changed, the strip between the old and the new position when only the
+// position moved (cards spec B.4, rule 4). Nothing here lays anything out.
+inline void paint_drawn_slider(Widget &w, const CardLook &k, bool has, double v, double lo, double hi) {
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, w.track_n, k.t.r2);
+  const bool filled = k.k.filled;
+  int pos = slider_shown(g, has, v, lo, hi);
+  if (!g.colours && pos < 0) pos = 0;  // a bar without a value: no fill
+  const uint32_t track = filled ? k.k.FP : k.t.card2;
+  const uint32_t icon = bar_icon_on_fill(g, pos) ? w.c_on : filled ? k.k.FT : k.t.tx2;
+  set_outline(w.obj, w.fb == 1, filled ? k.k.FI : k.k.A);
+  if (!w.sl_drawn || w.sl_track != track || w.sl_fill != w.c_now || w.sl_icon != icon) {
+    w.sl_drawn = 1;
+    w.sl_track = track;
+    w.sl_fill = w.c_now;
+    w.sl_icon = icon;
+    w.sl_pos = (int16_t) pos;
+    lv_obj_invalidate(w.obj);
+    return;
+  }
+  if (w.sl_pos == pos) return;
+  // The strip that changes, along the axis: a mark at either place, or the
+  // end of the fill with its rounded corners and its handle.
+  const int was = w.sl_pos;
+  w.sl_pos = (int16_t) pos;
+  int from = 1 << 20, to = -(1 << 20);
+  auto take = [&](int a0, int a1) {
+    if (a0 < from) from = a0;
+    if (a1 > to) to = a1;
+  };
+  if (g.colours) {
+    const int half = (w.look == 0 ? 11 : 6) + 1;
+    if (was >= 0) take(was - half, was + half);
+    if (pos >= 0) take(pos - half, pos + half);
+  } else {
+    const int d0 = bar_drawn(g, was), d1 = bar_drawn(g, pos);
+    take((d0 < d1 ? d0 : d1) - g.R - 1, (d0 > d1 ? d0 : d1) + 1);
+    if (w.change && bar_handle(was)) take(was - 13, was - 7);
+    if (w.change && bar_handle(pos)) take(pos - 13, pos - 7);
+  }
+  lv_area_t a;
+  lv_obj_get_coords(w.obj, &a);
+  const lv_area_t strip = slider_area(a, g, from, to, -14, g.S + 14);
+  lv_obj_invalidate_area(w.obj, &strip);
+}
+
 inline void paint_slider(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, card_of(m, w));
@@ -1161,16 +1496,28 @@ inline void paint_slider(Layout &l, Widget &w) {
   const bool has = slider_value(m, w, &v);
   limits_of(m, w, &lo, &hi, &step);
   // Faded when the value went away, also under a dragging finger: the press
-  // is then lost (paint_widget).
+  // is then lost (paint_widget). (2) With `nv` 1 a slider without a value is
+  // not faded, shows its track only and takes input (contract 4.7).
   double real;
-  w.faded = w.ovr || bound_num(m, w.value, &real) ? 0 : 1;
-  fade(w.obj, !has || w.faded || k.unavailable);
-  const double amount = has ? fraction(v, lo, hi) : 0;
-  const int W = w.r[2], H = w.r[3];
-  const int fill = (int) js_round(amount * W);
+  w.faded = w.nv || w.ovr || bound_num(m, w.value, &real) ? 0 : 1;
+  fade(w.obj, (!has && !w.nv) || w.faded || k.unavailable);
+  if (w.look == 1 || w.track_n >= 2) {
+    paint_drawn_slider(w, k, has, v, lo, hi);
+    return;
+  }
+  // The knob of version 1, along its axis (2): the track 14 across, the fill
+  // from the start, the knob centred on the end of the fill.
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, 0, k.t.r2);
+  const int shown = slider_shown(g, has, v, lo, hi);
+  const int fill = shown > 0 ? shown : 0;
   set_bg(w.o1, filled ? k.k.FP : k.t.card2);
   set_bg(w.o2, w.c_has ? w.c_now : filled ? k.k.FI : k.k.A);
-  set_width(w.o2, fill);
+  if (w.dir == 0) {
+    set_width(w.o2, fill);
+  } else {
+    set_height(w.o2, fill);
+    move(w.o2, 0, w.dir == 1 ? g.L - fill : 0);
+  }
   set_hidden(w.o2, fill <= 0);
   set_bg(w.o3, filled ? k.k.FT : k.t.tx);
   style_num(w.o3, LV_STYLE_OUTLINE_WIDTH, filled ? 2 : 0);
@@ -1178,7 +1525,11 @@ inline void paint_slider(Layout &l, Widget &w) {
     style_colour(w.o3, LV_STYLE_OUTLINE_COLOR, k.k.F);
     style_num(w.o3, LV_STYLE_OUTLINE_OPA, LV_OPA_COVER);
   }
-  move(w.o3, fill - 11, (H - 22) / 2);
+  if (w.dir == 0)
+    move(w.o3, fill - 11, (w.r[3] - 22) / 2);
+  else
+    move(w.o3, (w.r[2] - 22) / 2, w.dir == 1 ? g.L - fill - 11 : fill - 11);
+  set_hidden(w.o3, !has && w.nv);
   set_outline(w.o1, w.fb == 1, filled ? k.k.FI : k.k.A);
 }
 
@@ -1556,18 +1907,40 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       place(w.obj, x, y, W, H);
       lv_obj_add_flag(w.obj, (lv_obj_flag_t) (LV_OBJ_FLAG_OVERFLOW_VISIBLE | LV_OBJ_FLAG_USER_1));
       lv_obj_remove_flag(w.obj, LV_OBJ_FLAG_GESTURE_BUBBLE);
-      // The knob reaches 11 px (and a 2 px ring) past the ends. At 40% opacity
-      // LVGL draws the slider through a layer of its own area plus this margin.
-      lv_obj_add_event_cb(w.obj, on_knob_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, nullptr);
-      lv_obj_refresh_ext_draw_size(w.obj);
+      const bool drawn = w.look == 1 || w.track_n >= 2;
+      // The knob reaches 11 px (and a 2 px ring) past the ends, and a track's
+      // mark past its sides: LVGL draws the slider with this margin.
+      if (w.look == 0 || w.track_n >= 2) {
+        lv_obj_add_event_cb(w.obj, on_knob_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, nullptr);
+        lv_obj_refresh_ext_draw_size(w.obj);
+      }
+      if (drawn) {
+        // (2) A bar or a slider with a track: one object, drawn by a callback
+        // (cards spec B.4). A fill that is a child with a size would lay the
+        // screen out at every move.
+        w.sl_pos = -1;
+        lv_obj_add_event_cb(w.obj, on_slider_draw, LV_EVENT_DRAW_MAIN, &w);
+        break;
+      }
+      // (2) Along the axis of `dir`: the track 14 across, centred.
+      const bool up = w.dir != 0;
       w.o1 = plain(w.obj);
-      place(w.o1, 0, (H - 14) / 2, W, 14);
+      if (up)
+        place(w.o1, (W - 14) / 2, 0, 14, H);
+      else
+        place(w.o1, 0, (H - 14) / 2, W, 14);
       set_radius(w.o1, 7);
       w.o2 = plain(w.o1);
-      place(w.o2, 0, 0, 0, 14);
+      if (up)
+        place(w.o2, 0, w.dir == 1 ? H : 0, 14, 0);
+      else
+        place(w.o2, 0, 0, 0, 14);
       set_radius(w.o2, 7);
       w.o3 = plain(w.obj);
-      place(w.o3, -11, (H - 22) / 2, 22, 22);
+      if (up)
+        place(w.o3, (W - 22) / 2, w.dir == 1 ? H - 11 : -11, 22, 22);
+      else
+        place(w.o3, -11, (H - 22) / 2, 22, 22);
       set_radius(w.o3, LV_RADIUS_CIRCLE);
       break;
     }

@@ -208,6 +208,13 @@ struct Widget {
   uint16_t ovr_slot; // card: the slot whose optimistic bool the card shows (contract 7.4); 0 none
   uint16_t ovr_from; // card: the widget of the card whose tap set it (the card, a switch, a button)
   uint32_t ring_c;   // button: the colour of that border
+  // (2) A drawn slider (a bar, or any slider with a track) as last painted
+  // (cards spec B.4): where its fill ends or its mark is, along the axis
+  // (-1: no mark), and the colours it was drawn in. A new position repaints
+  // only the strip between the two.
+  int16_t sl_pos;
+  uint8_t sl_drawn;  // painted at least once
+  uint32_t sl_track, sl_fill, sl_icon;
 };
 
 // (2) One card's colours: its tokens, fixed at the build (a card is on one
@@ -728,7 +735,9 @@ struct Loader {
       case W_LABEL: return 1;
       case W_BUTTON: return 3;
       case W_SWITCH: return 3;
-      case W_SLIDER: return 4;  // every look is drawn as the knob of version 1 so far
+      // The knob of version 1 is four objects; a bar and any slider with a
+      // track are one, drawn by a callback (cards spec B.4).
+      case W_SLIDER: return w.look == 1 || w.track_n >= 2 ? 1 : 4;
       case W_THERMO: return 6;
       case W_CHART: return 1;
       case W_IMAGE: return 2;

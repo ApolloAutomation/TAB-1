@@ -586,7 +586,8 @@ inline void widget_tapped(Layout &l, Widget &w) {
 }
 
 inline void slider_released(Layout &l, Widget &w, double value) {
-  if (!w.change) return;
+  // (2) No length to move over, or max not above min: nothing to send.
+  if (!w.change || !slider_can_send(*l.model, w)) return;
   input(l, w, 'c', true, value, w.change_v);
 }
 

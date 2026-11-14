@@ -732,6 +732,16 @@ pages stale, which the timer paints a few at a time (never in a tick that
 ran a build step) and `show_page` paints before the page shows (test
 `repaint_cost`, which counts style calls and pending layout passes).
 
+A slider of version 1 (the knob, no track) is four objects as before, laid
+along its `dir`. A bar (`look` 1) and any slider with a `track` are one
+object that draws its track, fill, handle, icon and mark itself; a new value
+redraws only the strip between the old and the new place, with no style
+call and no layout pass. Value from the finger and where a value is drawn
+go through the helpers `slider_geom`, `slider_amount_at` and
+`slider_shown`, checked against `maths.json` (`slider`, `track`). While it
+is faded no part of it is drawn over another, so 40% is one picture (test
+`slider_looks`).
+
 It also builds and runs `tests/test_fast_display.cpp` the same two ways.
 That test takes the rotation out of `fast_display.h` (with
 `FAST_DISPLAY_HOST_TEST` defined, no LVGL and no ESPHome) and compares it,
