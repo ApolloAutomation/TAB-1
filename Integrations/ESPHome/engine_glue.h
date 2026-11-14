@@ -34,7 +34,7 @@
 // The version of this file. ESPHome builds an engine_glue.h from the ESPHome
 // config folder instead of this one when there is one there, so Engine.yaml
 // stops a build whose copy has another number, or none (engine/tab_files.h).
-#define TAB1_FILES_GLUE 12
+#define TAB1_FILES_GLUE 13
 
 #ifndef TAB_GLUE_HOST_TEST
 #include <string>

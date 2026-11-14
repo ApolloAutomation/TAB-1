@@ -6191,6 +6191,69 @@ TEST(maths_fixture) {
     if (!same) miss("track " + v["n"].s + " " + v["x0"].s + " " + v["x1"].s);
   }
   CHECK_MSG(bad == 0, std::to_string(bad) + " track pieces differ, the first: " + first);
+
+  // (package E7) A line chart's points (linePoints) and the rectangles of
+  // its steps, also for one value, no value and rectangles of 0 and 9 px.
+  bad = 0;
+  int runs = 0;
+  CHECK(f["steps"].size() >= 7);
+  for (const tj::Value &v : f["steps"].a) {
+    std::vector<double> vals;
+    for (const tj::Value &x : v["values"].a) vals.push_back(x.n);
+    const int n = (int) vals.size(), W = v["w"].i(), H = v["h"].i();
+    double low = n ? vals[0] : 0, high = low;
+    for (double x : vals) {
+      low = fmin(low, x);
+      high = fmax(high, x);
+    }
+    const std::string what = "steps " + v["w"].s + "x" + v["h"].s + " of " + std::to_string(n);
+    const int count = D::chart_points(n);
+    if ((size_t) count != v["points"].size()) {
+      miss(what + ": " + std::to_string(count) + " points");
+      continue;
+    }
+    std::vector<int32_t> got;
+    double xa = 0, ya = 0;
+    for (int i = 0; i < count; i++) {
+      double x, y;
+      D::chart_point(vals.data(), n, low, high, W, H, i, &x, &y);
+      if (x != v["points"][(size_t) i][0].n || y != v["points"][(size_t) i][1].n) miss(what + ": point " + std::to_string(i));
+      if (i) {
+        int32_t rs[2][4];
+        const int nr = D::chart_step(xa, ya, x, y, rs);
+        for (int j = 0; j < nr; j++) got.insert(got.end(), rs[j], rs[j] + 4);
+      }
+      xa = x;
+      ya = y;
+    }
+    const tj::Value &e = v["expect"];
+    bool same = got.size() == e.size() * 4;
+    for (size_t k = 0; same && k < e.size(); k++)
+      for (size_t j = 0; j < 4; j++) same = same && got[k * 4 + j] == e[k][j].i();
+    runs += (int) e.size();
+    if (!same) miss(what + ": rectangles");
+  }
+  CHECK(runs >= 20);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " chart steps differ, the first: " + first);
+
+  // (package E7) The colour of each bar with `mark`: acc2 as usual, the bar
+  // at round(mark) acc, the later ones card2; none past the bars.
+  bad = 0;
+  CHECK(f["bars"].size() >= 13);
+  for (const tj::Value &v : f["bars"].a) {
+    const int n = v["n"].i();
+    const bool has = !v["mark"].is_null();
+    const int mark = D::chart_mark(n, has, has ? v["mark"].n : 0);
+    const std::string what = "bars " + v["n"].s + " mark " + (has ? v["mark"].s : "none");
+    if (v["expect"].size() != (size_t) (n > 0 ? n : 0)) miss(what + ": count");
+    for (int i = 0; i < n && i < (int) v["expect"].size(); i++) {
+      const uint32_t c = D::chart_bar_colour(i, mark, 1, 2, 3);
+      const std::string &role = v["expect"][(size_t) i].s;
+      if (c != (role == "acc2" ? 1u : role == "acc" ? 2u : role == "card2" ? 3u : 0u)) miss(what + ": bar " + std::to_string(i));
+    }
+  }
+  CHECK(D::chart_mark(7, true, 1e9) == -1 && D::chart_mark(7, true, -1e9) == -1 && D::chart_mark(7, true, 0.49) == 0);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " bar colours differ, the first: " + first);
   // The engine's list of digit glyphs is contract.json's.
   CHECK_STR(D::DIGITS_GLYPHS, tj::load(CDIR + "/contract.json")["fonts"]["digits_glyphs"].s);
 }
@@ -8266,4 +8329,133 @@ TEST(slider_looks) {
   CHECK(kb->sl_track == kk->k.FP && kb->c_now == D::legible(16754519, kk->k.FP, kk->k.text));
   CHECK(colour_gap(hh::pixel(kb->r[0] + kb->r[2] - 20, centre_y(kb->r)), kk->k.FP) == 0);
   CHECK(colour_gap(hh::pixel(kb->r[0] + 100, kb->r[1] + 6), kb->c_now) == 0);
+}
+
+// Package E7 (contract 4.7): the thermostat's buttons of side `bs`, its `c`
+// and its `mark` (drawn from its own value, also while the thermostat has
+// none, then faded); the chart's `c`, steps (`st` 1) and the "now" bar of
+// `mark`. The kit's page 1: thermostat 32 (bs 56, c, mark slot 24, value
+// slot 23, 7 to 35), line chart 34 (st 1, c, values slot 25) and bar chart
+// 35 (values slot 26, mark slot 27).
+TEST(thermostat_and_chart) {
+  // The mark's square by hand: s = 228, radius 0.36 * 228 = 82.08, arc
+  // width round(16.29 * 228 / 200) = 19, so a diameter of 15; 20.8 is at
+  // 135 + 270 * 13.8 / 28 = 268.07 degrees, centre (121.24, 31.97).
+  int32_t d[4];
+  CHECK(D::thermo_mark(248, 228, true, 20.8, 7, 35, d) && d[0] == 114 && d[1] == 24 && d[2] == 15 && d[3] == 15);
+  // 22 is at 279.64 degrees: centre (137.75, 33.08).
+  CHECK(D::thermo_mark(248, 228, true, 22, 7, 35, d) && d[0] == 130 && d[1] == 26 && d[2] == 15);
+  // The ends are inside, a value outside or none is no mark; min equal to
+  // max puts a value of min at 135 degrees; min above max has no inside.
+  CHECK(D::thermo_mark(248, 228, true, 7, 7, 35, d) && D::thermo_mark(248, 228, true, 35, 7, 35, d));
+  CHECK(!D::thermo_mark(248, 228, true, 6.9, 7, 35, d) && !D::thermo_mark(248, 228, true, 35.1, 7, 35, d));
+  CHECK(!D::thermo_mark(248, 228, false, 20, 7, 35, d) && !D::thermo_mark(248, 228, true, 20, 35, 7, d));
+  CHECK(D::thermo_mark(248, 228, true, 7, 7, 7, d) && d[0] == (int32_t) floor(124 - 0.36 * 228 * sqrt(0.5) - 7.5 + 0.5));
+  CHECK(!D::thermo_mark(0, 228, true, 20, 7, 35, d) && !D::thermo_mark(248, 0, true, 20, 7, 35, d));
+  // A thermostat of 1 px: a dot of the smallest diameter, 6, at a finite place.
+  CHECK(D::thermo_mark(1, 1, true, 1e9, -1e9, 1e9, d) && d[2] == 6 && std::abs(d[0]) < 10 && std::abs(d[1]) < 10);
+
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *th = widget(32), *th47 = widget(47), *line = widget(34), *bars = widget(35);
+  if (!CHECK(th && th47 && line && bars && th->obj && line->obj && bars->obj)) return;
+  const D::CardLook *k31 = D::card_look(m, widget(31)), *k33 = D::card_look(m, widget(33));
+  if (!CHECK(k31 && k33)) return;
+
+  // Buttons of side bs at the bottom corners; the default stays 36. The
+  // body is not clickable: a press there is the card's (contract 4.3).
+  CHECK(th->bs == 56 && obj_at(th->o2, 116, 140 + 228 - 56, 56, 56) && obj_at(th->o3, 116 + 248 - 56, 140 + 228 - 56, 56, 56));
+  CHECK(th47->bs == 36 && obj_at(th47->o2, 788, 448 + 196 - 36, 36, 36));
+  CHECK(!clickable(th->obj) && clickable(th->o2));
+  CHECK(obj_at(lv_obj_get_child(th->o2, 0), 116, 140 + 228 - 56, 56, 56));  // the icon's box
+  // A press 45 px in and 10 px down in the minus button, outside where a
+  // button of 36 would be, steps the value.
+  hh::tap(116 + 45, 312 + 10);
+  hh::advance(20);
+  CHECK_STR(sent_words(), "32c");
+  CHECK_STR(last_input_value(), "c=21");
+  rig.settle();
+  CHECK_STR(rig.set("[23,21.5],[24,20.8]"), "");
+  hh::advance(20);
+
+  // The value arc in legible(c, background, text); the mark a dot in the
+  // card's text colour now, on top of it.
+  hh::refresh();
+  CHECK(th->c_has && th->c_now == D::legible(16739166, k31->k.background, k31->k.text));
+  CHECK(colour_gap(hh::pixel(237, 171), k31->k.text) <= 1);
+  CHECK(colour_gap(hh::pixel(237 - 9, 171), th->c_now) <= 1);  // the arc past the dot's side
+  // A new mark repaints with no style call and no layout pass.
+  D::test_counts() = D::TestCounts{};
+  // 25 is at 308.57 degrees, on the track past the value arc (21.5):
+  // centre (175.18, 49.83), square [168, 42, 15, 15].
+  CHECK(D::thermo_mark(248, 228, true, 25, 7, 35, d) && d[0] == 168 && d[1] == 42);
+  CHECK_STR(rig.set("[24,25]"), "");
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending());
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(116 + 175, 140 + 49), k31->k.text) <= 1);
+  CHECK(colour_gap(hh::pixel(237, 171), th->c_now) <= 1);  // the old place
+  // Outside min to max, or without a value: no mark.
+  for (const char *no : {"[24,40]", "[24,6]", "[24,null]"}) {
+    CHECK_STR(rig.set(no), "");
+    hh::refresh();
+    CHECK_MSG(colour_gap(hh::pixel(116 + 175, 140 + 49), k31->t.card2) <= 1, no);
+  }
+  // Without a value of its own the thermostat fades, and the mark is drawn
+  // all the same, faded with it.
+  CHECK_STR(rig.set("[23,null],[24,null]"), "");
+  hh::refresh();
+  CHECK(th->faded && (int) lv_obj_get_style_opa(th->obj, LV_PART_MAIN) == LV_OPA_40);
+  const uint16_t track = hh::pixel(237, 171);
+  CHECK(colour_gap(track, th->c_now) > 8);  // no value arc
+  CHECK_STR(rig.set("[24,20.8]"), "");
+  hh::refresh();
+  const uint16_t dot = hh::pixel(237, 171);
+  CHECK(colour_gap(dot, k31->k.text) > 8);  // not at full opacity
+  double a[3], b[3];
+  channels(dot, a);
+  channels(track, b);
+  CHECK_MSG(a[0] + a[1] + a[2] < b[0] + b[1] + b[2] - 12, "the faded dot is darker than the faded track");
+  CHECK_STR(rig.set("[23,21.5],[24,20.8]"), "");
+
+  // The line chart with st 1, the same values and size as the first case
+  // of maths.json's steps: its rectangles in legible(c, ...), nothing on
+  // the straight line from point to point.
+  hh::refresh();
+  CHECK(line->st == 1 && line->c_has && line->c_now == D::legible(2060241, k33->k.background, k33->k.text));
+  CHECK(colour_gap(hh::pixel(404 + 30, 140 + 100), line->c_now) <= 1);  // [3, 99, 69, 3]
+  CHECK(colour_gap(hh::pixel(404 + 71, 140 + 95), line->c_now) <= 1);   // [70, 90, 3, 11]
+  CHECK(colour_gap(hh::pixel(404 + 300, 140 + 4), line->c_now) <= 1);   // [272, 3, 69, 3]
+  CHECK(colour_gap(hh::pixel(404 + 38, 140 + 95), k33->k.background) <= 1);  // the line would be at 95.4
+  CHECK(colour_gap(hh::pixel(404 + 38, 140 + 102), k33->t.line) <= 1);       // the base line, row h - 2
+
+  // The bar chart: before round(mark) acc2, at it acc, after it card2.
+  auto bar_at = [&](int i) { return hh::pixel(404 + (int) (i * (344 - 24) / 7.0 + i * 4 + 22), 252 + 112); };
+  auto bars_are = [&](const char *want) {
+    hh::refresh();
+    for (int i = 0; i < 7; i++) {
+      const uint32_t c = want[i] == '2' ? k33->t.acc2 : want[i] == 'a' ? k33->k.A : k33->t.card2;
+      if (colour_gap(bar_at(i), c) > 1) return false;
+    }
+    return true;
+  };
+  CHECK(k33->k.A != k33->t.acc2 && k33->t.card2 != k33->t.acc2);
+  CHECK_MSG(bars_are("2222acc"), "mark 4");
+  D::test_counts() = D::TestCounts{};
+  CHECK_STR(rig.set("[27,2.5]"), "");
+  CHECK(D::test_counts().style_sets == 0 && !layout_pending());
+  CHECK_MSG(bars_are("222accc"), "mark 2.5");
+  CHECK_STR(rig.set("[27,6.4]"), "");
+  CHECK_MSG(bars_are("222222a"), "mark 6.4");
+  CHECK_STR(rig.set("[27,-0.5]"), "");
+  CHECK_MSG(bars_are("acccccc"), "mark -0.5");
+  for (const char *no : {"[27,null]", "[27,-1]", "[27,7]", "[27,1000000000]"}) {
+    CHECK_STR(rig.set(no), "");
+    CHECK_MSG(bars_are("2222222"), no);
+  }
+  CHECK_STR(rig.set("[27,4]"), "");
+  shot("thermostat_and_chart");
 }

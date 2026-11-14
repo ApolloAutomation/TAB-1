@@ -951,9 +951,88 @@ inline const CardLook &look_for(Model &m, Widget *card) {
   return k ? *k : none;
 }
 
+// ---------------------------------------------------------------- chart and thermostat shapes
+
+// logic.js linePoints: a line chart of n values has n points, one value two
+// (at the left and the right), none no point.
+inline int chart_points(int n) { return n <= 0 ? 0 : n == 1 ? 2 : n; }
+
+// Point i of linePoints(values, W, H, 4), from the rectangle's corner. low
+// and high are the smallest and the largest value.
+inline void chart_point(const double *v, int n, double low, double high, int W, int H, int i, double *x, double *y) {
+  const double pad = 4;
+  if (n == 1) {
+    *x = i == 0 ? pad : W - pad;
+    *y = H / 2.0;
+    return;
+  }
+  *x = pad + (double) i / (n - 1) * (W - pad * 2);
+  *y = high == low ? H / 2.0 : H - pad - (v[i] - low) / (high - low) * (H - pad * 2);
+}
+
+// (2) The steps of a line chart with `st` 1 (contract 4.7), from point a to
+// point b: a flat run from a to b at a's height, then an upright run at b
+// from a's height to b's, none when the two are equal. Each run is a filled
+// rectangle 3 thick, centred on its line and 1 longer at both ends, each
+// edge rounded on its own. Gives the number of rectangles, as [x, y, w, h]
+// from the chart's corner.
+inline int chart_step(double xa, double ya, double xb, double yb, int32_t out[2][4]) {
+  const int32_t left = px_round(fmin(xa, xb) - 1), right = px_round(fmax(xa, xb) + 1);
+  out[0][0] = left;
+  out[0][1] = px_round(ya - 1.5);
+  out[0][2] = right - left;
+  out[0][3] = 3;
+  if (ya == yb) return 1;
+  const int32_t top = px_round(fmin(ya, yb) - 1), bottom = px_round(fmax(ya, yb) + 1);
+  out[1][0] = px_round(xb - 1.5);
+  out[1][1] = top;
+  out[1][2] = 3;
+  out[1][3] = bottom - top;
+  return 2;
+}
+
+// (2) The bar of a bar chart that `mark` k names (contract 4.7): round(k),
+// or -1 for no mark: k has no value, or round(k) is below 0 or past the
+// last of n bars.
+inline int chart_mark(int n, bool has, double k) {
+  if (!has || !(k >= -1 && k <= n)) return -1;
+  const int i = (int) floor(k + 0.5);
+  return i >= 0 && i < n ? i : -1;
+}
+
+// (2) The colour of bar i with the mark at bar `mark` (-1: none): the bars
+// before it as usual, the one at it `now` (acc), later ones `later` (card2).
+inline uint32_t chart_bar_colour(int i, int mark, uint32_t usual, uint32_t now, uint32_t later) {
+  return mark < 0 || i < mark ? usual : i == mark ? now : later;
+}
+
+// (2) The mark of a thermostat in a W x H rectangle (contract 4.7): a circle
+// of diameter max(6, arc width - 4), centred on the middle line of the arc
+// (radius 0.36 * s) at 135° + 270° * (m - min) / (max - min). Gives the
+// circle's square [x, y, d, d] from the rectangle's corner, or false for no
+// mark: m has no value or lies outside min to max, or the rectangle has no
+// size.
+inline bool thermo_mark(int W, int H, bool has, double m, double lo, double hi, int32_t out[4]) {
+  if (!has || !(m >= lo && m <= hi)) return false;
+  int s = W < H ? W : H;
+  if (s <= 0) return false;
+  if (s > THERMO_MAX_SIDE) s = THERMO_MAX_SIDE;
+  int32_t width, radius;
+  thermo_arc(s, &width, &radius);
+  const int32_t d = width - 4 > 6 ? width - 4 : 6;
+  const double angle = (135 + 270 * fraction(m, lo, hi)) * (3.14159265358979323846 / 180);
+  const double r = 0.36 * s;
+  out[0] = px_round(W / 2 + r * cos(angle) - d / 2.0);
+  out[1] = px_round(H / 2 + r * sin(angle) - d / 2.0);
+  out[2] = out[3] = d;
+  return true;
+}
+
 // ---------------------------------------------------------------- custom drawing
 
-// logic.js linePoints and barRects, drawn with the LVGL draw API.
+// logic.js linePoints and barRects, drawn with the LVGL draw API. (2) `c`
+// colours the line or the bars, `st` 1 draws the line as steps, `mark` gives
+// a bar chart's "now" bar.
 inline void on_chart_draw(lv_event_t *e) {
   Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
   Layout *l = layout_of(w);
@@ -964,7 +1043,8 @@ inline void on_chart_draw(lv_event_t *e) {
   lv_area_t a;
   lv_obj_get_coords(obj, &a);
   const int W = lv_area_get_width(&a), H = lv_area_get_height(&a);
-  const Tok &t = look_for(m, card_of(m, *w)).t;
+  const CardLook &look = look_for(m, card_of(m, *w));
+  const Tok &t = look.t;
   const uint32_t colour = w->c_has ? w->c_now : t.acc2;
   const lv_opa_t opa = lv_obj_get_style_opa_recursive(obj, LV_PART_MAIN);
   lv_draw_rect_dsc_t base;
@@ -991,16 +1071,45 @@ inline void on_chart_draw(lv_event_t *e) {
     bar.bg_color = lv_color_hex(colour);
     bar.bg_opa = opa;
     bar.radius = (int32_t) fmin(4.0, bw / 2);
+    // (2) The bars before the mark as usual, the one at it in acc, later
+    // ones in card2.
+    double k = 0;
+    const int mark = chart_mark(n, bound_num(m, w->mark, &k), k);
     for (int i = 0; i < n; i++) {
       const double scaled = (v[i] - lo) / span * h2;
       const double bh = fmin(h2, fmax(2.0, scaled));
       const double x = i * (bw + gap), y = h2 - bh;
       lv_area_t r = {a.x1 + px_round(x), a.y1 + px_round(y), a.x1 + px_round(x + bw) - 1, a.y1 + px_round(y + bh) - 1};
+      bar.bg_color = lv_color_hex(chart_bar_colour(i, mark, colour, look.k.A, t.card2));
       if (r.x2 >= r.x1 && r.y2 >= r.y1) lv_draw_rect(layer, &bar, &r);
     }
     return;
   }
-  const double pad = 4;
+  const int count = chart_points(n);
+  if (w->st == 1) {
+    // (2) Steps: filled rectangles, no lines, each held to the rectangle.
+    lv_draw_rect_dsc_t run;
+    lv_draw_rect_dsc_init(&run);
+    run.bg_color = lv_color_hex(colour);
+    run.bg_opa = opa;
+    double xa, ya;
+    chart_point(v, n, low, high, W, H, 0, &xa, &ya);
+    for (int i = 1; i < count; i++) {
+      double xb, yb;
+      chart_point(v, n, low, high, W, H, i, &xb, &yb);
+      int32_t rs[2][4];
+      const int nr = chart_step(xa, ya, xb, yb, rs);
+      for (int j = 0; j < nr; j++) {
+        if (rs[j][2] <= 0 || rs[j][3] <= 0) continue;
+        const lv_area_t r = {LV_MAX(a.x1, a.x1 + rs[j][0]), LV_MAX(a.y1, a.y1 + rs[j][1]),
+                             LV_MIN(a.x2, a.x1 + rs[j][0] + rs[j][2] - 1), LV_MIN(a.y2, a.y1 + rs[j][1] + rs[j][3] - 1)};
+        if (r.x2 >= r.x1 && r.y2 >= r.y1) lv_draw_rect(layer, &run, &r);
+      }
+      xa = xb;
+      ya = yb;
+    }
+    return;
+  }
   lv_draw_line_dsc_t ld;
   lv_draw_line_dsc_init(&ld);
   ld.color = lv_color_hex(colour);
@@ -1008,16 +1117,7 @@ inline void on_chart_draw(lv_event_t *e) {
   ld.opa = opa;
   ld.round_start = 1;
   ld.round_end = 1;
-  auto point = [&](int i, double *x, double *y) {
-    if (n == 1) {
-      *x = i == 0 ? pad : W - pad;
-      *y = H / 2.0;
-      return;
-    }
-    *x = pad + (double) i / (n - 1) * (W - pad * 2);
-    *y = high == low ? H / 2.0 : H - pad - (v[i] - low) / (high - low) * (H - pad * 2);
-  };
-  const int count = n == 1 ? 2 : n;
+  auto point = [&](int i, double *x, double *y) { chart_point(v, n, low, high, W, H, i, x, y); };
   double px, py;
   point(0, &px, &py);
   for (int i = 1; i < count; i++) {
@@ -1067,17 +1167,30 @@ inline void on_thermo_draw(lv_event_t *e) {
   arc.end_angle = 45;
   arc.color = lv_color_hex(k.k.filled ? k.k.FP : k.t.card2);
   lv_draw_arc(layer, &arc);
-  double v;
-  if (!thermostat_value(m, *w, &v)) return;
   double lo, hi, step;
   limits_of(m, *w, &lo, &hi, &step);
-  const double amount = fraction(v, lo, hi);
-  int end = (int) px_round(135 + 270 * amount);
-  if (end <= 135) return;
-  if (end >= 360) end -= 360;
-  arc.end_angle = end;
-  arc.color = lv_color_hex(w->c_has ? w->c_now : k.t.acc2);
-  lv_draw_arc(layer, &arc);
+  double v;
+  if (thermostat_value(m, *w, &v)) {
+    int end = (int) px_round(135 + 270 * fraction(v, lo, hi));
+    if (end > 135) {
+      if (end >= 360) end -= 360;
+      arc.end_angle = end;
+      arc.color = lv_color_hex(w->c_has ? w->c_now : k.t.acc2);
+      lv_draw_arc(layer, &arc);
+    }
+  }
+  // (2) The mark, from its own value: also while the thermostat's value has
+  // none, and then faded with the widget.
+  double mv = 0;
+  int32_t d[4];
+  if (!thermo_mark(W, H, bound_num(m, w->mark, &mv), mv, lo, hi, d)) return;
+  lv_draw_rect_dsc_t dot;
+  lv_draw_rect_dsc_init(&dot);
+  dot.bg_color = lv_color_hex(k.k.text);
+  dot.bg_opa = opa;
+  dot.radius = LV_RADIUS_CIRCLE;
+  const lv_area_t r = {a.x1 + d[0], a.y1 + d[1], a.x1 + d[0] + d[2] - 1, a.y1 + d[1] + d[3] - 1};
+  lv_draw_rect(layer, &dot, &r);
 }
 
 // (2) The screen area of a slider's part: from d0 to d1 along the axis and
@@ -1953,12 +2066,14 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       const int tw = thermostat_text_width(s);
       w.o1 = text_box(w.obj, (W - tw) / 2, (H - s) / 2, tw, s, text_font(34), true);
       if (w.change) {
+        // (2) Buttons of side `bs` (36 to 64), the icons 24 in their middle.
+        const int bs = w.bs ? w.bs : 36;
         for (int k = 0; k < 2; k++) {
           lv_obj_t *b = plain(w.obj);
           if (!b) return;
-          place(b, k == 0 ? 0 : W - 36, H - 36, 36, 36);
+          place(b, k == 0 ? 0 : W - bs, H - bs, bs, bs);
           set_radius(b, LV_RADIUS_CIRCLE);
-          lv_obj_t *icon = icon_box(b, 0, 0, 36, 36, 24);
+          lv_obj_t *icon = icon_box(b, 0, 0, bs, bs, 24);
           set_icon(icon, 24, k == 0 ? ICON_MINUS : ICON_PLUS);
           set_clickable(b, true);  // also while faded (on_thermo_button)
           lv_obj_add_event_cb(b, on_thermo_button, LV_EVENT_PRESSED, &w);
