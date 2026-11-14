@@ -1000,6 +1000,17 @@ inline void cache_watch() {
   }
 }
 
+// (2) One save back for every CACHE_REFILL_MS of running, never above
+// CACHE_BUCKET (contract 5).
+inline void refill_writes() {
+  if (g.writes_left >= CACHE_BUCKET) return;
+  const uint64_t t = now64();
+  while (g.writes_left < CACHE_BUCKET && t >= g.refill_at) {
+    g.writes_left++;
+    g.refill_at += CACHE_REFILL_MS;
+  }
+}
+
 inline void cache_tick() {
   cache_watch();
   if (!g.save_at || !due(g.save_at)) return;
@@ -1020,7 +1031,18 @@ inline void cache_tick() {
     g.save_at = later(1000);
     return;
   }
+  refill_writes();
+  if (g.writes_left == 0) {
+    // The layout is shown and used meanwhile; the save runs when a write is
+    // back (contract 5). A newer layout by then is the one stored.
+    const uint64_t wait = g.refill_at - now64();
+    say(1, "No flash write left; layout %s is stored in %u s", a->hash, (unsigned) (wait / 1000));
+    g.save_at = later((uint32_t) wait);
+    return;
+  }
   if (g.pf.cache_save && g.pf.cache_save(a->bytes, a->size)) {
+    if (g.writes_left == CACHE_BUCKET) g.refill_at = now64() + CACHE_REFILL_MS;
+    g.writes_left--;
     g.flash_copy = true;
     memcpy(g.stored, a->hash, sizeof g.stored);
     g.save_at = 0;
@@ -1480,6 +1502,7 @@ inline void begin(const Fonts &fonts, const Platform &platform) {
   g.build_code = "";
   for (FbRef &r : g.fbl) r.layout = -1;
   g.away_since = now();
+  g.writes_left = CACHE_BUCKET;  // full after a restart (contract 5)
   g.erased = g.pf.erased;
   if (has_api_key()) forget_erased();  // a key at start: the erase is over
   if (g.pf.secret_load && g.pf.secret_load(g.secret)) {

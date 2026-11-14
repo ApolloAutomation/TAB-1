@@ -69,6 +69,9 @@ for f in "$TEXT_TTF" "$ICON_TTF"; do
   [ -f "$f" ] || { echo "missing font $f"; exit 1; }
 done
 mkdir -p "$WORK" "$OUT" "$SHOTS"
+# The compilers, for a CI log (CC and CXX choose them; -Werror meets each one's warnings).
+echo "C compiler: $($CC --version 2>&1 | head -n 1)"
+echo "C++ compiler: $($CXX --version 2>&1 | head -n 1)"
 
 # One static LVGL per flag set. It is built again when any of these change: the
 # flags, lv_conf.h, the list of LVGL files built, the contents of any LVGL

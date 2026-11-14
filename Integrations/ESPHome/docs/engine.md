@@ -657,6 +657,10 @@ Everything goes over the ESPHome connection Home Assistant already has.
   flash. A write that fails (flash full, power glitch) is tried again 30 s
   later. A bigger dashboard still shows, but is not kept, and the tablet
   waits for Home Assistant after a restart. A damaged copy is thrown away.
+  The tablet makes at most 12 such writes, and gets one back for every 2
+  hours of running (12 again after a restart). With none left the dashboard
+  shows and works as usual and is written when a write is back. Erasing the
+  copy never waits.
 - The pairing secret for the integration and a boot counter.
 - The encryption key: the one from Home Assistant (production file), or a
   copy of the one built into a bench or ESPHome Builder firmware.
@@ -675,7 +679,11 @@ Run from `Integrations/ESPHome`. Use `python3 -B` so Python leaves no
 # Engine tests on this computer: protocol, drawing, memory, flash cache,
 # and the screen rotation and flush of fast_display.h for both ways up.
 # LVGL 9.5.0 is copied once from a local build, nothing is downloaded.
+# engine_tests/tools/fetch_lvgl.sh pins it by commit and refuses another.
 engine_tests/run.sh
+
+# With another compiler (CI names its own); warnings are errors with each
+CC=gcc CXX=g++ engine_tests/run.sh
 
 # The same with all build output outside the repository
 TAB_LVGL_DIR=/some/temp/lvgl TAB_BUILD_DIR=/some/temp/build \
@@ -689,6 +697,10 @@ python3 -B tools/gen_engine_fonts.py
 
 # Package checks only (what CI runs): Python 3.12, standard library only
 python3 -B tools/check_engine_package.py
+
+# Also: the contract folder is the integration's, file for file (a
+# TAB-Dashboard checkout, or its tests/contract)
+python3 -B tools/check_engine_package.py --peer-contract ../../../TAB-Dashboard
 
 # Also the flash queue and update lock tests on this computer
 python3 -B tools/check_engine_package.py --host

@@ -2144,6 +2144,137 @@ TEST(cache_failed_write_is_retried) {
   CHECK(fake::st.save_calls == 1 && !fake::st.flash_has);
 }
 
+// Simulated time in jumps the engine sees one by one (each under 2^31 ms),
+// for hours of running without a millisecond loop.
+static void run_for(uint64_t ms) {
+  while (ms > 20) {
+    const uint64_t jump = std::min<uint64_t>(1000000000ull, ms - 10);
+    hh::g_ms += (uint32_t) jump;
+    hh::advance(10);
+    ms -= jump + 10;
+  }
+  hh::advance((uint32_t) ms);
+}
+
+// Contract 5, "(2) Flash writes" (cards spec B.8): a count of 12 saves,
+// full after a restart, one back for every 2 hours of running, never above
+// 12. With none left the layout is shown and used, and stored when a write
+// is back. Erases take none and wait for none. The numbers are contract.json's.
+TEST(write_bucket) {
+  const tj::Value timing = tj::load(CDIR + "/contract.json")["timing"];
+  CHECK(timing["cache_bucket"].n == D::CACHE_BUCKET);
+  CHECK(timing["cache_refill_s"].n * 1000 == D::CACHE_REFILL_MS);
+  const int bucket = (int) timing["cache_bucket"].n;
+  const uint32_t refill = (uint32_t) (timing["cache_refill_s"].n * 1000);
+  if (!CHECK(bucket == 12 && refill == 7200000u)) return;  // the steps below are worked out for these
+  const std::string small = layout_bytes("layout_small.dl.json");
+  auto version = [&](int i) { return small + std::string((size_t) i, '\n'); };  // other bytes, other hash
+  auto hash_of = [](const std::string &b) { return sha_hex(b).substr(0, 16); };
+  auto stored = [](const std::string &b) {
+    return fake::st.flash_has && fake::st.flash.size() == b.size() && memcmp(fake::st.flash.data(), b.data(), b.size()) == 0;
+  };
+  Ha ha;
+  ha.boot(false);
+
+  // 13 layouts in an hour, one every 4.5 minutes: 12 writes.
+  uint32_t first_write = 0;
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(i)))) return;
+    const uint32_t shown = hh::g_ms;
+    CHECK(advance_until([&] { return fake::st.save_calls == std::min(i + 1, bucket); }, 30100));
+    if (i == 0) first_write = hh::g_ms;
+    if (i < bucket) CHECK_MSG(stored(version(i)) && hh::g_ms - shown >= D::CACHE_DELAY_MS - 10, std::to_string(i));
+    run_for(270000 - (hh::g_ms - shown));
+  }
+  CHECK(hh::g_ms - first_write < 3600000u);
+  CHECK(fake::st.save_calls == 12 && fake::st.erase_calls == 0);
+  CHECK(stored(version(11)));
+  // The 13th is on screen and used meanwhile.
+  CHECK_STR(tab::active_hash(), hash_of(version(12)));
+  CHECK(hidden(D::g.waiting));
+  CHECK_STR(ha.set("{\"h\":\"" + hash_of(version(12)) + "\",\"v\":[[1,\"x\"]]}"), "");
+  char text[16];
+  CHECK(tab::slot_text(1, text, sizeof text) && std::string(text) == "x");
+  // It is stored when the first write is back: 2 hours after the first write.
+  run_for(first_write + refill - 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 12 && stored(version(11)));
+  hh::advance(100);
+  CHECK(fake::st.save_calls == 13 && stored(version(12)));
+  // One back for every 2 hours: the next write is 4 hours after the first.
+  if (!CHECK(ha.show(version(13)))) return;
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.save_calls == 13);
+  run_for(first_write + 2 * refill - 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 13 && stored(version(12)));
+  hh::advance(100);
+  CHECK(fake::st.save_calls == 14 && stored(version(13)));
+  // A layout that comes while it waits is the one stored, with one write.
+  CHECK(ha.show(version(14)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(ha.show(version(15)));
+  run_for(first_write + 3 * refill + 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 15 && stored(version(15)));
+
+  // Never above 12: after 30 hours of running, 12 writes in a row, then a wait.
+  run_for(30ull * 3600 * 1000);
+  const int calls = fake::st.save_calls;
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(20 + i)))) return;
+    hh::advance(D::CACHE_DELAY_MS + 100);
+    CHECK_MSG(fake::st.save_calls == calls + std::min(i + 1, bucket), std::to_string(i));
+  }
+  CHECK(stored(version(31)));
+
+  // Erases at a count of 0. A layout too large to keep erases the older copy
+  // when its save is due, as with writes left, without waiting for one.
+  std::string big = layout_bytes("layout_all_cards.dl.json");
+  big.insert(big.size() - 1, ",\"zz_unknown\":\"" + std::string(140 * 1024, 'x') + "\"");
+  CHECK(big.size() > D::CACHE_LIMIT);
+  CHECK(ha.show(big));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(!fake::st.flash_has && fake::st.erase_calls == 1 && fake::st.save_calls == calls + bucket);
+  // tab_clear erases at once; the waiting save is dropped.
+  CHECK(ha.show(version(40)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.save_calls == calls + bucket);
+  const std::string cleared = ha.clear();  // once: CHECK_STR reads its argument twice
+  CHECK_STR(cleared, "");
+  CHECK(fake::st.erase_calls == 2 && !fake::st.flash_has);
+  run_for(2ull * refill);
+  CHECK(fake::st.save_calls == calls + bucket && !fake::st.flash_has);
+
+  // A restart fills the count: 12 writes, one at each layout. A save the
+  // platform refuses takes none.
+  ha.boot(false, true);
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(50 + i)))) return;
+    if (i == 0) fake::st.save_fail_next = 1;
+    hh::advance(D::CACHE_DELAY_MS + 100);
+    if (i == 0) {
+      CHECK(fake::st.save_calls == 1 && D::g.writes_left == bucket);  // refused: nothing taken
+      hh::advance(D::CACHE_DELAY_MS);
+    }
+    CHECK_MSG(fake::st.save_calls == 1 + std::min(i + 1, bucket), std::to_string(i));
+  }
+  CHECK(stored(version(61)) && D::g.writes_left == 0);
+}
+
+// The tablet's timing numbers are contract.json's `timing`, not copies that
+// can drift: the hold, the 12 px of movement, the swipe, the pressed look, a
+// detail page's ttl, the ack and progress waits and the flash write count.
+TEST(timing_from_contract) {
+  const tj::Value t = tj::load(CDIR + "/contract.json")["timing"];
+  CHECK(t["hold_ms"].n == D::HOLD_MS);
+  CHECK(t["hold_move_px"].n * t["hold_move_px"].n == D::MOVED_PX2);
+  CHECK(t["swipe_px"].n == D::SWIPE_PX);
+  CHECK(t["card_press_ms"].n == D::CARD_PRESS_MS);
+  CHECK(t["sub_ttl_s"].n == D::TTL_DEFAULT);
+  CHECK(t["ack_timeout_s"].n * 1000 == D::ACK_TIMEOUT_MS);
+  CHECK(t["progress_timeout_s"].n * 1000 == D::PROGRESS_TIMEOUT_MS);
+  CHECK(t["cache_bucket"].n == D::CACHE_BUCKET);
+  CHECK(t["cache_refill_s"].n * 1000 == D::CACHE_REFILL_MS);
+}
+
 // ================================================================ knock
 
 static std::vector<int> knock_times(int limit) {
@@ -6583,7 +6714,7 @@ TEST(card_look_cache) {
   reset();
   CHECK_STR(set("[2,0]"), "");
   CHECK_MSG(counts().look_updates == 3, std::to_string(counts().look_updates));
-  CHECK_MSG(counts().colour_updates == c2->children + c7->children + c55->children, std::to_string(counts().colour_updates));
+  CHECK_MSG(counts().colour_updates == (uint64_t) (c2->children + c7->children + c55->children), std::to_string(counts().colour_updates));
   CHECK(D::test_contrasts() > 0);
   CHECK(D::card_look(m, c2)->k.filled == 0 && D::card_look(m, c2)->k.background == D::card_look(m, c2)->t.bg);
   looks_hold(m, "on 0");

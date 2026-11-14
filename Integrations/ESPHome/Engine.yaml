@@ -458,13 +458,13 @@ script:
   - id: tab_engine_start
     then:
       - lambda: |-
-          #if !defined(TAB1_FILES_ENGINE) || TAB1_FILES_ENGINE != 16
+          #if !defined(TAB1_FILES_ENGINE) || TAB1_FILES_ENGINE != 17
           #error "engine/ is not this package's copy: delete the old engine/ folder from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
-          #if !defined(TAB1_FILES_GLUE) || TAB1_FILES_GLUE != 16
+          #if !defined(TAB1_FILES_GLUE) || TAB1_FILES_GLUE != 17
           #error "engine_glue.h is not this package's copy: delete the old engine_glue.h from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
-          #if !defined(TAB1_FILES_LOCK) || TAB1_FILES_LOCK != 16
+          #if !defined(TAB1_FILES_LOCK) || TAB1_FILES_LOCK != 17
           #error "ota_lock.h is not this package's copy: delete the old ota_lock.h from your ESPHome config folder (docs/engine.md, Old copies of the package's files)"
           #endif
           static tab::Fonts fonts;

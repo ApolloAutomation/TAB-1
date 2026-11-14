@@ -62,6 +62,8 @@ Static checks (always run, no ESPHome needed):
     builds the whole of fast_display.h against the stand-in headers in
     engine_tests/host/fast_display_sim (one for each header it includes)
     and tests flush_cb, setup and set_enabled (tests/test_flush_cb.cpp);
+  - engine_tests/tools/fetch_lvgl.sh pins LVGL 9.5.0 by commit and refuses
+    a source or a copy of another commit (run on stand-in sources);
   - engine_tests/run.sh builds everything with -ffp-contract=off, and builds
     and runs the frozen sources of engine 0.1.0 (engine_tests/frozen/0.1.0)
     optimised and with sanitizers before the engine, whose host test
@@ -75,16 +77,25 @@ Static checks (always run, no ESPHome needed):
   - the waiting screens and Wi-Fi notes of engine/tab_state.h are the
     contract's screens.json word for word (engine_tests/contract), and so
     are CONTRACT.md section 11 and the hotspot name of both entry files;
+  - with --peer-contract, the contract folder is the integration's, file
+    for file;
   - self-tests: the YAML reader on a sample (and against PyYAML on every
     file read, where PyYAML is installed), the files rule (a merge of two
     branches at one number among its cases), the docs check, the contract
-    check of the waiting screens, and the --compile warning gate.
+    check of the waiting screens, the contract comparison (--peer-contract),
+    and the --compile warning gate.
 
 The static checks need Python 3.12 or later and nothing else: no PyYAML (the
 script reads the YAML itself), no network, no ESPHome, no compiler. This is
 the mode CI runs (no flags).
 
 Optional steps:
+  --peer-contract DIR
+             compares the contract folder with the integration's copy
+             (TAB-Dashboard tests/contract, or a checkout of it), file for
+             file, as the integration's own test compares it with this one.
+             CI checks the integration out and passes it here. Without the
+             flag only the self-test of the comparison runs.
   --host     builds and runs host tests of the flash queue in engine_glue.h
              and of the lock decisions in ota_lock.h (C++17 compiler; with
              address, undefined and thread sanitizers where the compiler has
@@ -117,7 +128,8 @@ Optional steps:
              stop with the error naming it), reads
              every NVS namespace the firmware opens and compares it with the
              erase list, compares the font metrics with the host harness and
-             the host's lv_conf.h with the tablet's (LV_HOST_ONLY apart), and
+             the host's lv_conf.h with the tablet's (LV_HOST_ONLY apart), the
+             firmware's LVGL commit with the host tests' pin, and
              reports firmware size and RAM and flash use. Any compiler
              warning from engine/, engine_glue.h, ota_lock.h or the lambdas
              of Engine.yaml and the entry files fails (main.cpp, where all
@@ -136,7 +148,7 @@ or from the work copy's build cache (dependencies.lock, managed_components).
 
 Usage (-B: Python writes no __pycache__ into tools/):
   python3 -B tools/check_engine_package.py [--contract DIR] [--engine-dir DIR]
-      [--host] [--config] [--compile] [--work DIR] [--offline]
+      [--peer-contract DIR] [--host] [--config] [--compile] [--work DIR] [--offline]
       [--esphome PATH] [--report FILE]
   python3 -B tools/check_engine_package.py --record-files
       (after raising the files version: writes the SHA-256 lines)
@@ -2363,6 +2375,103 @@ def check_screens_contract(prod, bench, contract_dir, rep):
     )
 
 
+# ---------------------------------------------------------------------------
+# The contract is one folder in two repositories (cards spec B.9, G.2 E11):
+# this one and the integration's tests/contract in TAB-Dashboard. Both read
+# its fixtures as the law, so the two must be the same file for file. The
+# rule is the integration's own comparison (tests/frontend/
+# tablet-screens.test.mjs): every file under the folder, except its
+# top-level ruff.toml (the integration's lint settings) and __pycache__.
+
+
+def contract_files(folder):
+    """The files of a contract folder that must be the same in both
+    repositories, as relative POSIX paths."""
+    folder = Path(folder)
+    out = []
+    for path in folder.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(folder)
+        if rel.as_posix() == "ruff.toml" or "__pycache__" in rel.parts:
+            continue
+        out.append(rel.as_posix())
+    return sorted(out)
+
+
+def peer_contract_dir(peer):
+    """The contract folder in what --peer-contract names: the folder itself,
+    or a TAB-Dashboard checkout (its tests/contract)."""
+    peer = Path(peer)
+    if (peer / "contract.json").is_file():
+        return peer
+    return peer / "tests" / "contract"
+
+
+def contract_peer_problems(ours, theirs):
+    """Where two contract folders differ: a file only in one, or other bytes."""
+    ours, theirs = Path(ours), Path(theirs)
+    if not (theirs / "contract.json").is_file():
+        return [f"no contract.json in {theirs}"]
+    mine, other = contract_files(ours), contract_files(theirs)
+    problems = [f"only here: {f}" for f in sorted(set(mine) - set(other))]
+    problems += [f"only in {theirs}: {f}" for f in sorted(set(other) - set(mine))]
+    for f in sorted(set(mine) & set(other)):
+        if (ours / f).read_bytes() != (theirs / f).read_bytes():
+            problems.append(f"differs: {f}")
+    return problems
+
+
+def check_contract_peer(contract_dir, peer, rep):
+    """With --peer-contract, this contract folder against the integration's.
+    Always: a self-test of the comparison on copies of this folder."""
+    if peer is not None:
+        theirs = peer_contract_dir(peer)
+        problems = contract_peer_problems(contract_dir, theirs)
+        rep.check(
+            f"contract: {contract_dir} is the same as the integration's copy in {theirs}, file for file (ruff.toml and __pycache__ apart)",
+            not problems,
+            "; ".join(problems[:8]) + (f" (+{len(problems) - 8} more)" if len(problems) > 8 else ""),
+        )
+    wrong = []
+    with tempfile.TemporaryDirectory(prefix="tab1-contract-self-test-") as tmp:
+        base = Path(tmp) / "theirs"
+        shutil.copytree(contract_dir, base, ignore=shutil.ignore_patterns("__pycache__"))
+        same = not contract_peer_problems(contract_dir, base)
+        fixture = sorted((base / "fixtures").glob("*.json"))[0]
+        edits = {
+            "a byte of a fixture": lambda d: (d / "fixtures" / fixture.name).write_bytes((d / "fixtures" / fixture.name).read_bytes() + b"\n"),
+            "CONTRACT.md gone": lambda d: (d / "CONTRACT.md").unlink(),
+            "an extra fixture": lambda d: (d / "fixtures" / "extra.json").write_text("{}", encoding="utf-8"),
+            "a reference file changed": lambda d: (d / "reference" / "tabproto.py").write_text("", encoding="utf-8"),
+            "no contract.json": lambda d: (d / "contract.json").unlink(),
+        }
+        for name, edit in edits.items():
+            case = Path(tmp) / f"case{len(wrong)}-{abs(hash(name))}"
+            shutil.copytree(base, case)
+            edit(case)
+            if not contract_peer_problems(contract_dir, case):
+                wrong.append(name)
+        # What the integration's copy may hold besides: its lint settings and caches.
+        extra = Path(tmp) / "extra"
+        shutil.copytree(base, extra)
+        (extra / "ruff.toml").write_text("line-length = 120\n", encoding="utf-8")
+        (extra / "reference" / "__pycache__").mkdir()
+        (extra / "reference" / "__pycache__" / "tabproto.cpython-314.pyc").write_bytes(b"x")
+        if contract_peer_problems(contract_dir, extra):
+            wrong.append("ruff.toml or __pycache__ counted")
+        # A TAB-Dashboard checkout is found by its tests/contract.
+        repo = Path(tmp) / "repo"
+        shutil.copytree(base, repo / "tests" / "contract")
+        if peer_contract_dir(repo) != repo / "tests" / "contract" or contract_peer_problems(contract_dir, peer_contract_dir(repo)):
+            wrong.append("a checkout's tests/contract")
+    rep.check(
+        f"self-test: the contract comparison passes an identical copy, also with ruff.toml, __pycache__ or as a checkout's tests/contract, and fails a changed fixture, a missing or extra file, a changed reference file and a folder without contract.json ({len(edits) + 3} cases)",
+        same and not wrong,
+        "an identical copy fails" if not same else (f"not caught: {wrong}" if wrong else ""),
+    )
+
+
 # Waiting-screen words the firmware no longer shows (rounds 9 to 11 changed
 # them). A quote cut short (the start of a waiting text) fails on its own.
 RETIRED_WAITING_TEXTS = (
@@ -2868,6 +2977,107 @@ def check_host_tests(rep):
         f"self-test: the host test rule fails a run.sh without -ffp-contract=off, a frozen program built against engine/, a frozen run that does not count or whose frames the engine does not get, and a frozen file gone ({len(cases)} cases)",
         not missed,
         f"not caught: {missed}",
+    )
+
+
+# LVGL for the host tests, pinned by commit (cards spec B.9, G.2 E11):
+# engine_tests/tools/fetch_lvgl.sh names LVGL_COMMIT and refuses a source or
+# a copy that names another one. --compile compares the pin with the LVGL the
+# firmware build got (its idf_component.yml names the commit).
+FETCH_LVGL = Path("engine_tests") / "tools" / "fetch_lvgl.sh"
+LVGL_PIN_RE = re.compile(r"^LVGL_COMMIT=([0-9a-f]{40})$", re.M)
+
+
+def lvgl_pin():
+    m = LVGL_PIN_RE.search(_read_or_empty(ROOT / FETCH_LVGL))
+    return m.group(1) if m else ""
+
+
+def lvgl_fetch_problems(script):
+    """Runs a fetch_lvgl.sh text against stand-in sources in a temporary
+    folder (sh and awk; git where installed): what it does wrong."""
+    pin = LVGL_PIN_RE.search(script)
+    if not pin:
+        return ["no LVGL_COMMIT=<40 hex> line"]
+    pin = pin.group(1)
+    sh = shutil.which("sh")
+    if not sh:
+        return ["no sh to run it"]
+    problems = []
+    with tempfile.TemporaryDirectory(prefix="tab1-lvgl-pin-") as tmp:
+        tmp = Path(tmp)
+        tools = tmp / "engine_tests" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "fetch_lvgl.sh").write_text(script, encoding="utf-8")
+
+        def source(name, commit_yml=None):
+            d = tmp / name
+            (d / "src").mkdir(parents=True)
+            (d / "src" / "a.c").write_text("int a;\n", encoding="utf-8")
+            (d / "lvgl.h").write_text("", encoding="utf-8")
+            (d / "lv_version.h").write_text("#define LVGL_VERSION_MAJOR 9\n#define LVGL_VERSION_MINOR 5\n#define LVGL_VERSION_PATCH 0\n", encoding="utf-8")
+            if commit_yml:
+                (d / "idf_component.yml").write_text(f"repository_info:\n  commit_sha: {commit_yml}\n  path: .\nversion: 9.5.0\n", encoding="utf-8")
+            return d
+
+        def run(src, dest):
+            env = dict(os.environ, TAB_LVGL_SRC=str(src) if src else "")
+            r = subprocess.run([sh, str(tools / "fetch_lvgl.sh"), str(dest)], env=env, capture_output=True, text=True, timeout=60)
+            return r.returncode
+
+        good = source("good", pin)
+        if run(good, tmp / "c1") != 0 or _read_or_empty(tmp / "c1" / ".lvgl_commit").strip() != pin:
+            problems.append("the pinned commit is not copied with its commit recorded")
+        elif run(None, tmp / "c1") != 0:
+            problems.append("its own copy is refused")
+        else:
+            (tmp / "c1" / ".lvgl_commit").write_text("0" * 40 + "\n", encoding="utf-8")
+            if run(None, tmp / "c1") == 0:
+                problems.append("a copy of another commit is taken")
+        if run(source("other", "1" * 40), tmp / "c2") == 0:
+            problems.append("a source naming another commit is taken")
+        if run(source("none"), tmp / "c3") != 0:
+            problems.append("a source naming no commit is refused")
+        git = shutil.which("git")
+        if git:
+            repo = source("checkout")
+            genv = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            ok = all(
+                subprocess.run([git, "-C", str(repo), *a], env=genv, capture_output=True, timeout=60).returncode == 0
+                for a in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "x"])
+            )
+            if ok and run(repo, tmp / "c4") == 0:
+                problems.append("a git checkout at another commit is taken")
+    return problems
+
+
+def check_lvgl_pin(rep):
+    script = _read_or_empty(ROOT / FETCH_LVGL)
+    problems = lvgl_fetch_problems(script)
+    rep.check(
+        f"host tests: {FETCH_LVGL.as_posix()} pins LVGL 9.5.0 by commit ({lvgl_pin() or 'none'}): it copies a source of that commit and records it, refuses a source or a copy of another commit (named in idf_component.yml or as a git checkout's HEAD), and takes one that names none",
+        not problems,
+        "; ".join(problems),
+    )
+    unpinned = re.sub(r"(?m)^LVGL_COMMIT=.*\n", "", script, count=1)
+    no_check = script.replace('if [ -n "$c" ] && [ "$c" != "$LVGL_COMMIT" ]; then', 'if false; then', 1)
+    cases = {"no pin": unpinned, "the source check gone": no_check}
+    missed = [name for name, text in cases.items() if text == script or not lvgl_fetch_problems(text)]
+    rep.check(
+        f"self-test: the LVGL pin rule fails a fetch_lvgl.sh without the pin or without the source check ({len(cases)} cases)",
+        not problems and not missed,
+        f"not caught: {missed}" if missed else ("skipped: the pin rule fails" if problems else ""),
+    )
+
+
+def check_lvgl_commit(build_dir, rep, label):
+    yml = _read_or_empty(build_dir / "managed_components" / "lvgl__lvgl" / "idf_component.yml")
+    m = re.search(r"^\s*commit_sha:\s*([0-9a-f]{40})\s*$", yml, re.M)
+    got = m.group(1) if m else ""
+    rep.check(
+        f"compile {label}: the firmware's LVGL is the commit {FETCH_LVGL.as_posix()} pins for the host tests",
+        bool(got) and got == lvgl_pin(),
+        f"build {got or 'names no commit'}, pin {lvgl_pin() or 'none'}",
     )
 
 
@@ -4195,6 +4405,7 @@ def run_compile(esphome, copy_dir, work, env, rep):
         check_nvs(build_dir, rep, label)
         check_font_metrics(build_dir, rep, label)
         check_lv_conf(build_dir, rep, label)
+        check_lvgl_commit(build_dir, rep, label)
         if label == "adopt":
             run_stale_copies(esphome, copy_dir, work, venv, build_dir, entry, rep)
 
@@ -4245,8 +4456,9 @@ engine_tests/run.sh), the
 release workflow, the waiting-screen words in docs/engine.md (and no line
 of it starting with ">"), the waiting-screen words against the contract's
 screens.json, and the self-tests of the YAML reader, the files rule, the
-restart rule, the docs check, the contract check and the --compile warning
-gate. Where PyYAML happens to be installed, the YAML of every file read is
+restart rule, the docs check, the contract check, the contract comparison
+and the --compile warning gate. With --peer-contract the contract folder is
+also compared with the integration's copy, file for file. Where PyYAML happens to be installed, the YAML of every file read is
 also compared with PyYAML's.
 
 --host needs a C++17 compiler; --config and --compile need ESPHome; with
@@ -4261,6 +4473,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--contract", default=str(ROOT / "engine_tests" / "contract"), help="contract folder (contract.json, icons.json)")
+    parser.add_argument(
+        "--peer-contract",
+        help="the integration's contract folder, or a TAB-Dashboard checkout (its tests/contract): fail unless it is the same as --contract, file for file",
+    )
     parser.add_argument("--engine-dir", default=str(ROOT / "engine"), help="engine headers to check and build with (default: engine/)")
     parser.add_argument("--host", action="store_true", help="build and run the flash queue host test")
     parser.add_argument("--config", action="store_true", help="run esphome config in a work copy")
@@ -4300,6 +4516,7 @@ def main():
         check_package(engine, rep)
         check_display(rep)
         check_host_tests(rep)
+        check_lvgl_pin(rep)
         check_proto_high(rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
@@ -4309,6 +4526,7 @@ def main():
         check_hotspot_name(prod, bench, rep)
         check_docs_waiting(prod, rep)
         check_screens_contract(prod, bench, contract_dir, rep)
+        check_contract_peer(contract_dir, args.peer_contract, rep)
         check_files_version(engine, rep)
         check_release(prod, bench, rep)
         check_files(engine_dir, rep, substitute)

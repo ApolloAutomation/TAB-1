@@ -54,6 +54,11 @@ static const uint32_t PULSE_MS = 300;
 static const uint32_t STRIP_MS = 2500;
 static const uint32_t AWAY_MARK_MS = 10000;
 static const uint32_t CACHE_DELAY_MS = 30000;
+// (2) Flash writes (contract 5, timing.cache_bucket and cache_refill_s): a
+// count of the saves the tablet may make, full after a restart, one back for
+// every CACHE_REFILL_MS of running, never above CACHE_BUCKET. Erases take none.
+static const uint8_t CACHE_BUCKET = 12;
+static const uint32_t CACHE_REFILL_MS = 2u * 60 * 60 * 1000;
 static const uint32_t EARLY_WINDOW_MS = 30000;  // a call before the state subscription counts this long
 static const int KNOCK_FIRST_S = 3, KNOCK_REPEATS = 5, KNOCK_MAX_S = 300;
 static const int SWIPE_PX = 48;
@@ -356,6 +361,11 @@ struct State {
   // Flash may hold a stored copy, also one `stored` does not name: one
   // kept at boot because it could not be shown, or a write that failed.
   bool flash_copy;
+  // (2) The saves left (CACHE_BUCKET at begin()), and when the next one comes
+  // back on the 64-bit count; refill_at is read only while writes_left is
+  // below CACHE_BUCKET.
+  uint8_t writes_left;
+  uint64_t refill_at;
   // Screens.
   lv_obj_t *screen, *base, *overlay, *waiting, *mark;
   // (2) A second screen that is never loaded: LVGL neither lays it out nor
