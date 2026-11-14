@@ -6249,6 +6249,19 @@ TEST(maths_fixture) {
   }
   CHECK_MSG(bad == 0, std::to_string(bad) + " label sizes differ, the first: " + first);
 
+  // (package E10) The clock text: m = floor(v + age / 60) mod 1440, both
+  // forms, no value, a fraction, -1, 1e9 and -1e9, and more than 50 days.
+  bad = 0;
+  CHECK(f["clock"].size() >= 20);
+  for (const tj::Value &v : f["clock"].a) {
+    const bool has = !v["value"].is_null();
+    char text[D::CLOCK_CAP];
+    D::clock_text(D::clock_minute(has, has ? v["value"].n : 0, v["age_s"].n), v["clk"].i(), text);
+    if (v["expect"].s != text)
+      miss("clock " + (has ? v["value"].s : std::string("none")) + " age " + v["age_s"].s + " clk " + v["clk"].s + ": " + text);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " clock texts differ, the first: " + first);
+
   // (package E6) The slider: the amount and the value under a finger, and
   // where a value is drawn, for both looks, the three directions, tracks of
   // 0, 2, 7 and 8 colours, and rectangles of no size, 1 px and thin ones.
@@ -9550,4 +9563,341 @@ TEST(offscreen_tree) {
   CHECK_STR(shown_tree(), "");
   CHECK(advance_until([] { return slots_in_use() == 0; }, 3000));
   CHECK(lv_obj_get_child_count(D::g.park) == 0);
+}
+
+// ================================================================ clock and rate (package E10)
+//
+// Contract 4.4 (age) and 4.7 (clock, slider `rate`), cards spec B.7: every
+// slot remembers its last write, also of an equal value; a clock and a
+// slider with `rate` count on from the write of their `value`, on the
+// engine's own 64-bit count; once a second the page on screen is looked at.
+
+// What the kit draws for one "show" entry of state_v2.json, against it; ""
+// when it holds. The widget's page is shown first: a page not on screen is
+// brought up to date before it shows (show_page).
+static std::string state_show_miss(D::Model &m, const tj::Value &show) {
+  D::Widget *w = widget((uint32_t) show["id"].n);
+  const std::string id = "widget " + show["id"].s;
+  if (!w || !w->obj) return id + " is not built";
+  if (tab::current_page() != w->page) tab::go_to(w->page);
+  // What the page shows within a second (B.7): the pass, as the timer runs
+  // it once a second; clock_keeps_going checks when the timer runs it.
+  D::count_page(*active(), w->page);
+  std::string miss;
+  auto add = [&](const std::string &s) { miss += (miss.empty() ? "" : ", ") + id + " " + s; };
+  auto opa = [](lv_obj_t *o) { return o ? (int) lv_obj_get_style_opa(o, LV_PART_MAIN) : -1; };
+  if (show.has("text") && label_text(w->obj) != show["text"].s) add("shows \"" + label_text(w->obj) + "\"");
+  if (show.has("value")) {
+    double v = 0;
+    const bool has = D::slider_value(m, *w, &v);
+    if (show["value"].is_null() ? has : !has || fabs(v - show["value"].n) > 1e-9)
+      add("value " + (has ? std::to_string(v) : std::string("none")));
+    // Drawn where that value is, as of now.
+    if (w->sl_pos != D::slider_pos_now(m, *w)) add("is drawn at " + std::to_string(w->sl_pos));
+    if (!show["value"].is_null()) {
+      double lo, hi, step;
+      D::limits_of(m, *w, &lo, &hi, &step);
+      const D::CardLook *k = D::card_look(m, D::card_of(m, *w));
+      const D::SliderGeom g = D::slider_geom(w->r[2], w->r[3], w->look, w->dir, w->track_n, k ? k->t.r2 : 0);
+      if (w->sl_pos != D::slider_shown(g, true, show["value"].n, lo, hi)) add("pixel " + std::to_string(w->sl_pos));
+    }
+  }
+  if (show.has("faded") && opa(w->obj) != (show["faded"].n == 1 ? LV_OPA_40 : LV_OPA_COVER))
+    add("opacity " + std::to_string(opa(w->obj)));
+  if (show.has("vis") && hidden(w->obj) != (show["vis"].n == 0)) add("vis");
+  if (show.has("tint")) {
+    const D::CardLook *k = D::card_look(m, w);
+    if (!k || k->has_tint != !show["tint"].is_null() || (k->has_tint && k->tint != (uint32_t) show["tint"].n)) add("tint");
+  }
+  if (show.has("colour")) {
+    uint32_t c = 0;
+    const bool has = D::bound_colour(m, w->c, &c);
+    if (has != !show["colour"].is_null() || (has && c != (uint32_t) show["colour"].n)) add("colour");
+  }
+  if (show.has("un") && D::card_unavailable(m, *w) != (show["un"].n == 1)) add("un");
+  if (show.has("selected") && D::choice_selected(m, *w) != (show["selected"].is_null() ? -1 : show["selected"].i()))
+    add("selected " + std::to_string(D::choice_selected(m, *w)));
+  if (show.has("mark")) {
+    double k = 0;
+    const bool has = D::bound_num(m, w->mark, &k);
+    if (w->kind == D::W_THERMO) {
+      double lo, hi, step;
+      D::limits_of(m, *w, &lo, &hi, &step);
+      int32_t d[4];
+      const bool drawn = D::thermo_mark(w->r[2], w->r[3], has, k, lo, hi, d);
+      if (drawn != !show["mark"].is_null() || (drawn && k != show["mark"].n)) add("mark");
+    } else {
+      const double *list = nullptr;
+      const int n = D::bound_list(m, w->value, &list);
+      const int got = D::chart_mark(n, has, k);
+      if (got != (show["mark"].is_null() ? -1 : show["mark"].i())) add("mark " + std::to_string(got));
+    }
+  }
+  return miss;
+}
+
+// Every step of state_v2.json at its time on the fake clock (contract 4.4,
+// 4.7): the clock text, the `rate` position, colours, `vis`, `un`, a
+// choice's selection and the marks; an equal value written again starts the
+// age again, a new `rate` alone does not.
+TEST(state_v2_fixture) {
+  const tj::Value st = fixture("state_v2.json");
+  CHECK_STR(st["layout"].s, "layout_v2_kit");
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  CHECK_STR(st["hash"].s, rig.hash);
+  D::Model &m = *active()->model;
+  CHECK(st["steps"].size() >= 30);
+  const uint32_t t0 = hh::g_ms;
+  int shows = 0;
+  for (const tj::Value &step : st["steps"].a) {
+    const uint32_t at = t0 + (uint32_t) step["at_ms"].n;
+    if (at > hh::g_ms) hh::advance(at - hh::g_ms);
+    for (const tj::Value &pl : step["payloads"].a) CHECK_STR(rig.ha.set(pl.s), "");
+    std::string miss;
+    for (const tj::Value &show : step["show"].a) {
+      const std::string one = state_show_miss(m, show);
+      if (!one.empty()) miss += (miss.empty() ? "" : "; ") + one;
+      shows++;
+    }
+    CHECK_MSG(miss.empty(), "at " + step["at_ms"].s + " ms (" + step["note"].s + "): " + miss);
+  }
+  CHECK(shows >= 70);
+}
+
+// The once-a-second pass with LVGL's refresh held, so what it invalidated
+// and whether it left a layout pass behind can be read. A pause alone is
+// not enough: an invalidation resumes the refresh timer (LVGL's
+// REFR_REQUEST), so its period is made longer than the test.
+struct HeldRefresh {
+  lv_timer_t *t = lv_display_get_refr_timer(lv_display_get_default());
+  HeldRefresh() {
+    hh::refresh();
+    lv_timer_set_period(t, 0x7FFFFFFF);
+    lv_timer_reset(t);
+  }
+  ~HeldRefresh() {
+    lv_timer_set_period(t, LV_DEF_REFR_PERIOD);
+    hh::refresh();
+  }
+};
+
+// Contract 4.7, "Label, clock", on the kit's two clocks (page 1, slot 28:
+// `clk` 1 at px 96 and `clk` 2 at px 48): a value, then minutes without
+// one; 23:59 to 00:00; a fraction; null; -1, 1e9 and -1e9; more than 50
+// days of fake time, past the wrap of the 32-bit tick. A clock whose
+// `value` is a constant stands still.
+TEST(clock_keeps_going) {
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *c24 = widget(39), *c12 = widget(40);
+  if (!CHECK(c24 && c12 && c24->clk == 1 && c12->clk == 2 && c24->page == 1)) return;
+  auto both = [&](const char *a, const char *b) {
+    const bool ok = label_text(c24->obj) == a && label_text(c12->obj) == b;
+    if (!ok) printf("  shows \"%s\" and \"%s\", want \"%s\" and \"%s\"\n", label_text(c24->obj).c_str(), label_text(c12->obj).c_str(), a, b);
+    return ok;
+  };
+  // Before any value.
+  CHECK(both("--:--", "--:--"));
+  CHECK_STR(rig.set("[28,615]"), "");
+  const uint32_t w0 = hh::g_ms;
+  CHECK(both("10:15", "10:15"));
+  // The minute turns 60 s after the write, at the next pass: within a second.
+  hh::advance(59990);
+  CHECK(both("10:15", "10:15"));
+  hh::advance(1010);
+  CHECK(both("10:16", "10:16"));
+  hh::advance(w0 + 180000 - hh::g_ms - 10);
+  CHECK(both("10:17", "10:17"));
+  hh::advance(1010);
+  CHECK(both("10:18", "10:18"));
+  // 23:59 to 00:00 (12:00 on the 12 hour clock), and a fraction.
+  CHECK_STR(rig.set("[28,1439]"), "");
+  CHECK(both("23:59", "11:59"));
+  hh::advance(61000);
+  CHECK(both("00:00", "12:00"));
+  CHECK_STR(rig.set("[28,1439.5]"), "");
+  CHECK(both("23:59", "11:59"));
+  hh::advance(31000);
+  CHECK(both("00:00", "12:00"));
+  CHECK_STR(rig.set("[28,779]"), "");
+  CHECK(both("12:59", "12:59"));
+  CHECK_STR(rig.set("[28,780]"), "");
+  CHECK(both("13:00", "1:00"));
+  // No value, and the odd values.
+  CHECK_STR(rig.set("[28,null]"), "");
+  CHECK(both("--:--", "--:--"));
+  hh::advance(61000);
+  CHECK(both("--:--", "--:--"));
+  CHECK_STR(rig.set("[28,-1]"), "");
+  CHECK(both("23:59", "11:59"));
+  CHECK_STR(rig.set("[28,1e9]"), "");
+  CHECK(both("10:40", "10:40"));
+  CHECK_STR(rig.set("[28,-1e9]"), "");
+  CHECK(both("13:20", "1:20"));
+  CHECK_STR(rig.set("[28,1e12]"), "");  // held at 1e9 (contract 4.4)
+  CHECK(both("10:40", "10:40"));
+  // An equal value again starts the age again.
+  CHECK_STR(rig.set("[28,0]"), "");
+  hh::advance(61000);
+  CHECK(both("00:01", "12:01"));
+  CHECK_STR(rig.set("[28,0]"), "");
+  CHECK(both("00:00", "12:00"));
+  // Page 1 not on screen: its clocks are not looked at, and are right the
+  // moment it shows again.
+  tab::go_to(0);
+  hh::advance(20);
+  hh::advance(121000);
+  CHECK(both("00:00", "12:00"));
+  tab::go_to(1);
+  CHECK(both("00:02", "12:02"));
+  // More than 50 days, in steps the engine sees one by one: the 32-bit tick
+  // wraps after 49.7 days, the count does not.
+  CHECK_STR(rig.set("[28,0]"), "");
+  uint64_t passed = 0;
+  bool wrapped = false;
+  auto pass_to = [&](uint64_t total) {
+    while (passed + 2000 < total) {
+      const uint64_t jump = std::min<uint64_t>(1000000000ull, total - passed - 2000);
+      const uint32_t before = hh::g_ms;
+      hh::g_ms += (uint32_t) jump;
+      wrapped = wrapped || hh::g_ms < before;
+      passed += jump;
+      hh::advance(10);
+      passed += 10;
+    }
+    hh::advance((uint32_t) (total - passed));
+    passed = total;
+  };
+  pass_to(4320000000ull + 1010);  // 50 days and a second
+  CHECK(wrapped);
+  CHECK(both("00:00", "12:00"));
+  pass_to(4320059000ull + 500);
+  CHECK(both("00:00", "12:00"));
+  pass_to(4320060000ull + 1010);
+  CHECK(both("00:01", "12:01"));
+
+  // A clock with a constant value has age 0 for ever (contract 4.4).
+  const std::string still =
+      two_pages("", "{\"clk\":1,\"id\":2,\"px\":48,\"r\":[116,150,248,60],\"t\":\"label\",\"text\":\"\",\"value\":615},"
+                    "{\"clk\":2,\"id\":3,\"px\":48,\"r\":[116,220,248,60],\"t\":\"label\",\"text\":\"x\",\"value\":{\"s\":1}}",
+                "n");
+  if (!CHECK(rig.up(still, false))) return;
+  CHECK_STR(label_text(widget(2)->obj), "10:15");
+  CHECK_STR(label_text(widget(3)->obj), "--:--");  // `text` is ignored
+  hh::advance(181000);
+  CHECK_STR(label_text(widget(2)->obj), "10:15");
+}
+
+// Contract 4.7, "Slider, nv and rate", on the kit's thin bar (id 17, page 0,
+// 0 to 300 in 344 px, `value` slot 13, `rate` slot 14): it moves once a
+// second by itself, by the strip that moved, with no style call and no
+// layout pass; a write of `rate` alone keeps the age; not on screen it is
+// not looked at. A constant `value`, and a slider with `change`, stand
+// still. Also a minute on a clock that keeps its size (repaint_cost).
+TEST(rate_moves_the_bar) {
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  D::Model &m = *active()->model;
+  D::Widget *bar = widget(17);
+  if (!CHECK(bar && bar->look == 1 && !bar->change && bar->page == 0)) return;
+  CHECK(m.slots[12].counted && !m.slots[13].counted && m.slots[27].counted && !m.slots[6].counted);
+  CHECK_STR(rig.set("[13,30],[14,1]"), "");
+  const int at30 = D::px_round(30.0 / 300 * 344);
+  CHECK(bar->sl_pos == at30);
+  {
+    HeldRefresh held;
+    D::test_counts() = D::TestCounts{};
+    CHECK(advance_until([&] { return bar->sl_pos != at30; }, 2100));
+    CHECK(!layout_pending() && D::test_counts().style_sets == 0);
+    // The strip that moved (a pixel or two), with the radius and a pixel
+    // each side: well under the bar's 344 px.
+    int x0 = 0, x1 = 0;
+    const int n = redrawn_in(bar->r, &x0, &x1);
+    CHECK_MSG(n >= 1 && x1 - x0 > 0 && x1 - x0 < 30, std::to_string(n) + " areas, " + std::to_string(x0) + " to " + std::to_string(x1));
+  }
+  // Ten seconds on: 40, and each repaint moved by a pixel or more.
+  hh::advance(10000);
+  double v = 0;
+  CHECK(D::slider_value(m, *bar, &v) && v > 40 && v < 42.2);
+  CHECK(bar->sl_pos == D::slider_pos_now(m, *bar));
+  // Page 1 on screen: page 0's bar is not looked at, and is right when it shows.
+  tab::go_to(1);
+  hh::advance(20);
+  const int left = bar->sl_pos;
+  hh::advance(5000);
+  CHECK(bar->sl_pos == left);
+  tab::go_to(0);
+  CHECK(bar->sl_pos == D::slider_pos_now(m, *bar) && bar->sl_pos > left + 4);
+  // A clock that keeps its size: a new minute is one text, no layout pass.
+  CHECK_STR(rig.set("[28,615]"), "");
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *c24 = widget(39), *c12 = widget(40);
+  const lv_font_t *f24 = font_of(c24->obj), *f12 = font_of(c12->obj);
+  hh::advance(59000);
+  {
+    HeldRefresh held;
+    D::test_counts() = D::TestCounts{};
+    CHECK(advance_until([&] { return label_text(c24->obj) == "10:16"; }, 2100));
+    CHECK_STR(label_text(c12->obj), "10:16");
+    CHECK(!layout_pending() && font_of(c24->obj) == f24 && font_of(c12->obj) == f12);
+    CHECK_MSG(D::test_counts().style_sets == 2, std::to_string(D::test_counts().style_sets) + " style calls");
+    // And the pass right after sets nothing.
+    D::test_counts() = D::TestCounts{};
+    hh::advance(1000);
+    CHECK(D::test_counts().style_sets == 0 && !layout_pending());
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  // A write of `rate` alone keeps the age: 30 written now, rate 2 five
+  // seconds later shows 40 at once.
+  CHECK_STR(rig.set("[13,30],[14,1]"), "");
+  hh::advance(5000);
+  CHECK_STR(rig.set("[14,2]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 40);
+  // The same value again starts the age again; rate null counts as 0.
+  CHECK_STR(rig.set("[13,30]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 30 && bar->sl_pos == at30);
+  CHECK_STR(rig.set("[14,null]"), "");
+  hh::advance(3000);
+  CHECK(D::slider_value(m, *bar, &v) && v == 30 && bar->sl_pos == at30);
+  // Held to min and max, also with a rate of 1e9 and of -1e9.
+  CHECK_STR(rig.set("[14,1e9]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 300 && bar->sl_pos == 344);
+  CHECK_STR(rig.set("[14,-1e9]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 0 && bar->sl_pos == 0);
+  // No value: no fill, nothing moves.
+  CHECK_STR(rig.set("[13,null],[14,1]"), "");
+  CHECK(!D::slider_value(m, *bar, &v));
+  hh::advance(2000);
+  CHECK(!D::slider_value(m, *bar, &v));
+
+  // A constant `value` has age 0; `change` turns `rate` off; min above max.
+  const std::string sliders = two_pages(
+      "",
+      "{\"id\":2,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,150,344,8],\"rate\":5,\"step\":1,\"t\":\"slider\",\"value\":10},"
+      "{\"change\":{\"p\":0},\"id\":3,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,200,344,40],\"rate\":5,\"step\":1,"
+      "\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"id\":4,\"max\":10,\"min\":20,\"r\":[116,260,344,40],\"rate\":{\"s\":2},\"step\":1,\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"id\":5,\"max\":100,\"min\":0,\"r\":[116,320,344,40],\"rate\":{\"s\":2},\"step\":1,\"t\":\"slider\",\"value\":{\"s\":3}}",
+      "nnn");
+  if (!CHECK(rig.up(sliders, false))) return;
+  D::Model &sm = *active()->model;
+  CHECK(sm.slots[0].counted && !sm.slots[1].counted && sm.slots[2].counted);  // slot 1: slider 4 counts
+  CHECK_STR(rig.set("[1,10],[2,1],[3,10]"), "");
+  D::Widget *k5 = widget(5);
+  const int k5_at = k5->sl_pos;
+  hh::advance(3000);
+  double a = 0, b = 0, c = 0, d = 0;
+  CHECK(D::slider_value(sm, *widget(2), &a) && a == 10);
+  CHECK(D::slider_value(sm, *widget(3), &b) && b == 10);
+  CHECK(D::slider_value(sm, *widget(4), &c) && c == 10);  // held to max, then min: as the clamp reads
+  // A knob slider with `rate` moves too, by its knob's place.
+  CHECK(D::slider_value(sm, *k5, &d) && d >= 12.9 && d <= 13.1);
+  // Drawn at most a second behind (3.4 px a second here).
+  CHECK_MSG(abs(k5->sl_pos - D::slider_pos_now(sm, *k5)) <= 4 && k5->sl_pos > k5_at + 5,
+            std::to_string(k5->sl_pos) + " " + std::to_string(D::slider_pos_now(sm, *k5)) + " " + std::to_string(k5_at));
 }

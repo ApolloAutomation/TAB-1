@@ -679,6 +679,38 @@ inline int label_px(const Widget &w, const char *text, bool *small) {
   return px;
 }
 
+// (2) The minute a clock shows (contract 4.7): m = floor(v + age / 60)
+// mod 1440, with v the minutes after local midnight and age in seconds. -1:
+// no value.
+inline int clock_minute(bool has, double v, double age_s) {
+  if (!has) return -1;
+  double m = fmod(floor(v + age_s / 60), 1440);
+  if (m < 0) m += 1440;
+  return m >= 0 && m < 1440 ? (int) m : -1;  // also a value that is not a number
+}
+
+// Its text: HH:MM (`clk` 1), or the hour as 12, 1 to 11 without a leading
+// zero (`clk` 2). No am or pm. No value: --:--.
+static const size_t CLOCK_CAP = 16;
+inline void clock_text(int minute, int form, char *out) {
+  if (minute < 0 || minute >= 1440) {
+    snprintf(out, CLOCK_CAP, "--:--");
+    return;
+  }
+  const int h = minute / 60, mm = minute % 60;
+  if (form == 2)
+    snprintf(out, CLOCK_CAP, "%d:%02d", h % 12 ? h % 12 : 12, mm);
+  else
+    snprintf(out, CLOCK_CAP, "%02d:%02d", h, mm);
+}
+
+// The minute a clock label shows now.
+inline int clock_now(Model &m, const Widget &w) {
+  double v = 0;
+  const bool has = bound_num(m, w.value, &v);
+  return clock_minute(has, v, has ? value_age_s(m, w.value) : 0);
+}
+
 // ---------------------------------------------------------------- events
 
 inline Layout *layout_of_ptr(const void *p) {
@@ -1726,7 +1758,17 @@ inline void paint_label(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, card_of(m, w));
   const char *text = "";
-  bound_text(m, w.text, &text);
+  char clock[CLOCK_CAP];
+  if (w.clk) {
+    // (2) A clock shows its `value` as a time and ignores `text`; the minute
+    // drawn is kept for the once-a-second pass (count_page).
+    const int minute = clock_now(m, w);
+    clock_text(minute, w.clk, clock);
+    text = clock;
+    w.sl_pos = (int16_t) minute;
+  } else {
+    bound_text(m, w.text, &text);
+  }
   // (2) The font is picked here, as `px` with a digit size depends on the
   // text. It is set only when it differs: a font change lays the screen out
   // (cards spec B.4). A line higher than the box starts at its top.
@@ -1898,7 +1940,35 @@ inline bool slider_value(Model &m, Widget &w, double *v) {
     *v = w.ovr_value;
     return true;
   }
-  return bound_num(m, w.value, v);
+  if (!bound_num(m, w.value, v)) return false;
+  // (2) `rate`, only without `change` (contract 4.7): the value shown is
+  // clamp(value + rate * age, min, max). A `rate` without a value counts as
+  // 0. The age is that of `value`, never that of `rate` (4.4).
+  if (w.kind == W_SLIDER && !w.change && w.mark.how != B_ABSENT) {
+    double rate = 0, lo, hi, step;
+    if (!bound_num(m, w.mark, &rate)) rate = 0;
+    limits_of(m, w, &lo, &hi, &step);
+    double s = rate != 0 ? *v + rate * value_age_s(m, w.value) : *v;
+    if (s < lo) s = lo;
+    if (s > hi) s = hi;
+    *v = s;
+  }
+  return true;
+}
+
+// (2) Where a slider is drawn now, along its axis, as paint_slider keeps it
+// in sl_pos: the end of the fill or the mark of a drawn one (-1: no mark),
+// the end of the fill of a knob slider.
+inline int slider_pos_now(Model &m, Widget &w) {
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool drawn = w.look == 1 || w.track_n >= 2;
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, drawn ? w.track_n : 0, k.t.r2);
+  double v = 0, lo, hi, step;
+  const bool has = slider_value(m, w, &v);
+  limits_of(m, w, &lo, &hi, &step);
+  int pos = slider_shown(g, has, v, lo, hi);
+  if (drawn && !g.colours && pos < 0) pos = 0;
+  return pos;
 }
 
 // (2) A bar or a slider with a track (one drawn object): keeps where the
@@ -1969,6 +2039,7 @@ inline void paint_slider(Layout &l, Widget &w) {
   // from the start, the knob centred on the end of the fill.
   const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, 0, k.t.r2);
   const int shown = slider_shown(g, has, v, lo, hi);
+  w.sl_pos = (int16_t) shown;  // (2) for the once-a-second pass of `rate`
   const int fill = shown > 0 ? shown : 0;
   set_bg(w.o1, filled ? k.k.FP : k.t.card2);
   set_bg(w.o2, w.c_has ? w.c_now : filled ? k.k.FI : k.k.A);
@@ -2249,6 +2320,24 @@ inline void paint_stale(Layout &l, uint32_t start) {
       painted++;
     }
     l.s_page++;
+  }
+}
+
+// (2) The once-a-second pass over one page (cards spec B.7): a clock whose
+// minute changed and a slider with `rate` whose drawn position moved by a
+// pixel are repainted; nothing else is touched. The repaints follow the
+// rules of B.4: a bar invalidates the strip that moved, a clock sets a new
+// text and a new font only when the size rule gives another, so the pass
+// lays nothing out in the common case.
+inline void count_page(Layout &l, int page) {
+  if (!l.model || page < 0 || page >= l.model->npages) return;
+  Model &m = *l.model;
+  const Page &p = m.pages[page];
+  for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw; i++) {
+    Widget &w = m.w[i];
+    if (!w.obj || !counts_age(w)) continue;
+    const int now_at = w.kind == W_LABEL ? clock_now(m, w) : slider_pos_now(m, w);
+    if (now_at != w.sl_pos) paint_widget(l, w);
   }
 }
 
@@ -2733,6 +2822,7 @@ inline void show_page(Layout &l, int page) {
   if (detail && !g.on_detail) g.origin = g.page;
   if (detail) g.idle_ms = 0;
   paint_stale_page(l, page);  // what changed while it was not on screen
+  count_page(l, page);        // (2) clocks and `rate` counted on meanwhile
   if (l.shown != page) {
     lv_obj_t *old = page_obj(l, l.shown);
     if (old) {

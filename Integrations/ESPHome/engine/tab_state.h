@@ -62,6 +62,9 @@ static const int SWIPE_PX = 48;
 static const int32_t MOVED_PX2 = 12 * 12;
 static const uint32_t CARD_PRESS_MS = 80;  // a card shows its pressed look this long after the touch
 static const uint32_t HOLD_MS = 500;       // a press held this long opens the `hold` page
+// (2) Clocks and sliders with `rate` on the page on screen are looked at this
+// often, and repainted when a minute or a pixel changed (cards spec B.7).
+static const uint32_t COUNT_MS = 1000;
 // Hold-to-erase (design 10.8): a touch that starts within ERASE_ARM_MS of
 // power-on and stays down ERASE_HOLD_MS asks whether to erase the tablet.
 // After ERASE_ARM_MS nothing of this runs on the touch path any more.
@@ -341,6 +344,11 @@ struct State {
   int origin;
   bool on_detail;
   uint32_t idle_ms, idle_tick;
+  // (2) Clock and `rate` (cards spec B.7): the 64-bit count of milliseconds
+  // made from LVGL's 32-bit tick, so it never wraps, and when the
+  // once-a-second pass over the page on screen last ran.
+  uint64_t ms_high;
+  uint32_t ms_last, count_at;
   // Flash cache.
   char stored[17];
   uint32_t save_at;  // 0: nothing scheduled
@@ -414,6 +422,16 @@ struct State {
 inline State g;
 
 inline uint32_t now() { return lv_tick_get(); }
+
+// (2) The engine's millisecond count in 64 bits (cards spec B.7). The 32-bit
+// tick wraps after 49.7 days; the timer reads this every tick, so a wrap is
+// never missed.
+inline uint64_t now64() {
+  const uint32_t t = now();
+  if (t < g.ms_last) g.ms_high += (uint64_t) 1 << 32;
+  g.ms_last = t;
+  return g.ms_high | t;
+}
 
 inline bool Budget::left() const { return objects > 0 && now() - start < ms; }
 
@@ -495,6 +513,16 @@ inline bool bound_colour(Model &m, const Bound &b, uint32_t *out) {
   if (!bound_num(m, b, &v) || !(v >= 0 && v <= MAX_COLOUR) || v != floor(v)) return false;
   *out = (uint32_t) v;
   return true;
+}
+
+// (2) The age of a widget, in seconds (contract 4.4): the time since the slot
+// of its `value` was last written. 0 for a constant, and for a slot that
+// was never written.
+inline double value_age_s(Model &m, const Bound &value) {
+  const Slot *s = slot_of(m, value);
+  if (!s || s->null) return 0;
+  const uint64_t t = now64();
+  return t > s->at ? (double) (t - s->at) / 1000.0 : 0;
 }
 
 inline bool bound_dirty(const Bound &b) {

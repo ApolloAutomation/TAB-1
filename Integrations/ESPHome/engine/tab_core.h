@@ -1180,6 +1180,17 @@ inline void page_tick() {
   if (g.idle_ms >= ttl * 1000u) page_back(*a);
 }
 
+// (2) Clock and `rate` (cards spec B.7): the 64-bit count is read every
+// tick; once a second the page on screen is looked at (count_page).
+inline void count_tick() {
+  now64();
+  const uint32_t t = now();
+  if (t - g.count_at < COUNT_MS) return;
+  g.count_at = t;
+  Layout *a = active_layout();
+  if (a && a->model && a->state == L_ACTIVE) count_page(*a, g.page);
+}
+
 inline void timer_cb(lv_timer_t *) {
   const uint32_t start = now();
   poll_connection();
@@ -1198,6 +1209,7 @@ inline void timer_cb(lv_timer_t *) {
   card_press_tick();
   hold_tick();
   page_tick();
+  count_tick();
 }
 
 // ---------------------------------------------------------------- hold to erase
@@ -1372,64 +1384,72 @@ inline void teardown() {
 
 // ---------------------------------------------------------------- tab_set
 
-// Applies one value to a slot. Returns true when the slot changed.
-inline bool set_slot(Slot &s, json::Reader r) {
+// Applies one value to a slot (cards spec B.7): S_CHANGED when it changed,
+// S_WRITTEN when the same value came again, S_NONE for a null on a slot
+// without value and for a value that does not fit. A value, also an equal
+// one, moves the slot's `at`; a null does not (contract 4.4).
+enum SetResult : uint8_t { S_NONE = 0, S_WRITTEN, S_CHANGED };
+
+inline SetResult set_slot(Slot &s, json::Reader r) {
   const json::Kind k = r.peek();
   if (k == json::K_NULL) {
-    if (s.null) return false;
+    if (s.null) return S_NONE;
     s.null = 1;
-    return true;
+    return S_CHANGED;
   }
   switch (s.type) {
     case 't': {
       json::Span sp;
-      if (k != json::K_STRING || !r.string(&sp)) return false;
+      if (k != json::K_STRING || !r.string(&sp)) return S_NONE;
       char tmp[TEXT_CAP];
       const size_t n = json::unescape_max(sp, tmp, TEXT_CAP - 1);
       tmp[n] = 0;
-      if (!s.null && strcmp(s.text, tmp) == 0) return false;
+      s.at = now64();
+      if (!s.null && strcmp(s.text, tmp) == 0) return S_WRITTEN;
       memcpy(s.text, tmp, n + 1);
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     case 'b':
     case 'n':
     case 'i': {
       double v;
       if (k == json::K_TRUE || k == json::K_FALSE) {
-        if (s.type != 'b') return false;
+        if (s.type != 'b') return S_NONE;
         v = k == json::K_TRUE ? 1 : 0;
       } else if (k != json::K_NUMBER || !r.number(&v)) {
-        return false;
+        return S_NONE;
       }
       if (s.type == 'b') v = v != 0 ? 1 : 0;
-      if (s.type == 'i' && (v < 0 || v > 0x10FFFF || v != floor(v))) return false;
+      if (s.type == 'i' && (v < 0 || v > 0x10FFFF || v != floor(v))) return S_NONE;
       v = in_range(v);  // finite (the reader refuses others), now within +-1e9
-      if (!s.null && s.num == v) return false;
+      s.at = now64();
+      if (!s.null && s.num == v) return S_WRITTEN;
       s.num = v;
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     case 'l': {
-      if (k != json::K_ARRAY) return false;
+      if (k != json::K_ARRAY) return S_NONE;
       double tmp[MAX_LIST];
       uint16_t cnt = 0;
       r.begin_array();
       bool first = true;
       while (r.next_item(first)) {
         double v;
-        if (r.peek() != json::K_NUMBER || !r.number(&v)) return false;
+        if (r.peek() != json::K_NUMBER || !r.number(&v)) return S_NONE;
         if (cnt < MAX_LIST) tmp[cnt++] = in_range(v);
       }
-      if (r.err) return false;
-      if (!s.null && s.list_n == cnt && memcmp(s.list, tmp, cnt * sizeof(double)) == 0) return false;
+      if (r.err) return S_NONE;
+      s.at = now64();
+      if (!s.null && s.list_n == cnt && memcmp(s.list, tmp, cnt * sizeof(double)) == 0) return S_WRITTEN;
       memcpy(s.list, tmp, cnt * sizeof(double));
       s.list_n = cnt;
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     default:
-      return false;
+      return S_NONE;
   }
 }
 
@@ -1812,7 +1832,11 @@ inline const char *on_set(const char *data, size_t data_len, const char *auth, s
       if (pr.next_item(pfirst)) continue;  // more than two items: skipped
       if (sv != floor(sv) || sv < 1 || sv > m.nslots) continue;
       const int slot = (int) sv;
-      if (set_slot(m.slots[slot - 1], value)) mark_dirty(slot);
+      // A changed slot repaints what shows it; an equal value again only
+      // what counts on from its write, a clock or a moving slider (B.7).
+      Slot &st = m.slots[slot - 1];
+      const SetResult res = set_slot(st, value);
+      if (res == S_CHANGED || (res == S_WRITTEN && st.counted)) mark_dirty(slot);
     }
   }
   if (g.dirty_any) {

@@ -213,7 +213,9 @@ struct Widget {
   // (2) A drawn slider (a bar, or any slider with a track) as last painted
   // (cards spec B.4): where its fill ends or its mark is, along the axis
   // (-1: no mark), and the colours it was drawn in. A new position repaints
-  // only the strip between the two.
+  // only the strip between the two. sl_pos is also where a knob slider's
+  // fill ends, and the minute a clock label shows (-1: --:--), for the
+  // once-a-second pass (cards spec B.7).
   int16_t sl_pos;
   uint8_t sl_drawn;  // painted at least once
   uint32_t sl_track, sl_fill, sl_icon;
@@ -228,6 +230,13 @@ struct Widget {
   uint32_t ch_key;
   uint8_t ch_fit[MAX_OPTIONS];
 };
+
+// (2) A widget that counts on with the age of its `value` (contract 4.4,
+// 4.7): a label with `clk`, and a slider with `rate` and without `change`.
+inline bool counts_age(const Widget &w) {
+  if (w.kind == W_LABEL) return w.clk != 0;
+  return w.kind == W_SLIDER && !w.change && (w.mark.how == B_SLOT || (w.mark.how == B_CONST && w.mark.c.num != 0));
+}
 
 // (2) The cells of a choice (contract 4.7): n options in `rows` rows, k a
 // row, filled row by row, a gap of 8 between cells and between rows. False
@@ -317,9 +326,15 @@ struct Slot {
   char type;
   uint8_t null;
   uint16_t list_n;
+  // (2) A clock or a moving slider counts on from this slot's last write
+  // (contract 4.4): a write with an equal value repaints them too.
+  uint8_t counted;
   double num;
   char *text;    // TEXT_CAP bytes
   double *list;  // MAX_LIST numbers
+  // (2) The engine's 64-bit millisecond count when a tab_set last named the
+  // slot with a value, also an equal one (contract 4.4, cards spec B.7).
+  uint64_t at;
 };
 
 struct Model {
@@ -1387,6 +1402,13 @@ inline Model *model_fill(const char *data, size_t n, const Counts &counts, void 
   if (!ld.walk()) return nullptr;
   if (ld.wi != counts.widgets || ld.si != counts.styles || ld.ti != counts.themes || ld.ci != counts.cards)
     return nullptr;
+  // (2) The slots whose age a widget shows (contract 4.4): the `value` of a
+  // clock, and of a slider with `rate` and without `change`.
+  for (uint32_t i = 0; i < m->nw; i++) {
+    const Widget &w = m->w[i];
+    if (counts_age(w) && w.value.how == B_SLOT && w.value.slot >= 1 && w.value.slot <= m->nslots)
+      m->slots[w.value.slot - 1].counted = 1;
+  }
   return m;
 }
 
