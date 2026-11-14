@@ -742,6 +742,22 @@ go through the helpers `slider_geom`, `slider_amount_at` and
 is faded no part of it is drawn over another, so 40% is one picture (test
 `slider_looks`).
 
+A choice is one object for any number of options (at most 16). Its draw
+callback draws each cell (or the dot of `look` 1) with its icon and text,
+and skips the cells outside the band LVGL draws. The cells, dots and the
+option under a point come from `choice_grid`, `choice_cell`, `choice_dot`
+and `choice_cell_at`, checked against `maths.json` (`choice`). The cut of
+each text and the content colour of each swatch are worked out at the
+build. A new value, a press or a pulse invalidates only the cells that
+change, with no style call and no layout pass; a change of the card's
+colours draws the whole control. A choice whose cells would be below 1 px
+has no object, so a press there is the card's. It sends when the finger
+lifts in the cell it went down in; a gap does nothing. Policy 0 shows the
+tapped option as selected until the value comes (back on a bad ack or after
+4 s), policy 1 flashes the tapped cell for 300 ms, policy 2 shows the
+outline (tests `choice_looks`, `choice_feedback`, `choice_repaint_cost`,
+`choice_selected_by_value`).
+
 It also builds and runs `tests/test_fast_display.cpp` the same two ways.
 That test takes the rotation out of `fast_display.h` (with
 `FAST_DISPLAY_HOST_TEST` defined, no LVGL and no ESPHome) and compares it,

@@ -439,7 +439,10 @@ inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, boo
   Model &m = *l.model;
   const uint32_t t = now();
   w.fbp = policy;
-  if (event == 'c' && has_value && policy != 3) {
+  // (2) A choice shows the tapped option as selected with policy 0 only;
+  // policy 1 flashes the tapped cell, policy 2 shows the outline (7.4).
+  if (w.kind == W_CHOICE && event == 'c' && has_value) w.ch_pulse = (int8_t) value;
+  if (event == 'c' && has_value && policy != 3 && (w.kind != W_CHOICE || policy == 0)) {
     w.ovr = 1;
     w.ovr_value = value;
     w.ovr_until = t + (policy == 2 ? PROGRESS_TIMEOUT_MS : ACK_TIMEOUT_MS);
@@ -600,6 +603,13 @@ inline void thermostat_step(Layout &l, Widget &w, int direction) {
   const double next = clamp_step(cur + direction * (step > 0 ? step : 1), lo, hi, step);
   if (next == cur) return;
   input(l, w, 'c', true, next, w.change_v);
+}
+
+// (2) A tap on option i of a choice sends it, also when it is the one
+// selected (contract 4.3).
+inline void choice_picked(Layout &l, Widget &w, int option) {
+  if (!w.change || option < 0 || option >= w.options) return;
+  input(l, w, 'c', true, option, w.change_v);
 }
 
 inline void question_answer(bool yes) {
@@ -1050,10 +1060,11 @@ inline void card_press_tick() {
 }
 
 // (2) Whether a widget is there for a touch (contract 4.3): drawn, not
-// hidden, with a rectangle; a `choice` with at least one option.
+// hidden, with a rectangle. A `choice` without an option or with cells below
+// 1 px has no object.
 inline bool widget_there(Model &m, const Widget &w) {
   if (w.r[2] <= 0 || w.r[3] <= 0 || !vis_shows(m, w)) return false;
-  return w.kind == W_CHOICE ? w.options > 0 : w.obj != nullptr;
+  return w.obj != nullptr;
 }
 
 inline bool point_in(const int16_t r[4], lv_point_t p) {

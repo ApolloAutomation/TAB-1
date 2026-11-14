@@ -732,6 +732,7 @@ bool send_input(Layout &l, Widget &w, char event, bool confirmed, bool has_value
 void widget_tapped(Layout &l, Widget &w);
 void slider_released(Layout &l, Widget &w, double value);
 void thermostat_step(Layout &l, Widget &w, int direction);
+void choice_picked(Layout &l, Widget &w, int option);
 void question_answer(bool yes);
 void erase_answer(bool erase);
 void fb_track(Layout &l, Widget &w);

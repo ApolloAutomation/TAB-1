@@ -33,6 +33,7 @@ struct TestCounts {
   uint64_t style_sets;    // styles, flags, positions and texts the engine changed on an object
   uint64_t look_updates;  // card_look_update runs
   uint64_t colour_updates;  // widget_colour_update runs
+  uint64_t choice_cells;    // cells a choice drew
 };
 inline TestCounts &test_counts() {
   static TestCounts c;
@@ -215,7 +216,72 @@ struct Widget {
   int16_t sl_pos;
   uint8_t sl_drawn;  // painted at least once
   uint32_t sl_track, sl_fill, sl_icon;
+  // (2) A choice, one drawn object (cards spec B.4, B.5): the cell the press
+  // went down in and the one that pulses (-1 none); as last drawn, the
+  // selected, pressed and pulsing cell and a key of the colours, so a change
+  // invalidates only the cells it touches (ch_key 0: not drawn yet). Worked
+  // out once at the build: the bytes of each text that fit its cell, which
+  // texts were cut, and on which swatches readable() is the dark colour.
+  int8_t ch_down, ch_pulse, ch_sel_d, ch_press_d, ch_pulse_d;
+  uint16_t ch_cut, ch_dark;
+  uint32_t ch_key;
+  uint8_t ch_fit[MAX_OPTIONS];
 };
+
+// (2) The cells of a choice (contract 4.7): n options in `rows` rows, k a
+// row, filled row by row, a gap of 8 between cells and between rows. False
+// when nothing is drawn: no option, or a cell below 1 px. Whole numbers
+// only; a division rounds down, also below 0.
+static const int CHOICE_GAP = 8;
+struct ChoiceGrid {
+  int n, rows, k, cw, ch;
+};
+
+inline int floor_div(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+inline bool choice_grid(int n, int rows, int w, int h, ChoiceGrid *g) {
+  if (n > MAX_OPTIONS) n = MAX_OPTIONS;
+  rows = rows < 1 ? 1 : rows > 4 ? 4 : rows;
+  *g = ChoiceGrid{n, rows, 0, 0, 0};
+  if (n <= 0) return false;
+  g->k = (n + rows - 1) / rows;
+  g->cw = floor_div(w - CHOICE_GAP * (g->k - 1), g->k);
+  g->ch = floor_div(h - CHOICE_GAP * (rows - 1), rows);
+  return g->cw >= 1 && g->ch >= 1;
+}
+
+// Cell i as [x, y, w, h] from the rectangle's corner.
+inline void choice_cell(const ChoiceGrid &g, int i, int out[4]) {
+  out[0] = (i % g.k) * (g.cw + CHOICE_GAP);
+  out[1] = (i / g.k) * (g.ch + CHOICE_GAP);
+  out[2] = g.cw;
+  out[3] = g.ch;
+}
+
+// `look` 1: the circle of diameter min(cell width, cell height), centred in
+// cell i (round half up, as everywhere in 4.7).
+inline void choice_dot(const ChoiceGrid &g, int i, int out[4]) {
+  int c[4];
+  choice_cell(g, i, c);
+  const int d = g.cw < g.ch ? g.cw : g.ch;
+  out[0] = c[0] + (int) floor((g.cw - d) / 2.0 + 0.5);
+  out[1] = c[1] + (int) floor((g.ch - d) / 2.0 + 0.5);
+  out[2] = out[3] = d;
+}
+
+// The option under a point from the rectangle's corner, by arithmetic; -1
+// in a gap, outside the cells, or when nothing is drawn. The whole cell
+// takes the touch, also for a dot.
+inline int choice_cell_at(const ChoiceGrid &g, int x, int y) {
+  if (g.n <= 0 || g.cw < 1 || g.ch < 1 || x < 0 || y < 0) return -1;
+  const int col = x / (g.cw + CHOICE_GAP), row = y / (g.ch + CHOICE_GAP);
+  if (col >= g.k || row >= g.rows || x - col * (g.cw + CHOICE_GAP) >= g.cw || y - row * (g.ch + CHOICE_GAP) >= g.ch)
+    return -1;
+  const int i = row * g.k + col;
+  return i < g.n ? i : -1;
+}
+
+inline bool choice_grid_of(const Widget &w, ChoiceGrid *g) { return choice_grid(w.options, w.rows, w.r[2], w.r[3], g); }
 
 // (2) One card's colours: its tokens, fixed at the build (a card is on one
 // page and a page has one theme), and the nine colours of its state, worked
@@ -741,7 +807,12 @@ struct Loader {
       case W_THERMO: return 6;
       case W_CHART: return 1;
       case W_IMAGE: return 2;
-      case W_CHOICE: return w.options ? 1 : 0;  // one drawn object; none without an option
+      case W_CHOICE: {
+        // One drawn object for any number of options; none without an
+        // option or with cells below 1 px (contract 4.3, 4.7).
+        ChoiceGrid g;
+        return choice_grid_of(w, &g) ? 1 : 0;
+      }
       default: return 0;
     }
   }

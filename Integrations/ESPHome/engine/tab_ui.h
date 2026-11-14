@@ -291,34 +291,55 @@ inline void set_text_colour(lv_obj_t *o, uint32_t c) { style_colour(o, LV_STYLE_
 
 inline void set_font(lv_obj_t *o, const lv_font_t *f) { style_ptr(o, LV_STYLE_TEXT_FONT, f); }
 
+// The ellipsis a cut text ends with in this font.
+inline const char *ellipsis_of(const lv_font_t *font) { return has_glyph(font, 0x2026) ? "\xE2\x80\xA6" : "..."; }
+
+// A text as drawn: at most cap - 1 bytes, control characters as spaces.
+// Returns its length.
+inline size_t shown_text(const char *text, char *buf, size_t cap) {
+  size_t n = 0;
+  for (; text && text[n] && n < cap - 1; n++) buf[n] = (uint8_t) text[n] < 0x20 ? ' ' : text[n];
+  buf[n] = 0;
+  return n;
+}
+
+// The bytes of buf (n long, at most TEXT_CAP) kept before the ellipsis when
+// the line is wider than width: the longest prefix that fits with the
+// ellipsis, without the spaces it ends with. n when the line fits, or when
+// width is 0 or less.
+inline size_t cut_keep(const lv_font_t *font, const char *buf, size_t n, int width) {
+  if (width <= 0 || text_width(font, buf, n) <= width) return n;
+  const char *ell = ellipsis_of(font);
+  const size_t ell_n = strlen(ell);
+  size_t keep = 0;
+  size_t i = 0;
+  while (i < n) {
+    uint32_t cp;
+    const size_t j = utf8_next(buf, n, i, &cp);
+    char trial[TEXT_CAP + 8];
+    memcpy(trial, buf, j);
+    memcpy(trial + j, ell, ell_n);
+    if (text_width(font, trial, j + ell_n) > width) break;
+    keep = j;
+    i = j;
+  }
+  while (keep > 0 && buf[keep - 1] == ' ') keep--;
+  return keep;
+}
+
 // Sets one line of text, cut with an ellipsis when wider than width. Control
 // characters show as spaces. Returns true when the text was cut.
 inline bool set_text(lv_obj_t *l, const char *text, int width) {
   if (!l) return false;
   const lv_font_t *font = lv_obj_get_style_text_font(l, LV_PART_MAIN);
   char buf[TEXT_CAP + 8];
-  size_t n = 0;
-  for (; text && text[n] && n < (size_t) TEXT_CAP - 1; n++) buf[n] = (uint8_t) text[n] < 0x20 ? ' ' : text[n];
-  buf[n] = 0;
+  size_t n = shown_text(text, buf, TEXT_CAP);
   bool cut = false;
-  if (width > 0 && text_width(font, buf, n) > width) {
+  const size_t keep = cut_keep(font, buf, n, width);
+  if (keep < n) {
     cut = true;
-    const char *ell = has_glyph(font, 0x2026) ? "\xE2\x80\xA6" : "...";
+    const char *ell = ellipsis_of(font);
     const size_t ell_n = strlen(ell);
-    // Longest prefix that fits with the ellipsis.
-    size_t keep = 0;
-    size_t i = 0;
-    while (i < n) {
-      uint32_t cp;
-      const size_t j = utf8_next(buf, n, i, &cp);
-      char trial[TEXT_CAP + 8];
-      memcpy(trial, buf, j);
-      memcpy(trial + j, ell, ell_n);
-      if (text_width(font, trial, j + ell_n) > width) break;
-      keep = j;
-      i = j;
-    }
-    while (keep > 0 && buf[keep - 1] == ' ') keep--;
     memcpy(buf + keep, ell, ell_n);
     n = keep + ell_n;
     buf[n] = 0;
@@ -761,6 +782,7 @@ inline Widget *pressed_card(Layout **out = nullptr) {
 // dragged slider, a pressed thermostat button.
 inline bool press_held(Widget &w) {
   if (w.kind == W_CARD) return pressed_card() == &w;
+  if (w.kind == W_CHOICE) return w.ch_down >= 0;  // also while the finger is outside its cell
   return w.pressed || w.dragging || w.pressed_part;
 }
 
@@ -769,6 +791,7 @@ inline bool press_held(Widget &w) {
 // press opens no hold page any more either.
 inline void lose_press(Widget &w) {
   if (w.kind == W_CARD) g.cp_layout = -1;
+  if (w.kind == W_CHOICE) w.ch_down = -1;
   w.pressed = 0;
   w.dragging = 0;
   w.pressed_part = 0;
@@ -1367,6 +1390,327 @@ inline void on_slider_draw(lv_event_t *e) {
   }
 }
 
+// ---------------------------------------------------------------- (2) choice
+
+// The icon of option i, 0 for none (contract 4.3: here 0 is no icon).
+inline uint32_t choice_icon(const Widget &w, int i) {
+  if (!w.icons || i >= w.icons_n || !(w.icons[i] > 0)) return 0;
+  return (uint32_t) w.icons[i];
+}
+
+// Where the content of option i goes in a box of W by H (the cell, or the
+// dot of `look` 1), by the button's rules (contract 4.7, layout_button):
+// icon 24 and text 15 centred with a gap of 6 and padding 6; stacked when
+// both exist and H is 64 or more, else side by side; an option without one
+// shows the other alone. tw is the room for the text, at most 0: none.
+// shown is the text as drawn (side by side, its width centres the pair).
+struct ChoicePlace {
+  uint32_t cp;  // the glyph drawn, 0: no icon
+  int ix, iy, iw, ih;
+  int tx, ty, tw, th;
+  bool text, centre;
+};
+
+inline ChoicePlace choice_place(const Widget &w, int i, int W, int H, const char *shown, size_t shown_n) {
+  const lv_font_t *ifont = icon_font(24), *tf = text_font(15);
+  ChoicePlace p{};
+  const uint32_t icon = choice_icon(w, i);
+  p.cp = icon ? icon_or_fallback(ifont, icon) : 0;
+  p.text = choice_text(w, (uint32_t) i)[0] != 0;
+  p.ih = line_height(ifont);
+  p.th = line_height(tf);
+  p.iw = p.cp ? lv_font_get_glyph_width(ifont, p.cp, 0) : 0;
+  if (p.cp && p.text && H >= 64) {
+    const int y0 = (H - (p.ih + 6 + p.th)) / 2;
+    p.ix = (W - p.iw) / 2;
+    p.iy = y0;
+    p.tx = 6;
+    p.ty = y0 + p.ih + 6;
+    p.tw = W - 12;
+    p.centre = true;
+  } else if (p.cp && p.text) {
+    const int avail = W - 12 - p.iw - 6;
+    const int sw = shown ? text_width(tf, shown, shown_n) : avail;
+    const int x0 = (W - (p.iw + 6 + (sw < avail ? sw : avail))) / 2;
+    p.ix = x0;
+    p.iy = (H - p.ih) / 2;
+    p.tx = x0 + p.iw + 6;
+    p.ty = (H - p.th) / 2 > 0 ? (H - p.th) / 2 : 0;
+    p.tw = avail;
+  } else if (p.cp) {
+    p.ix = (W - p.iw) / 2;
+    p.iy = (H - p.ih) / 2;
+  } else if (p.text) {
+    p.tx = 6;
+    p.ty = (H - p.th) / 2 > 0 ? (H - p.th) / 2 : 0;
+    p.tw = W - 12;
+    p.centre = true;
+  }
+  return p;
+}
+
+// The box option i is drawn in, from the rectangle's corner: its cell, or
+// with `look` 1 the dot in it. All cells have one size.
+inline void choice_box(const Widget &w, const ChoiceGrid &g, int i, int out[4]) {
+  if (w.look == 1)
+    choice_dot(g, i, out);
+  else
+    choice_cell(g, i, out);
+}
+
+// Worked out once at the build (cards spec B.4): the bytes of each text that
+// fit its room, which were cut with an ellipsis, and on which swatches
+// readable() is the dark colour (the swatches are constants).
+inline void choice_build(Widget &w) {
+  w.ch_down = w.ch_pulse = w.ch_sel_d = w.ch_press_d = w.ch_pulse_d = -1;
+  w.ch_key = 0;
+  w.ch_cut = w.ch_dark = 0;
+  w.cut = 0;
+  memset(w.ch_fit, 0, sizeof w.ch_fit);
+  ChoiceGrid g;
+  if (!choice_grid_of(w, &g)) return;
+  int b[4];
+  choice_box(w, g, 0, b);
+  const lv_font_t *tf = text_font(15);
+  for (int i = 0; i < g.n; i++) {
+    char buf[OPTION_TEXT_BYTES + 8];
+    const size_t n = shown_text(choice_text(w, (uint32_t) i), buf, sizeof buf);
+    const ChoicePlace p = choice_place(w, i, b[2], b[3], nullptr, 0);
+    const size_t keep = p.tw > 0 ? cut_keep(tf, buf, n, p.tw) : n;
+    w.ch_fit[i] = (uint8_t) keep;
+    if (keep < n) w.ch_cut |= (uint16_t) (1u << i);
+    if (w.cols && i < w.cols_n && readable((uint32_t) w.cols[i]) == COLOUR_INK) w.ch_dark |= (uint16_t) (1u << i);
+  }
+  w.cut = w.ch_cut ? 1 : 0;
+}
+
+// The selected option: the optimistic one of a tap with policy 0, else the
+// value when it is a whole number that is an index (contract 4.3); -1 none.
+inline int choice_selected(Model &m, const Widget &w) {
+  double v;
+  if (w.ovr)
+    v = w.ovr_value;
+  else if (!bound_num(m, w.value, &v))
+    return -1;
+  if (!(v >= 0) || v != floor(v) || v >= w.options) return -1;
+  return (int) v;
+}
+
+// The colours every cell is drawn from, as one number: a change of the card
+// that moves any of them draws the whole control again.
+inline uint32_t choice_key(const CardLook &k) {
+  const uint32_t parts[] = {k.k.filled, k.k.text, k.k.AF, k.k.AT, k.k.AP, k.k.FP, k.t.card2, k.t.card2_pr,
+                            (uint32_t) k.t.r2};
+  uint32_t h = 2166136261u;
+  for (uint32_t x : parts) h = (h ^ x) * 16777619u;
+  return h | 1u;
+}
+
+// Draws option i's icon and text in box b (screen coordinates), cut to it:
+// a line higher than its box starts at its top and is cut at its bottom.
+inline void choice_content(lv_layer_t *layer, const Widget &w, int i, const lv_area_t &b, uint32_t colour, lv_opa_t opa) {
+  const lv_area_t clip = layer->_clip_area;
+  const lv_area_t now = {LV_MAX(clip.x1, b.x1), LV_MAX(clip.y1, b.y1), LV_MIN(clip.x2, b.x2), LV_MIN(clip.y2, b.y2)};
+  if (now.x1 > now.x2 || now.y1 > now.y2) return;
+  const lv_font_t *tf = text_font(15);
+  // The text as drawn: the bytes that fit, and the ellipsis when it was cut.
+  char text[48];
+  size_t n = shown_text(choice_text(w, (uint32_t) i), text, OPTION_TEXT_BYTES + 1);
+  if (w.ch_fit[i] < n) n = w.ch_fit[i];
+  if (w.ch_cut >> i & 1) {
+    const char *ell = ellipsis_of(tf);
+    const size_t en = strlen(ell);
+    memcpy(text + n, ell, en);
+    n += en;
+  }
+  text[n] = 0;
+  const ChoicePlace p = choice_place(w, i, lv_area_get_width(&b), lv_area_get_height(&b), text, n);
+  layer->_clip_area = now;
+  lv_draw_label_dsc_t d;
+  if (p.cp) {
+    char glyph_buf[5];
+    icon_utf8(p.cp, glyph_buf);
+    lv_draw_label_dsc_init(&d);
+    d.font = icon_font(24);
+    d.color = lv_color_hex(colour);
+    d.opa = opa;
+    d.text = glyph_buf;
+    d.text_local = 1;
+    const lv_area_t ia = {b.x1 + p.ix, b.y1 + p.iy, b.x1 + p.ix + (p.iw > 0 ? p.iw : 1) - 1, b.y1 + p.iy + p.ih - 1};
+    lv_draw_label(layer, &d, &ia);
+  }
+  if (p.text && p.tw > 0) {
+    lv_draw_label_dsc_init(&d);
+    d.font = tf;
+    d.color = lv_color_hex(colour);
+    d.opa = opa;
+    d.align = p.centre ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT;
+    d.text = text;
+    d.text_local = 1;
+    const lv_area_t ta = {b.x1 + p.tx, b.y1 + p.ty, b.x1 + p.tx + p.tw - 1, b.y1 + p.ty + p.th - 1};
+    lv_draw_label(layer, &d, &ta);
+  }
+  layer->_clip_area = clip;
+}
+
+// (2) A choice (contract 4.7): one object whose cells this draws from the
+// state paint_choice kept. LVGL calls it once for every band of a refresh,
+// so it skips the cells outside the band (cards spec B.4).
+inline void on_choice_draw(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model) return;
+  Model &m = *l->model;
+  ChoiceGrid g;
+  if (!choice_grid_of(*w, &g)) return;
+  const CardLook &k = look_for(m, card_of(m, *w));
+  lv_layer_t *layer = lv_event_get_layer(e);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  const lv_area_t clip = layer->_clip_area;
+  const lv_opa_t opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  const bool filled = k.k.filled;
+  for (int i = 0; i < g.n; i++) {
+    int c[4];
+    choice_cell(g, i, c);
+    const lv_area_t cell = {a.x1 + c[0], a.y1 + c[1], a.x1 + c[0] + c[2] - 1, a.y1 + c[1] + c[3] - 1};
+    if (cell.x2 < clip.x1 || cell.x1 > clip.x2 || cell.y2 < clip.y1 || cell.y1 > clip.y2) continue;
+    TAB_COUNT(choice_cells);
+    int b[4];
+    choice_box(*w, g, i, b);
+    const lv_area_t box = {a.x1 + b[0], a.y1 + b[1], a.x1 + b[0] + b[2] - 1, a.y1 + b[1] + b[3] - 1};
+    const bool swatch = w->cols && i < w->cols_n;
+    const bool selected = i == w->ch_sel_d, pressed = i == w->ch_press_d;
+    uint32_t bg, fg;
+    if (i == w->ch_pulse_d) {
+      bg = k.k.AF;
+      fg = k.k.AT;
+    } else if (swatch) {
+      const uint32_t col = (uint32_t) w->cols[i];
+      fg = (w->ch_dark >> i & 1) ? COLOUR_INK : COLOUR_WHITE;
+      bg = pressed ? mix(fg, col, 85) : col;
+    } else if (selected) {
+      bg = pressed ? k.k.AP : k.k.AF;
+      fg = k.k.AT;
+    } else {
+      bg = filled ? k.k.FP : pressed ? k.t.card2_pr : k.t.card2;
+      fg = k.k.text;
+    }
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(bg);
+    d.bg_opa = opa;
+    d.radius = w->look == 1 ? LV_RADIUS_CIRCLE : k.t.r2;
+    if (swatch && selected) {
+      // A selected swatch: 3 px in the card's text colour now, inside.
+      d.border_width = 3;
+      d.border_color = lv_color_hex(k.k.text);
+      d.border_opa = opa;
+    }
+    lv_draw_rect(layer, &d, &box);
+    choice_content(layer, *w, i, box, fg, opa);
+  }
+}
+
+// Marks cell i to be drawn again (screen coordinates); -1: none.
+inline void choice_invalidate(Widget &w, const ChoiceGrid &g, int i) {
+  if (i < 0 || i >= g.n) return;
+  lv_area_t a;
+  lv_obj_get_coords(w.obj, &a);
+  int c[4];
+  choice_cell(g, i, c);
+  const lv_area_t cell = {a.x1 + c[0], a.y1 + c[1], a.x1 + c[0] + c[2] - 1, a.y1 + c[1] + c[3] - 1};
+  lv_obj_invalidate_area(w.obj, &cell);
+}
+
+// Keeps what the cells show and invalidates only the cells that change: a
+// new value, a press or a pulse is one or two cells (cards spec B.4, rule
+// 4). A choice never fades for want of a value; it fades with its card.
+inline void paint_choice(Layout &l, Widget &w) {
+  Model &m = *l.model;
+  const CardLook &k = look_for(m, card_of(m, w));
+  fade(w.obj, k.unavailable);
+  w.faded = 0;
+  set_outline(w.obj, w.fb == 1, k.k.filled ? k.k.FI : k.k.A);
+  ChoiceGrid g;
+  if (!choice_grid_of(w, &g)) return;
+  const int sel = choice_selected(m, w);
+  const int press = w.pressed && w.ch_down >= 0 ? w.ch_down : -1;
+  const int pulse = w.fb == 2 ? w.ch_pulse : -1;
+  const uint32_t key = choice_key(k);
+  const int was[3] = {w.ch_sel_d, w.ch_press_d, w.ch_pulse_d}, is[3] = {sel, press, pulse};
+  const bool whole = w.ch_key != key;
+  w.ch_key = key;
+  w.ch_sel_d = (int8_t) sel;
+  w.ch_press_d = (int8_t) press;
+  w.ch_pulse_d = (int8_t) pulse;
+  if (whole) {
+    lv_obj_invalidate(w.obj);
+    return;
+  }
+  for (int j = 0; j < 3; j++) {
+    if (was[j] == is[j]) continue;
+    choice_invalidate(w, g, was[j]);
+    choice_invalidate(w, g, is[j]);
+  }
+}
+
+// (2) A press on a choice with `change` (contract 4.3, 7.4, cards spec B.5):
+// PRESSED keeps the cell under the point (a gap is none); the cell shows
+// pressed while the finger is in it; CLICKED sends the option when the
+// release is in the cell the press went down in. A swipe may take the
+// press: LVGL then sends PRESS_LOST and no CLICKED.
+inline void on_choice_event(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || l->state != L_ACTIVE) return;
+  lv_indev_t *indev = lv_indev_active();
+  lv_point_t p = {0, 0};
+  if (indev) lv_indev_get_point(indev, &p);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  ChoiceGrid g;
+  const int at = choice_grid_of(*w, &g) ? choice_cell_at(g, p.x - a.x1, p.y - a.y1) : -1;
+  switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+      if (faded_and_quiet(*l->model, *w)) break;
+      w->ch_down = (int8_t) at;
+      w->pressed = at >= 0 ? 1 : 0;
+      paint_widget(*l, *w);
+      if (at >= 0) after_press();
+      break;
+    case LV_EVENT_PRESSING: {
+      const uint8_t in = w->ch_down >= 0 && at == w->ch_down ? 1 : 0;
+      if (in != w->pressed) {
+        w->pressed = in;
+        paint_widget(*l, *w);
+      }
+      break;
+    }
+    case LV_EVENT_RELEASED:
+      if (!w->pressed) break;
+      w->pressed = 0;
+      paint_widget(*l, *w);
+      break;
+    case LV_EVENT_PRESS_LOST:
+      w->ch_down = -1;
+      if (!w->pressed) break;
+      w->pressed = 0;
+      paint_widget(*l, *w);
+      break;
+    case LV_EVENT_CLICKED: {
+      const int down = w->ch_down;
+      w->ch_down = -1;
+      // A lost press never gets here; the state is read once more anyway.
+      if (down < 0 || at != down || !vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
+      choice_picked(*l, *w, down);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 // ---------------------------------------------------------------- painting
 
 // (2) The card of a widget pulses (contract 4.7, "Card, pulse").
@@ -1799,6 +2143,7 @@ inline void paint_kind(Layout &l, Widget &w) {
     case W_THERMO: paint_thermostat(l, w); break;
     case W_CHART: paint_chart(l, w); break;
     case W_IMAGE: paint_image(l, w); break;
+    case W_CHOICE: paint_choice(l, w); break;
     default: break;
   }
 }
@@ -2108,13 +2453,30 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       w.o1 = icon_box(w.obj, 0, 0, BW, BH, px);
       break;
     }
+    case W_CHOICE: {
+      // (2) One object drawn by a callback, for any number of options (cards
+      // spec B.4). None without an option or with cells below 1 px: it is
+      // not drawn and not there for a touch (contract 4.3, 4.7).
+      ChoiceGrid cg;
+      if (!choice_grid_of(w, &cg)) return;
+      w.obj = plain(parent);
+      if (!w.obj) return;
+      place(w.obj, x, y, W, H);
+      choice_build(w);
+      lv_obj_add_event_cb(w.obj, on_choice_draw, LV_EVENT_DRAW_MAIN, &w);
+      if (w.change) {
+        set_clickable(w.obj, true);
+        add_events(w.obj, on_choice_event, &w);
+      }
+      break;
+    }
     default:
       return;
   }
   if (!w.obj || g.obj_fail) return;  // a part is missing: the build fails, nothing is painted
   // Clickable for good, also while faded (on_widget_event).
   const bool acts = w.tap || (w.kind == W_SLIDER && w.change);
-  if (acts && w.kind != W_THERMO) {
+  if (acts && w.kind != W_THERMO && !(w.kind == W_CHOICE && w.change)) {
     set_clickable(w.obj, true);
     add_events(w.obj, on_widget_event, &w);
   }

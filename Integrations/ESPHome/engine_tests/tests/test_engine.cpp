@@ -2500,6 +2500,34 @@ static std::string gen_big_card(int labels) {
   return s;
 }
 
+// Pages of cards that each hold one choice of 16 options in 4 rows, with
+// icons and texts, bound to slot 1 (layout v2).
+static std::string gen_choice_cards(int pages, int cards) {
+  std::string s = "{\"nav\":[", texts, icons;
+  for (int i = 0; i < 16; i++) {
+    texts += std::string(i ? "," : "") + "\"Option " + std::to_string(i) + "\"";
+    icons += std::string(i ? "," : "") + std::to_string(983040 + 100 * i);
+  }
+  for (int p = 0; p < pages; p++)
+    s += std::string(p ? "," : "") + "{\"p\":" + std::to_string(p) + ",\"title\":\"P" + std::to_string(p) + "\"}";
+  s += "],\"pages\":[";
+  int id = 1;
+  for (int p = 0; p < pages; p++) {
+    s += std::string(p ? "," : "") + "{\"title\":\"P" + std::to_string(p) + "\",\"w\":[";
+    for (int c = 0; c < cards; c++) {
+      const int cx = 100 + (c % 4) * 295, cy = (c / 4) % 4 * 200, card = id, choice = id + 1;
+      id += 2;
+      s += std::string(c ? "," : "") + "{\"id\":" + std::to_string(card) + ",\"r\":[" + std::to_string(cx) + "," +
+           std::to_string(cy) + ",290,190],\"t\":\"card\",\"w\":[{\"change\":{\"p\":0},\"icons\":[" + icons +
+           "],\"id\":" + std::to_string(choice) + ",\"r\":[" + std::to_string(cx + 8) + "," + std::to_string(cy + 8) +
+           ",274,174],\"rows\":4,\"t\":\"choice\",\"texts\":[" + texts + "],\"value\":{\"s\":1}}]}";
+    }
+    s += "]}";
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"n\",\"v\":2}";
+  return s;
+}
+
 static uint32_t count_objects(lv_obj_t *o) {
   uint32_t n = 1;
   const uint32_t k = lv_obj_get_child_count(o);
@@ -2552,7 +2580,8 @@ TEST(slice_budget) {
   const std::vector<L> ls = {{"40 cards x 4 labels x 3 pages", gen_cards(3, 40, 4)},
                              {"2 cards x 1 label x 20 pages", gen_cards(20, 2, 1)},
                              {"1 card x 200 labels", gen_big_card(201)},
-                             {"1 card x 2047 labels", gen_big_card(2048)}};
+                             {"1 card x 2047 labels", gen_big_card(2048)},
+                             {"16 cards x 16-option choice x 3 pages", gen_choice_cards(3, 16)}};
   Ha ha;
   for (const L &l : ls) {
     g_test = l.name;
@@ -2967,6 +2996,37 @@ TEST(build_failure_is_reported) {
     return n;
   }();
   CHECK(whole > 100);
+  // A 16-option choice and the v2 kit (which holds four choices): any object
+  // that cannot be made stops the build with "build".
+  for (const std::string &v2 : {gen_choice_cards(1, 2), layout_bytes("layout_v2_kit.dl.json")}) {
+    const std::string h = hash16(v2);
+    CHECK(ha.show(v2));
+    const uint32_t n = active() ? count_objects(active()->root) : 0;
+    int choices = 0;
+    for (uint32_t i = 0; active() && i < active()->model->nw; i++) choices += active()->model->w[i].kind == D::W_CHOICE;
+    CHECK(choices >= 2 && n > 4);
+    CHECK(ha.show(small));
+    hh::advance(2000);
+    int refused_v2 = 0;
+    for (uint32_t allow = 0; allow < n; allow += (QUICK && n > 60 ? 7 : 1)) {
+      CHECK_STR(ha.send(v2), "");
+      D::test_objects_left = (int32_t) allow;
+      CHECK_STR(ha.commit(h), "");
+      const bool ended = advance_until([] { return !tab::building(); }, 3000);
+      const bool refused = D::test_objects_left == 0;
+      D::test_objects_left = -1;
+      if (!CHECK_MSG(ended, "v2 allow " + std::to_string(allow))) break;
+      if (refused && std::string(tab::active_hash()) == "a9326c033e45f2f4") {
+        refused_v2++;
+        if (status_build() != "build") CHECK_MSG(false, "v2 allow " + std::to_string(allow) + ": " + status_build());
+      } else {
+        CHECK_MSG(std::string(tab::active_hash()) == h, "v2 allow " + std::to_string(allow));
+        CHECK(ha.show(small));
+      }
+      hh::advance(300);
+    }
+    CHECK_MSG(refused_v2 > (n > 60 && QUICK ? 5 : (int) n / 2), std::to_string(refused_v2) + " of " + std::to_string(n));
+  }
   int failed = 0;
   for (uint32_t allow = 0; allow < whole; allow += (QUICK ? 7 : 1)) {
     CHECK_STR(ha.send(all), "");
@@ -5266,19 +5326,24 @@ TEST(kit_loads) {
       CHECK(t.card_pr == st["card_pr"].n && t.card2_pr == st["card2_pr"].n && t.accf == st["accf"].n &&
             t.accf_pr == st["accf_pr"].n && t.onbg_pr == st["onbg_pr"].n && t.ion == st["ion"].n);
     }
-    // Every widget the engine draws so far is at its rectangle, a round
-    // button and a badge at their circle's square.
+    // Every widget the engine draws is at its rectangle, a round button and
+    // a badge at their circle's square. A choice is one object (package E8).
+    int choices = 0;
     for (uint32_t i = 0; i < m.nw; i++) {
       const D::Widget &w = m.w[i];
       const std::string id = std::string(name) + " widget " + std::to_string(w.id);
-      if (w.kind == D::W_CHOICE) continue;  // drawn from package E8 on
       if (!CHECK_MSG(w.obj, id)) continue;
+      if (w.kind == D::W_CHOICE) {
+        choices++;
+        CHECK_MSG(lv_obj_get_child_count(w.obj) == 0 && D::Loader::objects_of(w) == 1, id + " is one object");
+      }
       // A round button and a badge: the centred circle's square (package E5).
       int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
       if (w.kind == D::W_BUTTON) D::button_box(w, &bx, &by, &bw, &bh);
       if (w.kind == D::W_IMAGE) D::image_box(w, &bx, &by, &bw, &bh);
       CHECK_MSG(obj_at(w.obj, w.r[0] + bx, w.r[1] + by, bw, bh), id + " at " + rect_text(w.obj));
     }
+    CHECK_MSG(choices == (strcmp(name, "layout_v2_kit") ? 0 : 4), std::to_string(choices) + " choices");
     // The values of state_v2.json's stream are all taken.
     if (!strcmp(name, "layout_v2_kit")) {
       const tj::Value st = fixture("state_v2.json");
@@ -5933,8 +5998,8 @@ static std::string hex6(uint32_t c) {
 // wrong), the card colours for every lit with and without a tint, with the
 // tokens of each style, and the two colours of an image in each state. The
 // geometry of maths.json (label sizes, the clock, sliders, tracks, choice
-// cells, chart steps, bars, the image's box) comes with the packages that
-// draw those parts.
+// cells and dots, chart steps, bars, the image's box) is checked here for
+// the parts drawn so far, and comes with the packages that draw the rest.
 TEST(maths_fixture) {
   const tj::Value f = fixture("maths.json");
   // The table, bit for bit.
@@ -6254,6 +6319,61 @@ TEST(maths_fixture) {
   }
   CHECK(D::chart_mark(7, true, 1e9) == -1 && D::chart_mark(7, true, -1e9) == -1 && D::chart_mark(7, true, 0.49) == 0);
   CHECK_MSG(bad == 0, std::to_string(bad) + " bar colours differ, the first: " + first);
+
+  // (package E8) The cells of a choice, the dot of each with look 1 and the
+  // option under a point (null: a gap, outside, or nothing drawn), also for
+  // no option, 17 options, rows out of range and cells of 1 px and below.
+  bad = 0;
+  int cells = 0, points = 0, none = 0;
+  CHECK(f["choice"].size() >= 15);
+  for (const tj::Value &v : f["choice"].a) {
+    const int n = v["n"].i(), rows = v["rows"].i(), W = v["w"].i(), H = v["h"].i(), look = v["look"].i();
+    const std::string what = "choice " + v["n"].s + " in " + v["rows"].s + " rows, " + v["w"].s + "x" + v["h"].s +
+                             " look " + v["look"].s;
+    D::ChoiceGrid g;
+    const bool drawn = D::choice_grid(n, rows, W, H, &g);
+    if (drawn != !v["cells"].is_null()) {
+      miss(what + (drawn ? ": drawn" : ": not drawn"));
+      continue;
+    }
+    if (!drawn) none++;
+    if (drawn && (size_t) g.n != v["cells"].size()) miss(what + ": " + std::to_string(g.n) + " cells");
+    for (int i = 0; drawn && i < g.n && (size_t) i < v["cells"].size(); i++) {
+      const tj::Value &e = v["cells"][(size_t) i];
+      int c[4], d[4];
+      D::choice_cell(g, i, c);
+      cells++;
+      for (int j = 0; j < 4; j++)
+        if (c[j] != e[(size_t) j].i()) miss(what + ": cell " + std::to_string(i));
+      if (look == 1) {
+        D::choice_dot(g, i, d);
+        for (int j = 0; j < 4; j++)
+          if (d[j] != e[4][(size_t) j].i()) miss(what + ": dot " + std::to_string(i));
+      } else if (e.size() != 4) {
+        miss(what + ": a dot without look 1");
+      }
+    }
+    for (const tj::Value &p : v["presses"].a) {
+      points++;
+      const int got = D::choice_cell_at(g, p[0].i(), p[1].i());
+      if (p[2].is_null() ? got != -1 : got != p[2].i()) miss(what + " at " + p[0].s + "," + p[1].s + ": " + std::to_string(got));
+    }
+  }
+  CHECK(cells >= 70 && points >= 100 && none >= 4);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " choice vectors differ, the first: " + first);
+  // A dot whose cell is an odd number of pixels wider than high is placed
+  // half a pixel to the right, rounded up as everywhere in 4.7 (no vector
+  // of maths.json has one).
+  {
+    D::ChoiceGrid g;
+    int d[4];
+    CHECK(D::choice_grid(2, 1, 210, 56, &g) && g.cw == 101 && g.ch == 56);
+    D::choice_dot(g, 1, d);
+    CHECK(d[0] == 109 + 23 && d[1] == 0 && d[2] == 56 && d[3] == 56);
+    CHECK(D::choice_grid(1, 1, 56, 101, &g));
+    D::choice_dot(g, 0, d);
+    CHECK(d[0] == 0 && d[1] == 23 && d[2] == 56);
+  }
   // The engine's list of digit glyphs is contract.json's.
   CHECK_STR(D::DIGITS_GLYPHS, tj::load(CDIR + "/contract.json")["fonts"]["digits_glyphs"].s);
 }
@@ -6645,6 +6765,14 @@ static std::string sent_words() {
   return s;
 }
 
+// The value field of the last input sent, or "" for none.
+static std::string last_input_value() {
+  const auto ev = fake::events("tab1_input");
+  if (ev.empty()) return "";
+  const auto f = fields_of(ev.back().d);
+  return f.size() == 9 ? f[6] + "=" + f[8] : "";
+}
+
 static uint32_t last_input_counter() {
   const auto ev = fake::events("tab1_input");
   if (ev.empty()) return 0;
@@ -6742,10 +6870,7 @@ static std::vector<std::string> run_input_case(const tj::Value &cs) {
 // reported, and is not a failure yet. The package turns it green and takes
 // it off this list.
 static const char *const INPUT_LATER[][2] = {
-    {"choice_cell", "E8"},
-    {"choice_gap", "E8"},               {"choice_hold_is_none", "E8"},
-    {"choice_released_in_another_cell", "E8"}, {"choice_second_row", "E8"},
-    {"choice_asks_first", "E8"},        {"swipe_right_wraps", "E9"},
+    {"swipe_right_wraps", "E9"},
     {"back_entry", "E9"},               {"back_button", "E9"},
     {"detail_swipe_right_returns", "E9"}, {"detail_swipe_left_does_nothing", "E9"},
 };
@@ -6819,7 +6944,7 @@ struct KitRig {
 // The table "Who gets a press" of contract 4.3, row by row, on the kit's
 // "Routing" card (page 1: tap and hold, a thermostat with change, a swap of
 // two buttons, labels, a bar that only shows, a switch) and card 2 (page 0).
-// The gap of a `choice` comes with package E8 (input_v2_fixture lists it).
+// The gap of a `choice` is in choice_feedback and input_v2_fixture.
 TEST(card_tap_and_children) {
   KitRig rig;
   if (!CHECK(rig.up())) return;
@@ -7251,8 +7376,8 @@ TEST(hold_is_not_a_tap) {
     rig.settle();
   }
   // A label with its own hold in a card without one; a `choice` with
-  // change in a card with one (the choice is drawn from package E8 on; the
-  // hold already reads the model); a hold of the form {"p": n} is no hold.
+  // change in a card with one: no hold, and the release in the cell it went
+  // down in sends the option; a hold of the form {"p": n} is no hold.
   const std::string widgets =
       "{\"hold\":{\"go\":1},\"id\":2,\"r\":[116,140,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Hold me\"},"
       "{\"change\":{\"p\":0},\"id\":3,\"r\":[116,200,536,48],\"t\":\"choice\",\"texts\":[\"A\",\"B\"],\"value\":{\"s\":1}}";
@@ -7262,7 +7387,8 @@ TEST(hold_is_not_a_tap) {
   CHECK(tab::current_page() == 1);
   if (!CHECK(rig.up(two_pages("\"hold\":{\"go\":1},", widgets, "n"), false))) return;
   press_for(300, 224, 700);
-  CHECK(tab::current_page() == 0);
+  CHECK(tab::current_page() == 0 && sent_words() == "3c" && last_input_value() == "c=0");
+  rig.settle();
   press_for(500, 420, 700);
   CHECK(tab::current_page() == 1);
   if (!CHECK(rig.up(two_pages("\"hold\":{\"p\":0},\"tap\":{\"p\":1},", widgets, "n"), false))) return;
@@ -8072,14 +8198,6 @@ static const char *SLIDER_WIDGETS =
     "{\"id\":15,\"look\":1,\"max\":100,\"min\":0,\"r\":[340,472,200,10],\"step\":1,\"t\":\"slider\","
     "\"track\":[16746770,16775677,13623551],\"value\":{\"s\":3}}";
 
-// The value field of the last input sent, or "" for none.
-static std::string last_input_value() {
-  const auto ev = fake::events("tab1_input");
-  if (ev.empty()) return "";
-  const auto f = fields_of(ev.back().d);
-  return f.size() == 9 ? f[6] + "=" + f[8] : "";
-}
-
 // The channels of an RGB565 pixel, 0 to 31 (green halved to 5 bits' scale).
 static void channels(uint16_t p, double c[3]) {
   c[0] = p >> 11;
@@ -8458,4 +8576,524 @@ TEST(thermostat_and_chart) {
   }
   CHECK_STR(rig.set("[27,4]"), "");
   shot("thermostat_and_chart");
+}
+
+// ================================================================ the choice (package E8)
+//
+// Contract 4.3 ("Who gets a press"), 4.7 ("Choice") and 7.4, cards spec B.4
+// and B.5: one object drawn by a callback, its cells, selected, pressed and
+// pulsing looks, swatches and dots, the press that picks a cell, and the
+// feedback of each policy.
+
+// One card on a theme whose roles all differ, with these widgets; slots
+// "bnnnnb": 1 the card's `on`, 2 to 5 numbers, 6 the card's `un`.
+static std::string choice_layout(const std::string &card_keys, const std::string &widgets) {
+  return std::string("{") + DISTINCT_THEME + "\"screen\":[1280,800]," +
+         "\"nav\":[{\"p\":0,\"title\":\"P\"},{\"p\":1,\"title\":\"Q\"}],\"pages\":[{\"title\":\"P\",\"w\":[{" + card_keys +
+         "\"hr\":[116,100,536,32],\"icon\":983861,\"id\":1,\"r\":[100,84,1000,700],\"t\":\"card\",\"title\":\"Modes\","
+         "\"w\":[" + widgets + "]}]},{\"title\":\"Q\",\"w\":[{\"id\":90,\"r\":[100,20,568,56],\"t\":\"heading\","
+         "\"text\":\"Q\"}]}],\"slots\":\"bnnnnb\",\"v\":2}";
+}
+
+static const char *CHOICE_WIDGETS =
+    // 2: four texts, policy 0. Cells of 128 x 48 at x 116, 252, 388, 524.
+    "{\"change\":{\"p\":0},\"id\":2,\"r\":[116,140,536,48],\"t\":\"choice\",\"texts\":[\"Off\",\"Low\",\"Medium\","
+    "\"High\"],\"value\":{\"s\":2}},"
+    // 3: icons and texts in 2 rows, one option without an icon, policy 2.
+    // Cells of 173 x 48 at x 116, 297, 478 and y 196, 252.
+    "{\"change\":{\"p\":2},\"icons\":[984473,984468,0,983568,984855,983608],\"id\":3,\"r\":[116,196,536,104],"
+    "\"rows\":2,\"t\":\"choice\",\"texts\":[\"Day\",\"Night\",\"Auto\",\"Fan\",\"Cool\",\"Heat\"],\"value\":{\"s\":3}},"
+    // 4: swatches as dots, policy 1. Cells of 100 x 56 at x 116 + 108 i,
+    // dots of 56 at 22 into each.
+    "{\"change\":{\"p\":1},\"cols\":[16729402,16752394,16766474,3199320,689407],\"id\":4,\"look\":1,"
+    "\"r\":[116,308,536,56],\"t\":\"choice\",\"value\":{\"s\":4}},"
+    // 5: policy 3, the question first. Cells of 146 x 48.
+    "{\"change\":{\"p\":3},\"id\":5,\"r\":[116,372,300,48],\"t\":\"choice\",\"texts\":[\"A\",\"B\"],\"value\":{\"s\":5}},"
+    // 6: only shows, with a text too long for its cell of 106 x 48.
+    "{\"id\":6,\"r\":[432,372,220,48],\"t\":\"choice\",\"texts\":[\"An option far too long for its cell\",\"B\"]},"
+    // 7: an icon over a text in a cell of 264 x 80, a text alone; no value.
+    "{\"change\":{\"p\":0},\"icons\":[983568,0],\"id\":7,\"r\":[116,436,536,80],\"t\":\"choice\",\"texts\":[\"Fan\","
+    "\"Heat\"]},"
+    // 8: swatches with texts in cells of 128 x 48 at x 680, 816, 952.
+    "{\"change\":{\"p\":0},\"cols\":[16777215,0,16729402],\"id\":8,\"r\":[680,140,400,48],\"t\":\"choice\","
+    "\"texts\":[\"W\",\"K\",\"R\"]},"
+    // 9: four options in 27 px: cells below 1 px, nothing drawn.
+    "{\"change\":{\"p\":0},\"id\":9,\"r\":[700,300,27,48],\"t\":\"choice\",\"texts\":[\"a\",\"b\",\"c\",\"d\"]}";
+
+// Pixels of colour c in the rectangle [x, y, w, h] of the frame.
+static int pixels_of(int x, int y, int w, int h, uint32_t c) {
+  const uint16_t want = hh::rgb565(c);
+  int n = 0;
+  for (int py = y; py < y + h; py++)
+    for (int px = x; px < x + w; px++) n += hh::pixel(px, py) == want ? 1 : 0;
+  return n;
+}
+
+// The areas LVGL will draw again that meet the rectangle r, and their span.
+static int redrawn_in(const int16_t r[4], int *x0 = nullptr, int *x1 = nullptr) {
+  lv_display_t *disp = lv_display_get_default();
+  int n = 0, from = 1 << 20, to = -(1 << 20);
+  for (uint32_t i = 0; i < disp->inv_p; i++) {
+    if (disp->inv_area_joined[i]) continue;
+    const lv_area_t &a = disp->inv_areas[i];
+    if (a.x2 < r[0] || a.x1 >= r[0] + r[2] || a.y2 < r[1] || a.y1 >= r[1] + r[3]) continue;
+    n++;
+    from = std::min(from, (int) a.x1);
+    to = std::max(to, (int) a.x2 + 1);
+  }
+  if (x0) *x0 = from;
+  if (x1) *x1 = to;
+  return n;
+}
+
+// The looks and the build: one object for any number of options, the
+// cells' colours, the content in the card's text colour now (acct on a
+// selected cell, readable(c) on a swatch), a selected swatch's border, the
+// dots, the pressed looks, the filled card, the cut text and the stacking
+// rule, and a choice with cells below 1 px that is not there.
+TEST(choice_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *w[10] = {};
+  for (int i = 2; i <= 9; i++) w[i] = widget((uint32_t) i);
+  for (int i = 2; i <= 9; i++)
+    if (!CHECK_MSG(w[i], std::to_string(i))) return;
+  const D::CardLook *k = D::card_look(m, card);
+  if (!CHECK(k)) return;
+  // One object each, no children; a press target only with `change`.
+  for (int i = 2; i <= 8; i++) {
+    CHECK_MSG(w[i]->obj && lv_obj_get_child_count(w[i]->obj) == 0 && obj_at(w[i]->obj, w[i]->r[0], w[i]->r[1], w[i]->r[2], w[i]->r[3]),
+              std::to_string(i));
+    CHECK_MSG(clickable(w[i]->obj) == (i != 6), std::to_string(i) + " clickable");
+  }
+  CHECK(w[9]->obj == nullptr && D::Loader::objects_of(*w[9]) == 0 && w[9]->options == 4);
+  // 16 options are one object too.
+  {
+    D::Widget c16 = *w[2];
+    c16.options = 16;
+    c16.rows = 4;
+    c16.r[3] = 200;
+    CHECK(D::Loader::objects_of(c16) == 1);
+  }
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  const int y2 = 164;  // the middle row of widget 2
+  // Plain cells in card2, the selected one in accf; content tx and acct.
+  CHECK(D::choice_selected(m, *w[2]) == 1);
+  CHECK(hh::pixel(120, y2) == hh::rgb565(k->t.card2) && hh::pixel(256, y2) == hh::rgb565(k->k.AF) &&
+        hh::pixel(392, y2) == hh::rgb565(k->t.card2));
+  CHECK(hh::pixel(248, y2) == hh::rgb565(k->t.bg));  // the gap shows the card
+  CHECK(pixels_of(116, 140, 128, 48, k->k.text) > 5 && pixels_of(116, 140, 128, 48, k->k.AT) == 0);
+  CHECK(pixels_of(252, 140, 128, 48, k->k.AT) > 5 && pixels_of(252, 140, 128, 48, k->k.text) == 0);
+  // The cell's radius is r2 (10): its corner pixel shows the card.
+  CHECK(hh::pixel(116, 140) == hh::rgb565(k->t.bg) && hh::pixel(126, 150) == hh::rgb565(k->t.card2));
+  // A gap between the rows of widget 3 shows the card; its second row is
+  // drawn where 4.7 puts it.
+  CHECK(hh::pixel(200, 247) == hh::rgb565(k->t.bg) && hh::pixel(118, 254 + 20) == hh::rgb565(k->t.card2));
+  // Swatches as dots: each the circle of 56 centred in its cell, in its
+  // colour, the rest of the cell the card's.
+  const uint32_t cols[5] = {16729402, 16752394, 16766474, 3199320, 689407};
+  for (int i = 0; i < 5; i++) {
+    const int cx = 116 + 108 * i;
+    CHECK_MSG(hh::pixel(cx + 50, 336) == hh::rgb565(cols[i]) && hh::pixel(cx + 2, 336) == hh::rgb565(k->t.bg) &&
+                  hh::pixel(cx + 24, 336) == hh::rgb565(cols[i]) && hh::pixel(cx + 50, 309) == hh::rgb565(cols[i]),
+              "dot " + std::to_string(i));
+  }
+  CHECK(hh::pixel(116 + 22 + 3, 310) == hh::rgb565(k->t.bg));  // outside the circle, inside its square
+  // Selected swatch: a 3 px border in the card's text colour now, inside;
+  // the swatch keeps its colour.
+  CHECK_STR(rig.set("[4,1]"), "");
+  hh::refresh();
+  CHECK(hh::pixel(247, 336) == hh::rgb565(k->k.text) && hh::pixel(248, 336) == hh::rgb565(k->k.text) &&
+        hh::pixel(250, 336) == hh::rgb565(cols[1]) && hh::pixel(274, 336) == hh::rgb565(cols[1]));
+  CHECK(hh::pixel(139, 336) == hh::rgb565(cols[0]));  // the others have none
+  // Swatches with texts: the content is readable(c), worked out at the
+  // build (white has the dark text, black the white one).
+  CHECK(w[8]->ch_dark == (1u | (D::readable(16729402) == D::COLOUR_INK ? 4u : 0u)));
+  CHECK(pixels_of(680, 140, 128, 48, D::COLOUR_INK) > 5 && pixels_of(816, 140, 128, 48, D::COLOUR_WHITE) > 5 &&
+        pixels_of(952, 140, 128, 48, D::readable(16729402)) > 5);
+  CHECK(hh::pixel(684, y2) == hh::rgb565(16777215) && hh::pixel(820, y2) == hh::rgb565(0));
+  // The cut text: the longest start that fits 94 px (106 - 12) with the
+  // ellipsis, worked out at the build; the other text is whole.
+  {
+    const D::Widget &c = *w[6];
+    const lv_font_t *f = D::text_font(15);
+    const std::string t = D::choice_text(c, 0);
+    const size_t keep = c.ch_fit[0];
+    const std::string ell = "\xE2\x80\xA6";
+    CHECK((c.ch_cut & 1) && !(c.ch_cut & 2) && c.cut && keep > 3 && keep < t.size() && c.ch_fit[1] == 1);
+    const std::string shown = t.substr(0, keep) + ell;
+    CHECK(D::text_width(f, shown.c_str(), shown.size()) <= 94);
+    size_t next = keep + 1;
+    while (next < t.size() && ((uint8_t) t[next] & 0xC0) == 0x80) next++;
+    const std::string longer = t.substr(0, next) + ell;
+    CHECK(t[keep] == ' ' || D::text_width(f, longer.c_str(), longer.size()) > 94);
+    CHECK(!w[2]->ch_cut && !w[2]->cut);
+  }
+  // The button's rules for the content: an icon over a text when the cell
+  // is 64 or more high; side by side below; a part alone centred.
+  {
+    const int ih = D::line_height(D::icon_font(24)), th = D::line_height(D::text_font(15));
+    const D::ChoicePlace st = D::choice_place(*w[7], 0, 264, 80, "Fan", 3);
+    const int iw = lv_font_get_glyph_width(D::icon_font(24), 983568, 0);
+    CHECK(st.cp == 983568 && st.text && st.centre && st.iy == (80 - (ih + 6 + th)) / 2 && st.ty == st.iy + ih + 6 &&
+          st.ix == (264 - iw) / 2 && st.tx == 6 && st.tw == 252);
+    const D::ChoicePlace alone = D::choice_place(*w[7], 1, 264, 80, "Heat", 4);
+    CHECK(alone.cp == 0 && alone.text && alone.centre && alone.tx == 6 && alone.tw == 252 && alone.ty == (80 - th) / 2);
+    const int tw = D::text_width(D::text_font(15), "Day", 3);
+    const int iw3 = lv_font_get_glyph_width(D::icon_font(24), 984473, 0);
+    const D::ChoicePlace side = D::choice_place(*w[3], 0, 173, 48, "Day", 3);
+    CHECK(side.cp == 984473 && side.text && !side.centre && side.ix == (173 - (iw3 + 6 + tw)) / 2 &&
+          side.tx == side.ix + iw3 + 6 && side.iy == (48 - ih) / 2 && side.tw == 173 - 12 - iw3 - 6);
+    const D::ChoicePlace no_icon = D::choice_place(*w[3], 2, 173, 48, "Auto", 4);
+    CHECK(no_icon.cp == 0 && no_icon.centre && no_icon.tx == 6);
+    // On the screen: the icon's pixels above the text's.
+    int top = 1 << 20, bottom = -1;
+    for (int py = 436; py < 516; py++)
+      for (int px = 116; px < 380; px++)
+        if (hh::pixel(px, py) == hh::rgb565(k->k.text)) {
+          top = std::min(top, py);
+          bottom = std::max(bottom, py);
+        }
+    CHECK(top < 436 + st.iy + ih && bottom >= 436 + st.ty);
+  }
+  // Pressed: card2_pr; the selected cell accf_pr; a swatch
+  // mix(readable(c), c, 85). The look follows the finger: off while it is
+  // outside the cell it went down in, back when it returns.
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(w[2]->pressed && hh::pixel(392, y2) == hh::rgb565(k->t.card2_pr) && hh::pixel(120, y2) == hh::rgb565(k->t.card2));
+  // Down and out of the control (a move across would be a swipe).
+  finger(400, 214, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(!w[2]->pressed && w[2]->ch_down == 2 && hh::pixel(392, y2) == hh::rgb565(k->t.card2));
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(w[2]->pressed && hh::pixel(392, y2) == hh::rgb565(k->t.card2_pr));
+  finger(400, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+  finger(260, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(256, y2) == hh::rgb565(k->k.AP));
+  finger(260, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+  finger(140, 336, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(166, 336) == hh::rgb565(D::mix(D::readable(cols[0]), cols[0], 85)));
+  finger(140, 336, false);
+  hh::advance(40);
+  rig.settle();
+  // A filled card: cells onbg_pr, also pressed, content ontx; the selected
+  // cell keeps accf.
+  CHECK_STR(rig.set("[1,1],[2,1]"), "");
+  CHECK(k->k.filled == 1);
+  hh::refresh();
+  CHECK(hh::pixel(120, y2) == hh::rgb565(k->k.FP) && k->k.FP == k->t.onbg_pr && hh::pixel(256, y2) == hh::rgb565(k->k.AF));
+  CHECK(pixels_of(116, 140, 128, 48, k->k.text) > 5 && k->k.text == k->t.ontx);
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(392, y2) == hh::rgb565(k->k.FP));
+  finger(400, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[1,0],[2,1]"), "");
+  // Not available: the control at 40%, applied once.
+  CHECK_STR(rig.set("[6,1]"), "");
+  CHECK(lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_40 && lv_obj_get_style_opa(w[4]->obj, LV_PART_MAIN) == LV_OPA_40);
+  hh::refresh();
+  CHECK(hh::pixel(120, y2) != hh::rgb565(k->t.card2) && hh::pixel(120, y2) != hh::rgb565(k->t.bg));
+  CHECK_STR(rig.set("[6,0]"), "");
+  CHECK(lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_COVER);
+  // No value, and a value that is no index: none selected, not faded.
+  for (const char *v : {"null", "4", "-1", "0.5", "1000000000"}) {
+    CHECK_STR(rig.set(std::string("[2,") + v + "]"), "");
+    hh::refresh();
+    CHECK_MSG(D::choice_selected(m, *w[2]) == -1 && !w[2]->faded && hh::pixel(256, y2) == hh::rgb565(k->t.card2) &&
+                  lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_COVER,
+              v);
+  }
+  CHECK_STR(rig.set("[2,3]"), "");
+  CHECK(D::choice_selected(m, *w[2]) == 3);
+  shot("choice_looks");
+}
+
+// The selected option of the kit's first choice through the steps of
+// state_v2.json that set it: 1e9, -1 and 0.5 are none, 3 is the fourth,
+// 4 is past the options.
+TEST(choice_selected_by_value) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  const tj::Value st = fixture("state_v2.json");
+  CHECK_STR(st["hash"].s, rig.hash);
+  D::Widget *c = widget(19);
+  if (!CHECK(c && c->obj)) return;
+  D::Model &m = *active()->model;
+  const D::CardLook *k = D::card_look(m, D::card_of(m, *c));
+  int seen = 0;
+  for (const tj::Value &step : st["steps"].a)
+    for (const tj::Value &show : step["show"].a) {
+      if (show["id"].n != 19 || !show.has("selected")) continue;
+      for (const tj::Value &pl : step["payloads"].a) CHECK_STR(rig.ha.set(pl.s), "");
+      hh::refresh();
+      const int want = show["selected"].is_null() ? -1 : show["selected"].i();
+      CHECK_MSG(D::choice_selected(m, *c) == want, step["note"].s);
+      // Cell i of 4 in 536 px: 128 wide, every 136 px; its left edge is
+      // free of the text.
+      for (int i = 0; i < 4; i++) {
+        const uint32_t bg = i == want ? k->k.AF : k->k.filled ? k->k.FP : k->t.card2;
+        CHECK_MSG(hh::pixel(c->r[0] + 136 * i + 3, c->r[1] + 24) == hh::rgb565(bg), step["note"].s + " cell " + std::to_string(i));
+      }
+      seen++;
+    }
+  CHECK(seen >= 5);
+}
+
+// Contract 7.4 for a choice: it sends when the finger lifts in the cell it
+// went down in, also the option already selected. Policy 0 shows the
+// tapped option at once with the same way back as a switch (ack not ok, no
+// ack within 4 s; an ok ack keeps it until the value comes). Policy 1
+// flashes the tapped cell for 300 ms. Policy 2: the outline until a value
+// of the card changes, or 30 s. Policy 3: the question, then the index.
+// A gap does nothing; a choice that only shows is the card's; one with no
+// cells is not there; a press is lost when the card turns unavailable.
+TEST(choice_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  const char *rest = "[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]";
+  CHECK_STR(rig.set(rest), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *c2 = widget(2), *c3 = widget(3), *c4 = widget(4), *c5 = widget(5);
+  if (!CHECK(card && c2 && c3 && c4 && c5)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  const int y2 = 164;
+  auto shows = [&](int sel, const std::string &when) {
+    hh::refresh();
+    bool ok = D::choice_selected(m, *c2) == sel;
+    for (int i = 0; i < 4; i++) ok = ok && hh::pixel(120 + 136 * i, y2) == hh::rgb565(i == sel ? k->k.AF : k->t.card2);
+    CHECK_MSG(ok, when + ": selected " + std::to_string(D::choice_selected(m, *c2)));
+  };
+  shows(1, "at rest");
+  // Policy 0: the fourth cell, at once; ack not ok: back at once.
+  hh::tap(588, y2);
+  CHECK(sent_words() == "2c" && last_input_value() == "c=3");
+  shows(3, "tapped");
+  rig.ha.ack(last_input_counter(), false, "failed");
+  shows(1, "ack not ok");
+  // No ack: back after 4 s.
+  rig.settle();
+  hh::tap(588, y2);
+  hh::advance(3800);
+  shows(3, "3.8 s without an ack");
+  hh::advance(300);
+  shows(1, "4.1 s without an ack");
+  // An ok ack keeps it until the value comes.
+  rig.settle();
+  hh::tap(588, y2);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(c2->ovr == 2);
+  shows(3, "ok ack");
+  CHECK_STR(rig.set("[2,3]"), "");
+  CHECK(c2->ovr == 0);
+  shows(3, "the value came");
+  // A tap on the option already selected sends again.
+  rig.settle();
+  hh::tap(588, y2);
+  CHECK(sent_words() == "2c" && last_input_value() == "c=3");
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+
+  // A gap does nothing, also in a card with a tap; a release in another
+  // cell sends nothing; a finger that leaves its cell and comes back sends
+  // that cell.
+  hh::tap(248, y2);
+  CHECK(sent_words().empty());
+  // (On widget 3, from its first row to its second: a move across would
+  // be a swipe.)
+  finger(200, 220, true);
+  hh::advance(30);
+  finger(200, 276, true);
+  hh::advance(30);
+  finger(200, 276, false);
+  hh::advance(40);
+  CHECK(sent_words().empty() && c3->fb == 0);
+  finger(200, 220, true);
+  hh::advance(30);
+  finger(200, 276, true);
+  hh::advance(30);
+  CHECK(!c3->pressed && c3->ch_down == 0);
+  finger(204, 224, true);
+  hh::advance(30);
+  CHECK(c3->pressed);
+  finger(204, 224, false);
+  hh::advance(40);
+  CHECK(sent_words() == "3c" && last_input_value() == "c=0");
+  rig.settle();
+  CHECK_STR(rig.set("[5,0]"), "");  // ends the outline of policy 2
+  CHECK(c3->fb == 0);
+  // A choice that only shows is the card's; one with cells below 1 px is
+  // not there, so the card has the press.
+  hh::tap(480, 396);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  hh::tap(713, 324);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  CHECK_STR(rig.set(rest), "");
+
+  // Policy 1 (swatches): the tapped cell flashes accf with acct for 300 ms;
+  // the selected option does not move.
+  hh::tap(374, 336);
+  CHECK(sent_words() == "4c" && last_input_value() == "c=2");
+  hh::refresh();
+  CHECK(c4->ch_pulse_d == 2 && hh::pixel(382, 336) == hh::rgb565(k->k.AF) && D::choice_selected(m, *c4) == -1);
+  CHECK(hh::pixel(274, 336) == hh::rgb565(16752394));
+  hh::advance(150);
+  hh::refresh();
+  CHECK(hh::pixel(382, 336) == hh::rgb565(k->k.AF));
+  hh::advance(200);
+  hh::refresh();
+  CHECK(c4->ch_pulse_d == -1 && hh::pixel(382, 336) == hh::rgb565(16766474));
+  rig.settle();
+
+  // Policy 2: the outline around the control until a value of the card
+  // changes; the selected option does not move.
+  hh::tap(383, 276);
+  CHECK(sent_words() == "3c" && last_input_value() == "c=4");
+  CHECK(c3->fb == 1 && lv_obj_get_style_outline_width(c3->obj, LV_PART_MAIN) == 2 && D::choice_selected(m, *c3) == 0);
+  CHECK(lv_color_to_u32(lv_obj_get_style_outline_color(c3->obj, LV_PART_MAIN)) % 0x1000000 == k->k.A);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(5000);
+  CHECK(c3->fb == 1);
+  CHECK_STR(rig.set("[5,1]"), "");  // another widget of the card
+  CHECK(c3->fb == 0 && lv_obj_get_style_outline_width(c3->obj, LV_PART_MAIN) == 0);
+  rig.settle();
+  hh::tap(383, 276);
+  hh::advance(29000);
+  CHECK(c3->fb == 1);
+  hh::advance(1100);
+  CHECK(c3->fb == 0);
+  rig.settle();
+
+  // Policy 3: the question first, nothing sent; yes sends the index.
+  hh::tap(180, 396);
+  CHECK(sent_words().empty() && !hidden(D::g.question));
+  D::question_answer(true);
+  CHECK(sent_words() == "5c" && last_input_value() == "c=0");
+  CHECK_MSG(c5->fb == 1 && D::choice_selected(m, *c5) == 1,  // the value, not the tap
+            std::to_string(c5->fb) + " " + std::to_string(D::choice_selected(m, *c5)));
+  rig.settle();
+
+  // A press is lost when the card turns unavailable under the finger, also
+  // when it is back before the release; no input while it is.
+  finger(400, y2, true);
+  hh::advance(30);
+  CHECK_STR(rig.set("[6,1]"), "");
+  CHECK(!c2->pressed && c2->ch_down == -1);
+  CHECK_STR(rig.set("[6,0]"), "");
+  finger(400, y2, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  CHECK_STR(rig.set("[6,1]"), "");
+  hh::tap(400, y2);
+  hh::advance(20);
+  CHECK(sent_words().empty() && D::choice_selected(m, *c2) == 1);
+  CHECK_STR(rig.set("[6,0]"), "");
+
+  // A swipe may start on a choice: the page changes, nothing is sent and
+  // the pressed look goes.
+  finger(400, y2, true);
+  for (int i = 1; i <= 25; i++) {
+    hh::advance(25);
+    finger(400 - 6 * i, y2, true);
+  }
+  finger(hh::g_x, hh::g_y, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && sent_words().empty() && !c2->pressed && c2->ch_down == -1);
+  tab::go_to(0);
+  hh::advance(20);
+
+  // Without a session nothing is sent, and the strip says why.
+  D::g.session = false;
+  hh::tap(588, y2);
+  CHECK(sent_words().empty() && !hidden(D::g.strip) && D::choice_selected(m, *c2) == 1);
+  D::g.session = true;
+}
+
+// What a repaint of a choice costs (cards spec B.4): with unchanged state no
+// style call, no contrast and nothing drawn again; a new value or a press
+// draws only the cells that change, without a layout pass; the draw
+// callback skips the cells outside the band it is called for; a change of
+// the card's colours draws the whole control.
+TEST(choice_repaint_cost) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]"), "");
+  hh::advance(20);
+  D::Layout *l = active();
+  D::Model &m = *l->model;
+  D::Widget *c2 = widget(2), *c3 = widget(3);
+  if (!CHECK(c2 && c3)) return;
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+  // Unchanged state: nothing set, worked out or drawn.
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++)
+    if (m.w[i].obj) D::paint_widget(*l, m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && redrawn_in(c2->r) == 0 && redrawn_in(c3->r) == 0);
+  // A new value: the cell it leaves and the cell it takes, nothing between.
+  reset();
+  CHECK_STR(rig.set("[2,3]"), "");
+  int x0 = 0, x1 = 0;
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && !layout_pending());
+  CHECK(redrawn_in(c2->r, &x0, &x1) == 2 && x0 == 252 && x1 == 652);
+  const int16_t middle[4] = {388, 140, 128, 48};
+  CHECK(redrawn_in(middle) == 0 && redrawn_in(c3->r) == 0);
+  // The callback draws only the cells in the area it is called for.
+  reset();
+  hh::refresh();
+  CHECK_MSG(D::test_counts().choice_cells == 2, std::to_string(D::test_counts().choice_cells) + " cells drawn");
+  // A press draws one cell, without a style call; the release sends it, so
+  // it draws that cell and the one selected before.
+  reset();
+  finger(400, 164, true);
+  hh::advance(20);
+  CHECK(c2->pressed && c2->ch_press_d == 2);
+  CHECK_MSG(D::test_counts().style_sets == 0 && D::test_counts().choice_cells == 1,
+            std::to_string(D::test_counts().style_sets) + " style sets, " +
+                std::to_string(D::test_counts().choice_cells) + " cells drawn");
+  reset();
+  finger(400, 164, false);
+  hh::advance(20);
+  CHECK_MSG(!c2->pressed && c2->ch_press_d == -1 && c2->ch_sel_d == 2 && D::test_counts().choice_cells == 2 &&
+                D::test_counts().style_sets == 0,
+            std::to_string(c2->pressed) + " " + std::to_string(c2->ch_press_d) + " " +
+                std::to_string(D::test_counts().choice_cells));
+  rig.settle();
+  hh::refresh();
+  // The card fills: its colours move, so the whole control is drawn again.
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(redrawn_in(c2->r, &x0, &x1) >= 1 && x0 <= 116 && x1 >= 652 && !layout_pending());
+  hh::refresh();
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(redrawn_in(c2->r) == 0);
 }
