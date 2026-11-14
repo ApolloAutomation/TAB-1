@@ -203,6 +203,23 @@ inline void set_hidden(lv_obj_t *o, bool hide) {
 
 inline void set_opa(lv_obj_t *o, lv_opa_t opa) { style_num(o, LV_STYLE_OPA, opa); }
 
+// 40% or full opacity (contract 4.7, "No value" and (2) "Card, not
+// available"). Full is LVGL's default, so an object that was never faded
+// gets no style for it.
+inline void fade(lv_obj_t *o, bool faded) {
+  if (!o) return;
+  const int32_t want = faded ? LV_OPA_40 : LV_OPA_COVER;
+  lv_style_value_t cur;
+  const int32_t now_opa = lv_obj_get_local_style_prop(o, LV_STYLE_OPA, &cur, 0) == LV_STYLE_RES_FOUND
+                              ? cur.num
+                              : (int32_t) LV_OPA_COVER;
+  if (now_opa == want) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.num = want;
+  lv_obj_set_local_style_prop(o, LV_STYLE_OPA, nv, 0);
+}
+
 inline void set_bg(lv_obj_t *o, uint32_t c) {
   style_colour(o, LV_STYLE_BG_COLOR, c);
   style_num(o, LV_STYLE_BG_OPA, LV_OPA_COVER);
@@ -471,12 +488,75 @@ inline void on_knob_margin(lv_event_t *e) { lv_event_set_ext_draw_size(e, 14); }
 // and a knock without a session), as on any other control. A tap that only
 // switches pages (tap 2) needs no value and always works. Both tests read
 // one flag and, only on a faded control, what can_send() reads anyway.
-inline bool faded_and_quiet(const Widget &w) { return w.faded && w.tap != 2 && can_send(); }
+// (2) The same holds for every widget of a card that is not available, and
+// for that card itself (`un` 1, contract 4.3); a `back` works as a `go`.
+inline bool quiet_now(Model &m, const Widget &w) { return w.faded || card_unavailable(m, w); }
 
-inline bool faded_tap(const Widget &w) {
-  if (!w.faded || w.tap == 2) return false;
+inline bool faded_and_quiet(Model &m, const Widget &w) {
+  return w.tap != 2 && w.tap != 3 && quiet_now(m, w) && can_send();
+}
+
+inline bool faded_tap(Model &m, const Widget &w) {
+  if (w.tap == 2 || w.tap == 3 || !quiet_now(m, w)) return false;
   if (!can_send()) refuse_touch();
   return true;
+}
+
+// ---------------------------------------------------------------- (2) the press now
+
+// The press now (cards spec B.5). It begins at the first sight of the finger,
+// in a card's PRESSED or in the timer, whichever comes first, at that point.
+inline void press_begin(lv_point_t p) {
+  g.tracking = true;
+  g.swallowed = false;
+  g.start = p;
+  g.press_at = now();
+  g.moved = false;
+  g.held = false;
+  g.press_in_watch = g.erase_timer != nullptr;
+}
+
+// The 12 px test, one for the card tap, the pressed look and the hold: once
+// passed it stays passed until the next press (contract 4.3).
+inline void press_track(lv_point_t p) {
+  if (!g.tracking || g.moved) return;
+  const int32_t dx = p.x - g.start.x, dy = p.y - g.start.y;
+  if (dx * dx + dy * dy >= MOVED_PX2) g.moved = true;
+}
+
+// The card that has the press, or nullptr.
+inline Widget *pressed_card(Layout **out = nullptr) {
+  Layout *l = layout_at(g.cp_layout);
+  if (!l || l->state != L_ACTIVE || l->gen != g.cp_gen || !l->model || g.cp_widget >= l->model->nw) return nullptr;
+  if (out) *out = l;
+  return &l->model->w[g.cp_widget];
+}
+
+// A widget that has the press: the card that has it, a pressed widget, a
+// dragged slider, a pressed thermostat button.
+inline bool press_held(Widget &w) {
+  if (w.kind == W_CARD) return pressed_card() == &w;
+  return w.pressed || w.dragging || w.pressed_part;
+}
+
+// The press is lost (contract 7.4): LVGL sends PRESS_LOST at the release and
+// no CLICKED, also when the widget shows again before the finger lifts. The
+// press opens no hold page any more either.
+inline void lose_press(Widget &w) {
+  if (w.kind == W_CARD) g.cp_layout = -1;
+  w.pressed = 0;
+  w.dragging = 0;
+  w.pressed_part = 0;
+  g.held = true;
+  if (g.indev) lv_indev_wait_release(g.indev);
+}
+
+// (2) `vis` (contract 4.3): a widget of a card is drawn while its value is
+// not 0; no value hides it, and without the key it always shows.
+inline bool vis_shows(Model &m, const Widget &w) {
+  if (w.card < 0 || w.vis.how == B_ABSENT) return true;
+  double v;
+  return bound_num(m, w.vis, &v) && v != 0;
 }
 
 inline void on_widget_event(lv_event_t *e) {
@@ -487,7 +567,7 @@ inline void on_widget_event(lv_event_t *e) {
   lv_indev_t *indev = lv_indev_active();
   switch (code) {
     case LV_EVENT_PRESSED:
-      if (faded_and_quiet(*w)) break;
+      if (faded_and_quiet(*l->model, *w)) break;
       w->pressed = 1;
       if (w->kind == W_SLIDER && w->change && !w->faded) {
         g.press_on_slider = true;  // this press is the slider's, not a page swipe
@@ -509,7 +589,8 @@ inline void on_widget_event(lv_event_t *e) {
       if (w->dragging) {
         slider_value_at(*l, *w, indev);
         w->dragging = 0;
-        slider_released(*l, *w, w->drag_value);
+        // A lost press never gets here; the state is read once more anyway.
+        if (vis_shows(*l->model, *w) && !faded_and_quiet(*l->model, *w)) slider_released(*l, *w, w->drag_value);
       }
       paint_widget(*l, *w);
       break;
@@ -519,7 +600,7 @@ inline void on_widget_event(lv_event_t *e) {
       paint_widget(*l, *w);
       break;
     case LV_EVENT_CLICKED:
-      if (faded_tap(*w)) break;
+      if (!vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
       if (w->kind != W_SLIDER) widget_tapped(*l, *w);
       break;
     default:
@@ -535,7 +616,7 @@ inline void on_thermo_button(lv_event_t *e) {
   const int dir = target == w->o2 ? -1 : 1;
   switch (lv_event_get_code(e)) {
     case LV_EVENT_PRESSED:
-      if (faded_and_quiet(*w)) break;
+      if (faded_and_quiet(*l->model, *w)) break;
       w->pressed_part = (int8_t) dir;
       paint_widget(*l, *w);
       after_press();
@@ -546,7 +627,7 @@ inline void on_thermo_button(lv_event_t *e) {
       paint_widget(*l, *w);
       break;
     case LV_EVENT_CLICKED:
-      if (faded_tap(*w)) break;
+      if (!vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
       thermostat_step(*l, *w, dir);
       break;
     default:
@@ -573,6 +654,49 @@ inline void on_nav_event(lv_event_t *e) {
       break;
     case LV_EVENT_CLICKED:
       if (n->page < l->model->npages) show_page(*l, n->page);
+      break;
+    default:
+      break;
+  }
+}
+
+// (2) A card with `tap` or `hold` (contract 4.3, cards spec B.5). The press
+// is the card's when it begins on the card outside its widgets, or on a
+// widget that is not clickable (one that only shows, also while faded). The
+// card taps on release when the press moved less than 12 px; the pressed look
+// (after 80 ms) and the hold come from the timer.
+inline void card_press_end(Layout &l, Widget &w) {
+  if (pressed_card() == &w) g.cp_layout = -1;
+  if (!w.pressed) return;
+  w.pressed = 0;
+  paint_widget(l, w);
+}
+
+inline void on_card_event(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || l->state != L_ACTIVE) return;
+  lv_indev_t *indev = lv_indev_active();
+  lv_point_t p = {0, 0};
+  if (indev) lv_indev_get_point(indev, &p);
+  switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+      if (!g.tracking) press_begin(p);
+      g.cp_layout = (int8_t) layout_index(l);
+      g.cp_gen = l->gen;
+      g.cp_widget = (uint16_t) (w - l->model->w);
+      break;
+    case LV_EVENT_PRESSING:
+      press_track(p);
+      break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+      card_press_end(*l, *w);
+      break;
+    case LV_EVENT_CLICKED:
+      press_track(p);
+      if (g.moved || g.swallowed || faded_tap(*l->model, *w)) break;
+      widget_tapped(*l, *w);
       break;
     default:
       break;
@@ -733,12 +857,20 @@ inline void on_thermo_draw(lv_event_t *e) {
 
 // ---------------------------------------------------------------- painting
 
+// (2) The card of a widget pulses (contract 4.7, "Card, pulse").
+inline bool card_pulses(Model &m, const Widget &w) {
+  const Widget *card = card_of(m, w);
+  return card && card->fb == 2;
+}
+
 inline void paint_label(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, card_of(m, w));
   uint32_t colour = w.size == 0 ? (k.k.filled ? k.k.FS : k.t.tx2) : k.k.text;
   if (w.c_has) colour = w.c_now;
+  if (card_pulses(m, w)) colour = k.k.AT;
   set_text_colour(w.obj, colour);
+  fade(w.obj, k.unavailable);
   const char *text = "";
   bound_text(m, w.text, &text);
   w.cut = set_text(w.obj, text, w.r[2]);
@@ -785,6 +917,7 @@ inline void paint_button(Layout &l, Widget &w) {
   else if (w.pressed)
     bg = filled ? k.k.FP : k.t.card2_pr;
   set_bg(w.obj, bg);
+  fade(w.obj, k.unavailable);
   const uint32_t fg = pulse ? k.k.AT : k.t.tx;
   set_text_colour(w.o1, fg);
   set_text_colour(w.o2, fg);
@@ -794,15 +927,24 @@ inline void paint_button(Layout &l, Widget &w) {
   layout_button(l, w, text);
 }
 
-inline bool switch_value(Model &m, Widget &w, bool *v) {
-  if (w.ovr) {
-    *v = w.ovr_value != 0;
-    return true;
-  }
+// A bool of a switch or a button now: the value the widget's own tap shows,
+// else the one its card shows for the same slot (contract 7.4), else its own.
+inline bool bool_value(Model &m, Widget &w, const Bound &b, bool *v) {
   double x;
-  if (!bound_num(m, w.value, &x)) return false;
+  if (w.ovr)
+    x = w.ovr_value;
+  else if (!slot_override(m, card_of(m, w), b, &x) && !bound_num(m, b, &x))
+    return false;
   *v = x != 0;
   return true;
+}
+
+inline bool switch_value(Model &m, Widget &w, bool *v) { return bool_value(m, w, w.value, v); }
+
+// (2) A button with `value` is selected while it is 1; no value is 0 (4.4).
+inline bool button_selected(Model &m, Widget &w) {
+  bool v = false;
+  return w.value.how != B_ABSENT && bool_value(m, w, w.value, &v) && v;
 }
 
 inline void paint_switch(Layout &l, Widget &w) {
@@ -811,7 +953,7 @@ inline void paint_switch(Layout &l, Widget &w) {
   const bool filled = k.k.filled;
   bool v = false;
   const bool has = switch_value(m, w, &v);
-  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
   uint32_t track = v ? (w.c_has ? w.c_now : filled ? k.k.FI : k.k.A) : k.t.card2;
   if (w.pressed) track = v ? k.k.AP : k.t.card2_pr;
@@ -842,8 +984,11 @@ inline void paint_slider(Layout &l, Widget &w) {
   double v = 0, lo, hi, step;
   const bool has = slider_value(m, w, &v);
   limits_of(m, w, &lo, &hi, &step);
-  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
-  w.faded = has ? 0 : 1;
+  // Faded when the value went away, also under a dragging finger: the press
+  // is then lost (paint_widget).
+  double real;
+  w.faded = w.ovr || bound_num(m, w.value, &real) ? 0 : 1;
+  fade(w.obj, !has || w.faded || k.unavailable);
   const double amount = has ? fraction(v, lo, hi) : 0;
   const int W = w.r[2], H = w.r[3];
   const int fill = (int) js_round(amount * W);
@@ -867,7 +1012,7 @@ inline void paint_thermostat(Layout &l, Widget &w) {
   const bool filled = k.k.filled;
   double v;
   const bool has = thermostat_value(m, w, &v);
-  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
   char text[24];
   if (has)
@@ -897,7 +1042,7 @@ inline void paint_chart(Layout &l, Widget &w) {
   Model &m = *l.model;
   const double *v;
   const bool has = bound_list(m, w.value, &v) >= 0;
-  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
+  fade(w.obj, !has || card_unavailable(m, w));
   lv_obj_invalidate(w.obj);
 }
 
@@ -906,12 +1051,17 @@ inline void paint_image(Layout &l, Widget &w) {
   const CardLook &k = look_for(m, card_of(m, w));
   double v = 0;
   const bool has = bound_num(m, w.value, &v);
-  set_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
-  set_bg(w.obj, w.pressed ? k.t.card2_pr : k.t.card2);
+  // (2) While its card pulses an image has no box and its icon is acct.
+  const bool pulse = card_pulses(m, w);
+  if (pulse)
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
+  else
+    set_bg(w.obj, w.pressed ? k.t.card2_pr : k.t.card2);
   const int px = image_icon_px(w.r[2], w.r[3]);
   // The box of look 0; badge and bare looks come with their own drawing.
-  set_text_colour(w.o1, w.look == 0 && w.c_has ? w.c_on : k.t.acc2);
+  set_text_colour(w.o1, pulse ? k.k.AT : w.look == 0 && w.c_has ? w.c_on : k.t.acc2);
   set_icon(w.o1, px, has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
   set_outline(w.obj, w.fb == 1, k.k.A);
 }
@@ -926,11 +1076,37 @@ inline void paint_heading(Layout &l, Widget &w) {
   w.cut = set_text(w.o2, text, w.r[2] - (w.o1 ? 32 : 0));
 }
 
+// (2) The border of `lit` 2 (contract 4.7): at least 2 wide in `acc`, drawn
+// over the card's own border. The object's border width stays: LVGL places
+// the card's children inside it, so a new width would move every widget of
+// the card and lay the screen out again (cards spec B.4).
+inline void on_card_ring(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model || !w->ring) return;
+  const CardLook &k = look_for(*l->model, w);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = LV_OPA_TRANSP;
+  d.border_width = w->ring;
+  d.border_color = lv_color_hex(k.k.border);
+  d.border_opa = LV_OPA_COVER;
+  d.radius = k.t.r;
+  lv_draw_rect(lv_event_get_layer(e), &d, &a);
+}
+
 inline void paint_card(Layout &l, Widget &w) {
   Model &m = *l.model;
   const CardLook &k = look_for(m, &w);
   const Tok &t = k.t;
-  if (k.k.filled) {
+  // (2) Pulse, then pressed (contract 4.7): one colour, no gradient.
+  const bool pulse = w.fb == 2;
+  if (pulse || w.pressed) {
+    set_bg(w.obj, pulse ? k.k.AF : k.k.filled ? k.k.FP : k.pr);
+    style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
+  } else if (k.k.filled) {
     set_bg(w.obj, k.k.F);
     style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
   } else {
@@ -943,8 +1119,17 @@ inline void paint_card(Layout &l, Widget &w) {
     }
   }
   style_colour(w.obj, LV_STYLE_BORDER_COLOR, k.k.border);
-  set_text_colour(w.o1, k.k.header_icon);
-  set_text_colour(w.o2, k.k.text);
+  const uint8_t ring = k.k.border_width > t.bw ? (uint8_t) k.k.border_width : 0;
+  if (ring != w.ring) {
+    w.ring = ring;
+    lv_obj_invalidate(w.obj);  // drawn by on_card_ring
+  }
+  // The waiting outline: 2 px in acc (on: ion).
+  if (w.tap || w.fb) set_outline(w.obj, w.fb == 1, k.k.filled ? k.k.FI : k.k.A);
+  set_text_colour(w.o1, pulse ? k.k.AT : k.k.header_icon);
+  set_text_colour(w.o2, pulse ? k.k.AT : k.k.text);
+  fade(w.o1, k.unavailable);
+  fade(w.o2, k.unavailable);
   if (w.o2) {
     const char *text = "";
     bound_text(m, w.text, &text);
@@ -952,14 +1137,7 @@ inline void paint_card(Layout &l, Widget &w) {
   }
 }
 
-inline void paint_widget(Layout &l, Widget &w) {
-  if (!w.obj || !l.model) return;
-  if (w.stale) {
-    w.stale = 0;
-    Page &p = l.model->pages[w.page];
-    if (p.stale) p.stale--;
-    if (l.stale) l.stale--;
-  }
+inline void paint_kind(Layout &l, Widget &w) {
   switch (w.kind) {
     case W_HEADING: paint_heading(l, w); break;
     case W_CARD: paint_card(l, w); break;
@@ -972,6 +1150,31 @@ inline void paint_widget(Layout &l, Widget &w) {
     case W_IMAGE: paint_image(l, w); break;
     default: break;
   }
+}
+
+inline void paint_widget(Layout &l, Widget &w) {
+  if (!w.obj || !l.model) return;
+  Model &m = *l.model;
+  if (w.stale) {
+    w.stale = 0;
+    Page &p = m.pages[w.page];
+    if (p.stale) p.stale--;
+    if (l.stale) l.stale--;
+  }
+  // (2) `vis`: LVGL's search for the object under a new press skips it.
+  const bool shows = vis_shows(m, w);
+  if (w.card >= 0) set_hidden(w.obj, !shows);
+  paint_kind(l, w);
+  // (2) A widget that has the press and becomes hidden, faded or unavailable
+  // loses it; a card loses it when it turns unavailable (contract 7.4). Not
+  // a widget that already was: a faded control keeps saying why it cannot
+  // send while the tablet cannot (faded_tap).
+  const uint8_t quiet = !shows || w.faded || card_unavailable(m, w) ? 1 : 0;
+  if (quiet && !w.quiet && press_held(w)) {
+    lose_press(w);
+    paint_kind(l, w);
+  }
+  w.quiet = quiet;
 }
 
 inline bool widget_dirty(const Widget &w) {
@@ -1261,6 +1464,12 @@ inline void build_shell(Layout &l, Widget &w, lv_obj_t *parent) {
   set_radius(w.obj, t.r);
   lv_obj_set_style_border_width(w.obj, t.bw, 0);
   lv_obj_set_style_border_opa(w.obj, LV_OPA_COVER, 0);
+  // (2) A card with `tap` or `hold` is a button (cards spec B.4, B.5).
+  if (w.tap || w.hold) {
+    set_clickable(w.obj, true);
+    add_events(w.obj, on_card_event, &w);
+  }
+  if (w.lit == 2) lv_obj_add_event_cb(w.obj, on_card_ring, LV_EVENT_DRAW_MAIN_END, &w);
   if (w.has_hr) {
     const lv_font_t *ifont = icon_font(24);
     const int hx = w.hr[0] - w.r[0] - t.bw, hy = w.hr[1] - w.r[1] - t.bw;

@@ -317,6 +317,9 @@ inline void activate(int idx) {
   if (g.staged == idx) g.staged = -1;
   g.build_code = "";
   if (old >= 0 && old != idx) retire(old);
+  // (2) A card press or a hold in progress is dropped at the swap (cards spec B.5).
+  g.cp_layout = -1;
+  g.held = true;
   const int page = (g.page >= 0 && g.page < n.model->npages) ? g.page : 0;
   g.page = page;
   show_page(n, page);
@@ -374,6 +377,27 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
 
 // ---------------------------------------------------------------- touch feedback
 
+// Paints a widget whose feedback changed. (2) A card's feedback, and an
+// optimistic bool its card shows for the same slot (contract 7.4), change
+// the card's colours and every widget in it.
+inline void feedback_paint(Layout &l, Widget &w) {
+  Model &m = *l.model;
+  Widget *card = w.kind == W_CARD ? &w : card_of(m, w);
+  const uint16_t wi = (uint16_t) (&w - m.w);
+  if (!card || (card != &w && !(card->ovr_slot && card->ovr_from == wi))) {
+    paint_widget(l, w);
+    return;
+  }
+  const bool changed = card_look_update(m, *card);
+  paint_widget(l, *card);
+  const uint32_t ci = (uint32_t) (card - m.w);
+  for (uint32_t k = 1; k <= card->children && ci + k < m.nw; k++) {
+    Widget &c = m.w[ci + k];
+    if (changed) widget_colour_update(m, c);
+    paint_widget(l, c);
+  }
+}
+
 inline void fb_track(Layout &l, Widget &w) {
   const int li = layout_index(&l);
   const uint16_t wi = (uint16_t) (&w - l.model->w);
@@ -390,7 +414,7 @@ inline void fb_track(Layout &l, Widget &w) {
       Widget &ow = ol->model->w[spare->widget];
       ow.fb = 0;
       ow.ovr = 0;
-      paint_widget(*ol, ow);
+      feedback_paint(*ol, ow);
     }
   }
   spare->layout = (int8_t) li;
@@ -398,7 +422,21 @@ inline void fb_track(Layout &l, Widget &w) {
   spare->widget = wi;
 }
 
+// The bool a tap with policy 0 flips at once (contract 7.4): a switch's
+// value, (2) a card's slot-bound `on` that has a value, a button's
+// slot-bound value. nullptr: the tap shows the waiting outline instead.
+inline const Bound *flipped_by_tap(Model &m, Widget &w) {
+  double v;
+  switch (w.kind) {
+    case W_SWITCH: return &w.value;
+    case W_CARD: return w.on.how == B_SLOT && bound_num(m, w.on, &v) ? &w.on : nullptr;
+    case W_BUTTON: return w.value.how == B_SLOT ? &w.value : nullptr;
+    default: return nullptr;
+  }
+}
+
 inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, bool has_value, double value) {
+  Model &m = *l.model;
   const uint32_t t = now();
   w.fbp = policy;
   if (event == 'c' && has_value && policy != 3) {
@@ -406,14 +444,25 @@ inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, boo
     w.ovr_value = value;
     w.ovr_until = t + (policy == 2 ? PROGRESS_TIMEOUT_MS : ACK_TIMEOUT_MS);
   }
+  const Bound *flip = event == 't' && policy == 0 ? flipped_by_tap(m, w) : nullptr;
   switch (policy) {
     case 0:
-      if (event == 't' && w.kind == W_SWITCH) {
+      if (flip) {
         bool cur = false;
-        switch_value(*l.model, w, &cur);
+        if (w.kind == W_CARD)
+          cur = card_is_on(m, &w);
+        else
+          bool_value(m, w, *flip, &cur);
         w.ovr = 1;
         w.ovr_value = cur ? 0 : 1;
         w.ovr_until = t + ACK_TIMEOUT_MS;
+        // The card shows it for that slot, and so does every switch and
+        // button of the card bound to it.
+        Widget *card = w.kind == W_CARD ? &w : card_of(m, w);
+        if (card && flip->how == B_SLOT) {
+          card->ovr_slot = flip->slot;
+          card->ovr_from = (uint16_t) (&w - m.w);
+        }
       } else if (event == 't') {
         w.fb = 1;
         w.fb_until = t + ACK_TIMEOUT_MS;
@@ -433,7 +482,7 @@ inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, boo
       break;
   }
   fb_track(l, w);
-  paint_widget(l, w);
+  feedback_paint(l, w);
 }
 
 inline bool can_send() { return g.connected && g.session && signing(); }
@@ -579,7 +628,7 @@ inline void values_arrived(Layout &l) {
     if (r.layout != li || r.gen != l.gen) continue;
     Widget &w = l.model->w[r.widget];
     bool changed = false;
-    if (w.ovr == 2 && bound_dirty(w.value)) {
+    if (w.ovr == 2 && bound_dirty(w.kind == W_CARD ? w.on : w.value)) {
       w.ovr = 0;
       changed = true;
     }
@@ -588,7 +637,7 @@ inline void values_arrived(Layout &l) {
       w.ovr = 0;
       changed = true;
     }
-    if (changed) paint_widget(l, w);
+    if (changed) feedback_paint(l, w);
   }
 }
 
@@ -610,7 +659,7 @@ inline void feedback_tick() {
       w.ovr = 0;
       changed = true;
     }
-    if (changed) paint_widget(*l, w);
+    if (changed) feedback_paint(*l, w);
     if (!w.fb && !w.ovr) r.layout = -1;
   }
   for (Pending &p : g.pend)
@@ -968,11 +1017,10 @@ inline void swipe_tick() {
   lv_point_t p;
   lv_indev_get_point(in, &p);
   if (!g.tracking) {
-    g.tracking = true;
-    g.swallowed = false;
-    g.start = p;
+    press_begin(p);
     return;
   }
+  press_track(p);
   if (!a || g.swallowed || g.press_on_slider || g.q_open || g.erase_screen) return;
   const int dx = (int) (p.x - g.start.x), dy = (int) (p.y - g.start.y);
   if (abs(dx) < SWIPE_PX || abs(dx) < 2 * abs(dy)) return;
@@ -985,6 +1033,86 @@ inline void swipe_tick() {
     show_page(*a, page);
   }
   lv_indev_wait_release(in);
+}
+
+// (2) The pressed look of a card (contract 4.7): 80 ms after the touch, while
+// the finger is down and has not moved 12 px, and no hold or swipe took the
+// press.
+inline void card_press_tick() {
+  Layout *l = nullptr;
+  Widget *c = pressed_card(&l);
+  if (!c) return;
+  const bool want = g.tracking && !g.moved && !g.swallowed && (int32_t) (now() - g.press_at) >= (int32_t) CARD_PRESS_MS;
+  if (want == (c->pressed != 0)) return;
+  c->pressed = want ? 1 : 0;
+  paint_widget(*l, *c);
+}
+
+// (2) Whether a widget is there for a touch (contract 4.3): drawn, not
+// hidden, with a rectangle; a `choice` with at least one option.
+inline bool widget_there(Model &m, const Widget &w) {
+  if (w.r[2] <= 0 || w.r[3] <= 0 || !vis_shows(m, w)) return false;
+  return w.kind == W_CHOICE ? w.options > 0 : w.obj != nullptr;
+}
+
+inline bool point_in(const int16_t r[4], lv_point_t p) {
+  return p.x >= r[0] && p.x < r[0] + r[2] && p.y >= r[1] && p.y < r[1] + r[3];
+}
+
+inline bool point_on(lv_obj_t *o, lv_point_t p) {
+  if (!o) return false;
+  lv_area_t a;
+  lv_obj_get_coords(o, &a);
+  return p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2;
+}
+
+// (2) The page a hold opens, by the table "Who gets a press" of contract
+// 4.3, from the point where the press began: on the page on screen, the
+// topmost card there; in it the topmost widget there. None on a slider or a
+// `choice` with change, or on a thermostat's buttons; a widget's own `hold`;
+// else the card's. -1: none. A look through the model, so a widget with only
+// `hold` need not be clickable.
+inline int hold_page(Layout &l, lv_point_t p) {
+  Model &m = *l.model;
+  if (g.page < 0 || g.page >= (int) m.npages) return -1;
+  const Page &pg = m.pages[g.page];
+  const int end = (int) pg.first + (int) pg.count;
+  for (int i = end - 1; i >= (int) pg.first; i--) {
+    const Widget &c = m.w[i];
+    if (c.kind != W_CARD || !c.obj || !point_in(c.r, p)) continue;
+    for (int k = c.children; k >= 1; k--) {
+      if (i + k >= end) continue;
+      const Widget &w = m.w[i + k];
+      if (!widget_there(m, w) || !point_in(w.r, p)) continue;
+      if ((w.kind == W_SLIDER || w.kind == W_CHOICE) && w.change) return -1;
+      if (w.kind == W_THERMO && w.change && (point_on(w.o2, p) || point_on(w.o3, p))) return -1;
+      if (w.hold == 2) return w.hold_v;
+      break;
+    }
+    return c.hold == 2 ? c.hold_v : -1;
+  }
+  return -1;
+}
+
+// (2) A press that stays down 500 ms and has not moved 12 px opens its hold
+// page (contract 7.4). Nothing is sent, and LVGL drops the CLICKED of the
+// release. The engine times it; LVGL's long press time is not used. Nothing
+// at all while the erase watch runs, or for a press that began during it:
+// that press stays an ordinary press, and its release is a tap.
+inline void hold_tick() {
+  if (!g.tracking || g.held || g.moved || g.swallowed || g.press_in_watch || g.erase_timer || g.q_open ||
+      g.erase_screen)
+    return;
+  if ((int32_t) (now() - g.press_at) < (int32_t) HOLD_MS) return;
+  g.held = true;  // looked at once
+  Layout *a = active_layout();
+  if (!a || !a->model) return;
+  const int page = hold_page(*a, g.start);
+  if (page < 0 || page >= (int) a->model->npages) return;
+  g.swallowed = true;
+  lv_indev_wait_release(pointer());
+  card_press_tick();  // the pressed look goes
+  show_page(*a, page);
 }
 
 inline void timer_cb(lv_timer_t *) {
@@ -1002,6 +1130,8 @@ inline void timer_cb(lv_timer_t *) {
   update_mark();
   cache_tick();
   swipe_tick();
+  card_press_tick();
+  hold_tick();
 }
 
 // ---------------------------------------------------------------- hold to erase
@@ -1260,6 +1390,7 @@ inline void begin(const Fonts &fonts, const Platform &platform) {
   g.pf = platform;
   g.active = g.staged = -1;
   g.q_layout = -1;
+  g.cp_layout = -1;
   g.build_code = "";
   for (FbRef &r : g.fbl) r.layout = -1;
   g.away_since = now();
@@ -1658,7 +1789,7 @@ inline void on_ack(int n, bool ok, const char *code, size_t code_len, const char
       w->ovr = 0;
       if (w->fb == 1) w->fb = 0;
     }
-    paint_widget(*l, *w);
+    feedback_paint(*l, *w);
   }
   if (denied) show_strip("Not allowed on this tablet");
   if (confirm && w) question_open(*l, *w, p->event, p->has_value != 0, p->value);

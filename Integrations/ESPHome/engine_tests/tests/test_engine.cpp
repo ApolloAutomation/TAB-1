@@ -6352,3 +6352,924 @@ TEST(repaint_cost) {
   CHECK(D::test_counts().style_sets > 0);
   CHECK(!layout_pending());
 }
+
+// ================================================================ cards as buttons (package E4)
+//
+// Contract 4.3 ("Who gets a press") and 7.4, cards spec B.5: the tap of a
+// card, its pressed look, pulse and waiting outline, the border of `lit` 2,
+// the optimistic bool per slot, `un`, `vis`, the hold, and the press that is
+// lost. The kit's ids and rectangles are those of layout_v2_kit.dl.json.
+
+static std::string kit_hash() { return sha_hex(layout_bytes("layout_v2_kit.dl.json")).substr(0, 16); }
+
+// The slot values of an input_v2.json case as a full snapshot.
+static std::string snapshot_of(const tj::Value &slots, const std::string &hash) {
+  std::string v;
+  for (const tj::Value &s : slots.a) {
+    if (!v.empty()) v += ',';
+    v += "[" + json_text(s[0]) + "," + json_text(s[1]) + "]";
+  }
+  return "{\"f\":1,\"h\":\"" + hash + "\",\"v\":[" + v + "]}";
+}
+
+static std::vector<std::string> fields_of(const std::string &d) {
+  std::vector<std::string> f;
+  size_t at = 0;
+  for (size_t bar = d.find('|'); bar != std::string::npos; bar = d.find('|', at)) {
+    f.push_back(d.substr(at, bar - at));
+    at = bar + 1;
+  }
+  f.push_back(d.substr(at));
+  return f;
+}
+
+// The inputs sent so far as "<id><event>" words: "2t 6c".
+static std::string sent_words() {
+  std::string s;
+  for (const auto &e : fake::events("tab1_input")) {
+    const auto f = fields_of(e.d);
+    if (f.size() != 9) return "(bad input " + e.d + ")";
+    if (!s.empty()) s += ' ';
+    s += f[5] + f[6];
+  }
+  return s;
+}
+
+static uint32_t last_input_counter() {
+  const auto ev = fake::events("tab1_input");
+  if (ev.empty()) return 0;
+  const auto f = fields_of(ev.back().d);
+  return f.size() == 9 ? (uint32_t) atoi(f[3].c_str()) : 0;
+}
+
+static void finger(int x, int y, bool down) {
+  hh::g_x = x;
+  hh::g_y = y;
+  hh::g_down = down;
+}
+
+// A press at one point held `ms`, then the release and 40 ms after it.
+static void press_for(int x, int y, uint32_t ms) {
+  finger(x, y, true);
+  hh::advance(ms);
+  finger(x, y, false);
+  hh::advance(40);
+}
+
+// The touches, values and acks of an input_v2.json case, each at its time
+// from now; then 200 ms for the release to be read.
+static void play_case(Ha &ha, const tj::Value &cs, const std::string &hash) {
+  struct Ev {
+    uint32_t ms;
+    int kind;  // 0 touch, 1 tab_set, 2 ack
+    const tj::Value *v;
+  };
+  std::vector<Ev> evs;
+  for (const tj::Value &t : cs["touch"].a) evs.push_back({(uint32_t) t[0].n, 0, &t});
+  for (const tj::Value &s : cs["sets"].a) evs.push_back({(uint32_t) s[0].n, 1, &s});
+  for (const tj::Value &a : cs["acks"].a) evs.push_back({(uint32_t) a[0].n, 2, &a});
+  std::stable_sort(evs.begin(), evs.end(), [](const Ev &a, const Ev &b) { return a.ms < b.ms; });
+  const uint32_t t0 = hh::g_ms;
+  for (const Ev &e : evs) {
+    if (t0 + e.ms > hh::g_ms) hh::advance(t0 + e.ms - hh::g_ms);
+    const tj::Value &v = *e.v;
+    if (e.kind == 0) {
+      finger((int) v[2].n, (int) v[3].n, v[1].s == "up" ? false : v[1].s == "down" ? true : hh::g_down);
+    } else if (e.kind == 1) {
+      std::string pairs;
+      for (const tj::Value &p : v[1].a) pairs += (pairs.empty() ? "[" : ",[") + json_text(p[0]) + "," + json_text(p[1]) + "]";
+      CHECK_STR(ha.set("{\"h\":\"" + hash + "\",\"v\":[" + pairs + "]}"), "");
+    } else {
+      ha.ack(last_input_counter(), v[1].b, v[2].s);
+    }
+  }
+  hh::advance(200);
+}
+
+// What a played case did against what it expects; empty when all holds.
+static std::vector<std::string> case_misses(const tj::Value &cs, const std::string &hash) {
+  std::vector<std::string> miss;
+  const auto ev = fake::events("tab1_input");
+  const tj::Value &want = cs["events"];
+  if (ev.size() != want.size())
+    miss.push_back("sent \"" + sent_words() + "\", want " + std::to_string(want.size()) + " inputs");
+  for (size_t i = 0; i < ev.size() && i < want.size(); i++) {
+    const auto f = fields_of(ev[i].d);
+    const tj::Value &w = want[i];
+    const bool value_ok = w[3].is_null() ? f.size() == 9 && f[8].empty()
+                                         : f.size() == 9 && !f[8].empty() && atof(f[8].c_str()) == w[3].n;
+    if (f.size() != 9 || f[4] != hash || f[5] != std::to_string((uint32_t) w[0].n) || f[6] != w[1].s ||
+        f[7] != std::to_string((int) w[2].n) || !value_ok)
+      miss.push_back("input " + std::to_string(i) + " is " + ev[i].d);
+  }
+  if (tab::current_page() != (int) cs["end_page"].n)
+    miss.push_back("ends on page " + std::to_string(tab::current_page()) + ", want " + cs["end_page"].s);
+  if (!hidden(D::g.question) != (cs["question"].n == 1)) miss.push_back("question box");
+  if (cs.has("counter") && cs.has("payload") && !ev.empty() &&
+      (ev[0].d != cs["payload"]["d"].s || ev[0].s != cs["payload"]["s"].s))
+    miss.push_back("payload " + ev[0].d + " " + ev[0].s);
+  return miss;
+}
+
+// One case on a fresh, paired tablet with a session, on its page and with
+// its values (input_v2.json "note").
+static std::vector<std::string> run_input_case(const tj::Value &cs) {
+  Ha ha;
+  ha.boot(true);
+  if (!ha.hello()) return {"no session"};
+  if (!ha.show(layout_bytes("layout_v2_kit.dl.json"))) return {"the kit is not on screen"};
+  const std::string hash = kit_hash();
+  if (!ha.set(snapshot_of(cs["slots"], hash)).empty()) return {"the snapshot is refused"};
+  tab::go_to((int) cs["page"].n);
+  hh::advance(50);
+  fake::st.events.clear();
+  if (cs.has("counter")) D::g.counter = (uint32_t) cs["counter"].n - 1;
+  play_case(ha, cs, hash);
+  return case_misses(cs, hash);
+}
+
+// Touch cases that need a part of a later package: each is played and
+// reported, and is not a failure yet. The package turns it green and takes
+// it off this list.
+static const char *const INPUT_LATER[][2] = {
+    {"upright_slider", "E6"},           {"track_slider_is_never_a_swipe", "E6"},
+    {"bar_track_half_rounds_up", "E6"}, {"choice_cell", "E8"},
+    {"choice_gap", "E8"},               {"choice_hold_is_none", "E8"},
+    {"choice_released_in_another_cell", "E8"}, {"choice_second_row", "E8"},
+    {"choice_asks_first", "E8"},        {"swipe_right_wraps", "E9"},
+    {"back_entry", "E9"},               {"back_button", "E9"},
+    {"detail_swipe_right_returns", "E9"}, {"detail_swipe_left_does_nothing", "E9"},
+};
+
+static const char *input_later(const std::string &name) {
+  for (const auto &row : INPUT_LATER)
+    if (name == row[0]) return row[1];
+  return nullptr;
+}
+
+// Every touch case of input_v2.json (contract 4.3 and 7.4): the touches at
+// their points and times, with the tab_set a case sends mid-press, emit
+// exactly the listed inputs, end on the listed page, with the question box
+// as listed; a case with a counter emits the payload of the fixture.
+TEST(input_v2_fixture) {
+  const tj::Value file = fixture("input_v2.json");
+  CHECK_STR(file["layout"].s, "layout_v2_kit");
+  CHECK_STR(file["hash"].s, kit_hash());
+  CHECK_STR(file["mac"].s, fake::MAC);
+  CHECK_STR(file["nonce"].s, NONCE);
+  CHECK_STR(file["secret_hex"].s, SECRET_HEX);
+  int run = 0, later = 0, counted = 0;
+  std::vector<std::string> seen;
+  for (const tj::Value &cs : file["cases"].a) {
+    if (!cs.has("touch")) continue;  // the cases for Home Assistant alone
+    const std::string name = cs["name"].s;
+    seen.push_back(name);
+    const auto miss = run_input_case(cs);
+    if (const char *pkg = input_later(name)) {
+      later++;
+      printf("  %s: package %s, %s\n", name.c_str(), pkg, miss.empty() ? "passes already" : miss[0].c_str());
+      continue;
+    }
+    run++;
+    if (cs.has("counter")) counted++;
+    std::string all;
+    for (const auto &m : miss) all += m + "; ";
+    CHECK_MSG(miss.empty(), name + ": " + all);
+  }
+  for (const auto &row : INPUT_LATER)
+    CHECK_MSG(std::find(seen.begin(), seen.end(), row[0]) != seen.end(), std::string(row[0]) + " is no case");
+  printf("  %d cases run, %d for later packages, %d with their payload\n", run, later, counted);
+  CHECK(run >= 42 && counted >= 3 && run + later == (int) seen.size());
+}
+
+// The kit on a paired tablet with a session, page 0 on screen, and the
+// values of the first case of input_v2.json; or another layout without
+// values.
+struct KitRig {
+  Ha ha;
+  std::string hash;
+  bool up(const std::string &bytes = "", bool values = true) {
+    const std::string b = bytes.empty() ? layout_bytes("layout_v2_kit.dl.json") : bytes;
+    ha.boot(true);
+    if (!ha.hello() || !ha.show(b)) return false;
+    hash = sha_hex(b).substr(0, 16);
+    if (values && !ha.set(snapshot_of(fixture("input_v2.json")["cases"][0]["slots"], hash)).empty()) return false;
+    hh::advance(50);
+    fake::st.events.clear();
+    return true;
+  }
+  std::string set(const std::string &v) { return ha.set("{\"h\":\"" + hash + "\",\"v\":[" + v + "]}"); }
+  // A clean start for the next press: feedback over, nothing sent so far.
+  void settle() {
+    hh::advance(4500);
+    if (!hidden(D::g.question)) D::question_answer(false);
+    fake::st.events.clear();
+  }
+};
+
+// The table "Who gets a press" of contract 4.3, row by row, on the kit's
+// "Routing" card (page 1: tap and hold, a thermostat with change, a swap of
+// two buttons, labels, a bar that only shows, a switch) and card 2 (page 0).
+// The gap of a `choice` comes with package E8 (input_v2_fixture lists it).
+TEST(card_tap_and_children) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Widget *c2 = widget(2), *c12 = widget(12), *c46 = widget(46);
+  if (!CHECK(c2 && c12 && c46)) return;
+  // A card with tap or hold is a button; one without is not.
+  CHECK(clickable(c2->obj) && clickable(c46->obj) && !clickable(c12->obj));
+  tab::go_to(1);
+  hh::advance(20);
+  struct Row {
+    const char *what;
+    const char *set;  // values before the press, or ""
+    int x, y;
+    const char *sent;
+  };
+  const Row rows[] = {
+      {"a child with tap is never the card's", "", 1036, 628, "53t"},
+      {"a label is the card's", "", 1124, 554, "46t"},
+      {"a label with its own colour is the card's", "", 1124, 518, "46t"},
+      {"a bar that only shows is the card's", "", 1124, 588, "46t"},
+      {"so is the same bar faded for want of a value", "[34,null]", 1124, 588, "46t"},
+      {"the body of a thermostat is the card's", "[34,40]", 888, 546, "46t"},
+      {"a thermostat's button is the button's", "", 970, 626, "47c"},
+      {"a faded switch swallows the press", "[35,null]", 1036, 628, ""},
+      {"the card outside its widgets", "[35,1]", 1200, 420, "46t"},
+  };
+  for (const Row &r : rows) {
+    if (*r.set) CHECK_STR(rig.set(r.set), "");
+    hh::tap(r.x, r.y);
+    hh::advance(20);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.what) + ": sent \"" + sent_words() + "\"");
+    CHECK(tab::current_page() == 1);
+    rig.settle();
+  }
+  // Drift on card 2: 20 px, 13 px and back, 9 and 9 are no tap; 8 and 8 is
+  // (11.3 px). None of these is a swipe.
+  tab::go_to(0);
+  hh::advance(20);
+  struct Drift {
+    int dx, dy, back;
+    const char *sent;
+  };
+  const Drift drifts[] = {{20, 0, 0, ""}, {13, 0, 1, ""}, {9, 9, 0, ""}, {8, 8, 0, "2t"}, {0, 11, 0, "2t"}, {0, 12, 0, ""}};
+  for (const Drift &d : drifts) {
+    finger(300, 240, true);
+    hh::advance(30);
+    finger(300 + d.dx, 240 + d.dy, true);
+    hh::advance(30);
+    if (d.back) finger(300, 240, true);
+    hh::advance(40);
+    finger(hh::g_x, hh::g_y, false);
+    hh::advance(40);
+    CHECK_MSG(sent_words() == d.sent, std::to_string(d.dx) + "," + std::to_string(d.dy) + (d.back ? " and back" : "") +
+                                          ": sent \"" + sent_words() + "\"");
+    CHECK(tab::current_page() == 0 && !c2->pressed);
+    rig.settle();
+  }
+  // A swipe that starts on a card taps nothing and shows no pressed look:
+  // it has moved 12 px before the 80 ms are over.
+  bool looked = false;
+  finger(300, 240, true);
+  for (int i = 1; i <= 25; i++) {
+    hh::advance(25);
+    finger(300 - 6 * i, 240, true);
+    looked |= c2->pressed != 0;
+  }
+  finger(hh::g_x, hh::g_y, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && sent_words().empty() && !looked);
+}
+
+// A theme whose every role has its own colour, so a check of one role
+// cannot pass on another (a layout without a theme has every role 0).
+static const char *DISTINCT_THEME =
+    "\"theme\":{\"wall\":1052688,\"card\":2105376,\"card_pr\":3158064,\"card2\":4210752,\"card2_pr\":5263440,"
+    "\"line\":6316128,\"tx\":14737632,\"tx2\":10526880,\"acc\":16711680,\"accf\":65280,\"accf_pr\":43520,"
+    "\"acct\":255,\"acc2\":16711935,\"onbg\":7360512,\"onbg_pr\":8413184,\"ontx\":16777200,\"ion\":65535,"
+    "\"dark\":1,\"r\":16,\"r2\":10,\"bw\":0},";
+
+// A layout of two pages in DISTINCT_THEME: page 0 holds card 1 with
+// `card_keys` and the widgets `widgets`, page 1 a heading. Slots `slots`.
+static std::string two_pages(const std::string &card_keys, const std::string &widgets, const std::string &slots,
+                             const std::string &style = "") {
+  return std::string("{") + DISTINCT_THEME + "\"screen\":[1280,800]," +
+         "\"nav\":[{\"p\":0,\"title\":\"P\"},{\"p\":1,\"title\":\"Q\"}],\"pages\":[{\"title\":\"P\",\"w\":[{" + card_keys +
+         (style.empty() ? "" : "\"style\":" + style + ",") +
+         "\"hr\":[116,100,536,32],\"icon\":983861,\"id\":1,\"r\":[100,84,568,400],\"t\":\"card\",\"title\":\"Lamp\","
+         "\"w\":[" + widgets + "]}]},{\"title\":\"Q\",\"w\":[{\"id\":90,\"r\":[100,20,568,56],\"t\":\"heading\","
+         "\"text\":\"Q\"}]}],\"slots\":\"" + slots + "\",\"v\":2}";
+}
+
+// A light card: `on` and a switch and a button on slot 1, another switch on
+// slot 2, a label (slots "bbn").
+static const char *LAMP_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,200,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":1}},"
+    "{\"id\":3,\"r\":[116,200,200,48],\"t\":\"button\",\"tap\":{\"p\":0},\"text\":\"On\",\"value\":{\"s\":1}},"
+    "{\"id\":4,\"r\":[116,260,200,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"id\":5,\"r\":[116,320,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Label\"}";
+
+static uint32_t text_colour(lv_obj_t *o) {
+  return o ? lv_color_to_u32(lv_obj_get_style_text_color(o, LV_PART_MAIN)) & 0xFFFFFF : 0;
+}
+
+static uint32_t bg_colour(lv_obj_t *o) {
+  return o ? lv_color_to_u32(lv_obj_get_style_bg_color(o, LV_PART_MAIN)) & 0xFFFFFF : 0;
+}
+
+static int knob_at(D::Widget *w) {
+  lv_obj_update_layout(w->o2);
+  return (int) lv_obj_get_x(w->o2);
+}
+
+// Contract 7.4 for a card with tap: policy 0 with a bound `on` shows the
+// other state at once and goes back on an ack that is not ok or after 4 s
+// without one; the optimistic bool is per slot inside the card, on the card,
+// its switches and its buttons together; without a value for `on`, and
+// without `on`, the waiting outline; policy 1 the pulse; policy 2 the
+// outline until a value of the card changes; policy 3 the question, then
+// the outline. And the pressed look, 80 ms after the touch.
+TEST(card_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,1],[2,0],[3,5]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *sw = widget(2), *bt = widget(3), *sw2 = widget(4);
+  if (!CHECK(card && sw && bt && sw2)) return;
+  auto filled = [&] { return D::card_look(m, card)->k.filled == 1; };
+  auto agree = [&](bool on) {
+    return filled() == on && knob_at(sw) == (on ? 32 : 4) && D::button_selected(m, *bt) == on && knob_at(sw2) == 4;
+  };
+  CHECK(agree(true));
+  // The card's tap: the other state at once, on the card, the switch and
+  // the button of its slot, not on the switch of another slot. The card's
+  // colours are worked out once.
+  D::test_counts() = D::TestCounts{};
+  hh::tap(500, 420);
+  CHECK_STR(sent_words(), "1t");
+  CHECK(card->ovr == 1 && card->ovr_slot == 1 && card->fb == 0 && agree(false));
+  CHECK_MSG(D::test_counts().look_updates == 1, std::to_string(D::test_counts().look_updates));
+  // A repaint with that state works nothing out.
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_contrasts() == 0);
+  // An ack that is not ok: back at once.
+  rig.ha.ack(last_input_counter(), false, "failed");
+  CHECK(card->ovr == 0 && agree(true));
+  // No ack: back after 4 s.
+  hh::tap(500, 420);
+  hh::advance(3800);
+  CHECK(agree(false));
+  hh::advance(300);
+  CHECK(agree(true));
+  // An ok ack: the state stays until the value comes.
+  hh::tap(500, 420);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(card->ovr == 2 && agree(false));
+  CHECK_STR(rig.set("[1,0]"), "");
+  CHECK(card->ovr == 0 && agree(false));
+  // The switch's tap: the card and the button follow.
+  rig.settle();
+  hh::tap(centre_x(sw->r), centre_y(sw->r));
+  CHECK_STR(sent_words(), "2t");
+  CHECK(card->ovr_slot == 1 && agree(true));
+  rig.ha.ack(last_input_counter(), false, "failed");
+  CHECK(agree(false));
+  // The button's tap: the card and the switch follow.
+  rig.settle();
+  hh::tap(centre_x(bt->r), centre_y(bt->r));
+  CHECK_STR(sent_words(), "3t");
+  CHECK(agree(true));
+  hh::advance(4100);
+  CHECK(agree(false));
+  // The switch of slot 2 flips alone.
+  rig.settle();
+  hh::tap(centre_x(sw2->r), centre_y(sw2->r));
+  CHECK(knob_at(sw2) == 32 && knob_at(sw) == 4 && !filled() && card->ovr_slot == 2);
+  rig.settle();
+  // The switch of slot 2 while the card's own tap waits: the card, the
+  // switch and the button of slot 1 keep the card's flip; each ends alone.
+  CHECK(agree(false));
+  hh::tap(500, 420);
+  CHECK(card->ovr == 1 && agree(true));
+  hh::tap(centre_x(sw2->r), centre_y(sw2->r));
+  CHECK_STR(sent_words(), "1t 4t");
+  CHECK(card->ovr == 1 && card->ovr_slot == 2 && knob_at(sw2) == 32);
+  CHECK(filled() && knob_at(sw) == 32 && D::button_selected(m, *bt));
+  rig.ha.ack(last_input_counter(), false, "failed");  // the switch's
+  CHECK(card->ovr == 1 && agree(true));
+  hh::advance(4100);
+  CHECK(card->ovr == 0 && agree(false));
+  rig.settle();
+  // `on` without a value: the waiting outline, 2 px in acc, until the ack.
+  CHECK_STR(rig.set("[1,null]"), "");
+  const D::CardLook *k = D::card_look(m, card);
+  CHECK(k->k.A == 0xFF0000 && k->k.FI == 0x00FFFF);  // acc and ion of DISTINCT_THEME
+  hh::tap(500, 420);
+  CHECK_STR(sent_words(), "1t");
+  CHECK(card->fb == 1 && card->ovr == 0);
+  CHECK(lv_obj_get_style_outline_width(card->obj, LV_PART_MAIN) == 2 &&
+        (lv_color_to_u32(lv_obj_get_style_outline_color(card->obj, LV_PART_MAIN)) & 0xFFFFFF) == k->k.A);
+  rig.ha.ack(last_input_counter(), true, "");
+  CHECK(card->fb == 0 && lv_obj_get_style_outline_width(card->obj, LV_PART_MAIN) == 0);
+  // While filled the outline is ion.
+  CHECK_STR(rig.set("[1,1]"), "");
+  D::start_feedback(*active(), *card, 2, 't', false, 0);
+  CHECK((lv_color_to_u32(lv_obj_get_style_outline_color(card->obj, LV_PART_MAIN)) & 0xFFFFFF) == k->k.FI);
+  // Policy 2: until a value of the card changes (here the switch of slot 2).
+  CHECK(card->fb == 1);
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(card->fb == 0);
+
+  // A card without `on`: the waiting outline.
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,1],[2,0]"), "");
+  card = widget(1);
+  hh::tap(500, 420);
+  CHECK(sent_words() == "1t" && card->fb == 1 && card->ovr == 0);
+  hh::advance(4100);
+  CHECK(card->fb == 0);
+
+  // Policy 1, the pulse: accf for 300 ms; the header and the labels acct.
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tap\":{\"p\":1},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  D::Model &m1 = *active()->model;
+  card = widget(1);
+  D::Widget *lab = widget(5);
+  k = D::card_look(m1, card);
+  // accf and acct of DISTINCT_THEME, each unlike what the card shows at rest.
+  CHECK(k->k.AF == 0x00FF00 && k->k.AT == 0x0000FF && k->t.bg == 0x202020);
+  CHECK(k->k.text != k->k.AT && k->k.header_icon != k->k.AT && k->k.F != k->k.AF);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  hh::tap(500, 420);
+  CHECK(sent_words() == "1t" && card->fb == 2);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->k.AF));
+  CHECK(text_colour(lab->obj) == k->k.AT && text_colour(card->o1) == k->k.AT && text_colour(card->o2) == k->k.AT);
+  hh::advance(320);
+  hh::refresh();
+  CHECK(card->fb == 0 && hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  CHECK(text_colour(lab->obj) == k->k.text && text_colour(card->o1) == k->k.header_icon);
+
+  // Policy 3, and cf: the question, then the outline.
+  if (!CHECK(rig.up(two_pages("\"confirm\":\"Sure?\",\"on\":{\"s\":1},\"tap\":{\"p\":3},", LAMP_WIDGETS, "bbn"), false)))
+    return;
+  CHECK_STR(rig.set("[1,1],[2,0]"), "");
+  card = widget(1);
+  hh::tap(500, 420);
+  CHECK(sent_words().empty() && !hidden(D::g.question) && card->fb == 0 && card->ovr == 0);
+  CHECK_STR(label_text(D::g.q_text), "Sure?");
+  hh::tap(776, 456);  // Yes
+  CHECK(fake::events("tab1_input").size() == 1 && fake::events("tab1_input")[0].d.find("|1|t|1|") != std::string::npos);
+  CHECK(card->fb == 1 && card->ovr == 0 && D::card_look(*active()->model, card)->k.filled == 1);
+
+  // The pressed look: 80 ms after the touch, card_pr (on: onbg_pr), gone at
+  // the release; not after 12 px of movement.
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"go\":1},\"on\":{\"s\":1},\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false)))
+    return;
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  D::Model &m3 = *active()->model;
+  card = widget(1);
+  k = D::card_look(m3, card);
+  CHECK(k->pr == k->t.card_pr && k->pr == 0x303030 && k->t.bg == 0x202020 && k->k.FP == 0x806000);
+  finger(500, 420, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  const uint32_t at = D::g.press_at;
+  hh::advance(at + 79 - hh::g_ms);
+  CHECK(!card->pressed);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  hh::advance(6);
+  CHECK(card->pressed);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->pr));
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(!card->pressed && sent_words() == "1t");
+  hh::refresh();
+  rig.settle();
+  CHECK_STR(rig.set("[1,1]"), "");
+  finger(500, 420, true);
+  hh::advance(120);
+  hh::refresh();
+  CHECK(card->pressed && hh::pixel(560, 440) == hh::rgb565(k->k.FP));
+  // Moved 12 px: the look goes, and the release is no tap.
+  finger(512, 420, true);
+  hh::advance(20);
+  CHECK(!card->pressed);
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  bool looked = false;
+  finger(500, 420, true);
+  hh::advance(30);
+  finger(500, 433, true);
+  for (int i = 0; i < 100; i++) {
+    hh::advance(5);
+    looked |= card->pressed != 0;
+  }
+  finger(500, 433, false);
+  hh::advance(40);
+  CHECK(!looked && sent_words().empty());
+  // A style with bg and no card_pr: mix(tx, bg, 90).
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn", "{\"bg\":2105392}"), false))) return;
+  card = widget(1);
+  k = D::card_look(*active()->model, card);
+  CHECK(k->t.bg == 2105392 && k->pr == D::mix(k->t.tx, 2105392, 90) && k->pr != k->t.card_pr);
+  finger(500, 420, true);
+  hh::advance(120);
+  hh::refresh();
+  CHECK(card->pressed && hh::pixel(560, 440) == hh::rgb565(k->pr));
+  finger(500, 420, false);
+  hh::advance(40);
+}
+
+// The border of `lit` 2 (contract 4.7): while `on` is 1, `acc` and at least
+// 2 wide, drawn over the card's own border without changing the object's
+// border width, so no widget of the card moves and nothing is laid out.
+TEST(lit2_border) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *c7 = widget(7), *img = widget(8);
+  if (!CHECK(c7 && img)) return;
+  const D::CardLook *k = D::card_look(m, c7);
+  CHECK(k->t.bw == 0 && c7->lit == 2);
+  CHECK(k->k.lit_on == 1 && k->k.border_width == 2 && k->k.border == k->k.A && c7->ring == 2);
+  CHECK(lv_obj_get_style_border_width(c7->obj, LV_PART_MAIN) == 0);
+  hh::refresh();
+  const int y = 84 + 124;
+  CHECK(hh::pixel(484, y) == hh::rgb565(k->k.A) && hh::pixel(485, y) == hh::rgb565(k->k.A));
+  CHECK(hh::pixel(486, y) == hh::rgb565(k->t.bg));
+  const std::string before = rect_text(img->obj);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  CHECK_STR(rig.set("[2,0]"), "");
+  CHECK(c7->ring == 0 && k->k.border_width == 0 && !layout_pending());
+  hh::refresh();
+  CHECK(hh::pixel(484, y) == hh::rgb565(k->t.bg));
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(c7->ring == 2 && !layout_pending());
+  hh::refresh();
+  CHECK(hh::pixel(485, y) == hh::rgb565(k->k.A));
+  CHECK_STR(rect_text(img->obj), before);
+  CHECK(lv_obj_get_style_border_width(c7->obj, LV_PART_MAIN) == 0);
+  // A border of 1 becomes 2; one of 3 stays 3, and nothing is drawn over it.
+  for (int bw : {1, 3}) {
+    const std::string style = "{\"bw\":" + std::to_string(bw) + "}";
+    if (!CHECK(rig.up(two_pages("\"lit\":2,\"on\":1,", LAMP_WIDGETS, "bbn", style), false))) return;
+    D::Widget *c = widget(1);
+    k = D::card_look(*active()->model, c);
+    CHECK_MSG(k->k.border_width == (bw > 2 ? bw : 2) && c->ring == (bw > 2 ? 0 : 2), std::to_string(bw));
+    CHECK(lv_obj_get_style_border_width(c->obj, LV_PART_MAIN) == bw);
+    hh::refresh();
+    CHECK_MSG(hh::pixel(100, 284) == hh::rgb565(k->k.A) && hh::pixel(101, 284) == hh::rgb565(k->k.A),
+              std::to_string(bw));
+    CHECK_MSG(hh::pixel(100 + (bw > 2 ? bw : 2), 284) == hh::rgb565(k->t.bg), std::to_string(bw));
+  }
+}
+
+// A hold (contract 4.3 and 7.4): 500 ms opens the page that the table names,
+// sends nothing, and the release is no tap; 499 ms is a tap; 12 px of
+// movement is no hold. None on a slider with change, a thermostat's button
+// or a `choice` with change; yes on a thermostat's body, on a button with
+// tap (the card's page), on a label with its own hold. None during the erase
+// watch: such a press releases as the card's tap.
+TEST(hold_is_not_a_tap) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  // Released before 500 ms on card 2 (tap and hold): a tap. The release is
+  // read up to one touch period (16 ms) after the finger goes.
+  finger(300, 240, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  hh::advance(D::g.press_at + 499 - 16 - hh::g_ms);
+  CHECK(tab::current_page() == 0);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  rig.settle();
+  // 500 ms: page 3, nothing sent, no tap at the release.
+  finger(300, 240, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  hh::advance(D::g.press_at + 499 - hh::g_ms);
+  CHECK(tab::current_page() == 0);
+  hh::advance(D::TICK_MS + 1);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  hh::advance(500);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  tab::go_to(0);
+  hh::advance(20);
+  // 13 px and back: no hold, and no tap.
+  finger(300, 240, true);
+  hh::advance(30);
+  finger(313, 240, true);
+  hh::advance(30);
+  finger(300, 240, true);
+  hh::advance(700);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words().empty());
+  struct Row {
+    const char *what;
+    int page, x, y, end;
+    const char *sent;
+  };
+  const Row rows[] = {
+      {"a slider with change: none, its release sends", 0, 288, 292, 0, "6c"},
+      {"a widget with only hold: its own", 0, 996, 636, 4, ""},
+      {"a thermostat's button: none, the button sends", 1, 970, 626, 1, "47c"},
+      {"the body of a thermostat: the card's", 1, 888, 546, 4, ""},
+      {"a button with tap and no hold: the card's", 1, 1124, 472, 4, ""},
+      {"a label: the card's", 1, 1124, 554, 4, ""},
+      {"a card without hold: none, the release is its tap", 1, 520, 540, 1, "41t"},
+  };
+  for (const Row &r : rows) {
+    tab::go_to(r.page);
+    hh::advance(20);
+    press_for(r.x, r.y, 700);
+    CHECK_MSG(tab::current_page() == r.end && sent_words() == r.sent,
+              std::string(r.what) + ": page " + std::to_string(tab::current_page()) + ", sent \"" + sent_words() + "\"");
+    rig.settle();
+  }
+  // A label with its own hold in a card without one; a `choice` with
+  // change in a card with one (the choice is drawn from package E8 on; the
+  // hold already reads the model); a hold of the form {"p": n} is no hold.
+  const std::string widgets =
+      "{\"hold\":{\"go\":1},\"id\":2,\"r\":[116,140,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Hold me\"},"
+      "{\"change\":{\"p\":0},\"id\":3,\"r\":[116,200,536,48],\"t\":\"choice\",\"texts\":[\"A\",\"B\"],\"value\":{\"s\":1}}";
+  if (!CHECK(rig.up(two_pages("", widgets, "n"), false))) return;
+  CHECK(widget(2)->hold == 2 && !clickable(widget(1)->obj));
+  press_for(200, 154, 700);
+  CHECK(tab::current_page() == 1);
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"go\":1},", widgets, "n"), false))) return;
+  press_for(300, 224, 700);
+  CHECK(tab::current_page() == 0);
+  press_for(500, 420, 700);
+  CHECK(tab::current_page() == 1);
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"p\":0},\"tap\":{\"p\":1},", widgets, "n"), false))) return;
+  CHECK(widget(1)->hold == 0);
+  press_for(500, 420, 700);
+  CHECK(tab::current_page() == 0 && sent_words() == "1t");
+  // No hold while the question is open, also over a card with one.
+  if (!CHECK(rig.up(two_pages("\"confirm\":\"Sure?\",\"hold\":{\"go\":1},\"tap\":{\"p\":3},", widgets, "n"), false)))
+    return;
+  hh::tap(500, 420);
+  CHECK(!hidden(D::g.question) && D::g.q_open);
+  finger(500, 420, true);
+  hh::advance(700);
+  CHECK(tab::current_page() == 0 && !hidden(D::g.question));
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words().empty());
+  rig.settle();
+
+  // The erase watch: a press that begins in the first 10 s after power-on
+  // opens no page, and its release is the card's tap; after the watch the
+  // same press opens the page.
+  shutdown();
+  reset_platform();
+  memcpy(fake::st.secret, rig.ha.secret, 32);
+  fake::st.have_secret = true;
+  fake::st.powered_on_at = hh::g_ms;
+  start();
+  rig.ha.paired = true;
+  rig.ha.hellos = 0;
+  rig.ha.nonce = NONCE;
+  CHECK(rig.ha.hello());
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK(rig.ha.show(kit));
+  rig.hash = kit_hash();
+  CHECK_STR(rig.ha.set(snapshot_of(fixture("input_v2.json")["cases"][0]["slots"], rig.hash)), "");
+  hh::advance(50);
+  fake::st.events.clear();
+  CHECK(D::g.erase_timer != nullptr && uptime() < D::ERASE_ARM_MS - 1000);
+  press_for(300, 240, 600);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  // Also when the watch ends under the finger: the press began in it.
+  fake::st.events.clear();
+  finger(300, 240, true);
+  hh::advance(30);
+  CHECK(D::g.tracking && D::g.press_in_watch);
+  D::erase_stop();
+  hh::advance(700);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  advance_to_uptime(D::ERASE_ARM_MS + 100);
+  CHECK(D::g.erase_timer == nullptr);
+  fake::st.events.clear();
+  press_for(300, 240, 600);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+}
+
+// A press is lost (contract 7.4) when the widget that has it is hidden,
+// faded or its card turns unavailable while the finger is down: the release
+// sends nothing, also when the widget shows again first. A press that is the
+// card's stays the card's when a widget under it that only shows fades.
+TEST(press_lost) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *arm = widget(48), *disarm = widget(49), *sw = widget(53);
+  if (!CHECK(arm && disarm && sw)) return;
+  struct Row {
+    const char *what;
+    int page, x, y;
+    const char *during;  // the values sent while the finger is down
+    const char *again;   // and then, or ""
+    const char *sent;
+    const char *after;   // the values after the release
+  };
+  const Row rows[] = {
+      {"a swap under the finger", 1, 1124, 472, "[31,0],[32,1]", "", "", "[31,1],[32,0]"},
+      {"a swap and back", 1, 1124, 472, "[31,0],[32,1]", "[31,1],[32,0]", "", ""},
+      {"the value of the pressed switch goes away", 1, 1036, 628, "[35,null]", "", "", "[35,1]"},
+      {"the card turns unavailable", 0, 684, 240, "[8,1]", "", "", "[8,0]"},
+      {"the card turns unavailable and back", 0, 684, 240, "[8,1]", "[8,0]", "", ""},
+      {"a bar that only shows fades: the card's press", 1, 1124, 588, "[34,null]", "", "46t", "[34,40]"},
+      {"a label in it is not hidden: the card's press", 1, 1124, 554, "[33,0]", "", "46t", ""},
+  };
+  for (const Row &r : rows) {
+    tab::go_to(r.page);
+    hh::advance(20);
+    finger(r.x, r.y, true);
+    hh::advance(50);
+    CHECK_STR(rig.set(r.during), "");
+    if (*r.again) {
+      hh::advance(20);
+      CHECK_STR(rig.set(r.again), "");
+    }
+    hh::advance(30);
+    finger(r.x, r.y, false);
+    hh::advance(40);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.what) + ": sent \"" + sent_words() + "\"");
+    CHECK_MSG(!arm->pressed && !disarm->pressed && !sw->pressed && D::g.cp_layout < 0 && tab::current_page() == r.page,
+              r.what);
+    if (*r.after) CHECK_STR(rig.set(r.after), "");
+    rig.settle();
+  }
+  // A drag whose slider loses its value sends nothing.
+  tab::go_to(0);
+  hh::advance(20);
+  D::Widget *bar = widget(6);
+  finger(200, 292, true);
+  hh::advance(30);
+  finger(260, 292, true);
+  hh::advance(30);
+  CHECK(bar->dragging);
+  CHECK_STR(rig.set("[7,null]"), "");
+  CHECK(!bar->dragging && bar->faded);
+  finger(300, 292, true);
+  hh::advance(30);
+  finger(300, 292, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  CHECK_STR(rig.set("[7,80]"), "");
+  rig.settle();
+  // A card press and its hold are dropped at a forced swap.
+  finger(300, 240, true);
+  hh::advance(50);
+  CHECK(D::g.cp_layout >= 0);
+  const std::string small = layout_bytes("layout_small.dl.json");
+  CHECK_STR(rig.ha.send(small), "");
+  CHECK_STR(rig.ha.commit(sha_hex(small).substr(0, 16)), "");
+  hh::advance(D::SWAP_WAIT_MS + 200);
+  CHECK(tab::active_hash() == sha_hex(small).substr(0, 16));
+  CHECK(D::g.cp_layout < 0 && tab::current_page() == 0);
+  hh::advance(600);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(sent_words().empty() && tab::current_page() == 0);
+}
+
+// `un` 1 (contract 4.3 and 4.7): the header and every widget of the card at
+// 40%, once (a widget faded for want of a value is not faded again), the card
+// itself not; nothing in the card sends while the tablet can send, a hold
+// works, and while the tablet cannot send a tap says why.
+TEST(unavailable_card) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *c7 = widget(7);
+  if (!CHECK(c7)) return;
+  // Each object's own opacity: 40% on a parent and again on its child would
+  // be 16% on screen.
+  auto opa = [](lv_obj_t *o) { return o ? (int) lv_obj_get_style_opa(o, LV_PART_MAIN) : -1; };
+  auto all_at = [&](int want) {
+    bool ok = opa(c7->o1) == want && opa(c7->o2) == want && opa(c7->obj) == LV_OPA_COVER;
+    for (uint32_t k = 1; k <= c7->children; k++) ok = ok && opa(m.w[c7 - m.w + k].obj) == want;
+    return ok;
+  };
+  CHECK(all_at(LV_OPA_COVER) && !D::card_unavailable(m, *c7));
+  CHECK_STR(rig.set("[7,null]"), "");  // the bar of card 7 has no value: faded
+  D::Widget *bar = widget(11);
+  CHECK(bar->faded && opa(bar->obj) == LV_OPA_40);
+  CHECK_STR(rig.set("[8,1]"), "");
+  CHECK(D::card_unavailable(m, *c7) && D::card_unavailable(m, *bar));
+  CHECK(all_at(LV_OPA_40) && opa(bar->o1) == LV_OPA_COVER && opa(bar->o3) == LV_OPA_COVER);
+  // The 40% is set once: repainting sets nothing.
+  D::test_counts() = D::TestCounts{};
+  for (uint32_t k = 0; k <= c7->children; k++) D::paint_widget(*active(), m.w[c7 - m.w + k]);
+  CHECK(D::test_counts().style_sets == 0);
+  CHECK_STR(rig.set("[7,80]"), "");
+  CHECK(all_at(LV_OPA_40));
+  // Nothing sends; the hold works.
+  for (const auto &p : {std::make_pair(684, 240), std::make_pair(672, 292), std::make_pair(708, 190)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(sent_words().empty() && hidden(D::g.strip), std::to_string(p.first) + "," + std::to_string(p.second));
+  }
+  press_for(684, 240, 600);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  tab::go_to(0);
+  hh::advance(20);
+  // Without Home Assistant a tap on the card says why.
+  fake::st.network = true;
+  fake::st.connected = false;
+  hh::advance(20);
+  hh::tap(684, 240);
+  CHECK(!hidden(D::g.strip) && sent_words().empty());
+  CHECK_STR(label_text(D::g.strip_label), "Home Assistant is not connected");
+  fake::st.connected = true;
+  CHECK(rig.ha.hello());
+  hh::advance(D::STRIP_MS + 100);
+  // Back: full opacity, and the card sends.
+  CHECK_STR(rig.set("[8,0]"), "");
+  CHECK(all_at(LV_OPA_COVER));
+  fake::st.events.clear();
+  hh::tap(684, 240);
+  CHECK_STR(sent_words(), "7t");
+  // A `go` sends nothing and still works: on a widget faded for want of a
+  // value, on a card with `un` 1 and on a button in that card.
+  const std::string go_widgets =
+      "{\"id\":3,\"r\":[116,200,200,48],\"t\":\"button\",\"tap\":{\"go\":1},\"text\":\"Go\"},"
+      "{\"id\":4,\"r\":[116,260,200,48],\"t\":\"switch\",\"tap\":{\"go\":1},\"value\":{\"s\":2}}";
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"go\":1},\"un\":{\"s\":1},", go_widgets, "bb"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,null]"), "");
+  D::Model &gm = *active()->model;
+  CHECK(widget(4)->faded && !D::card_unavailable(gm, *widget(1)));
+  hh::tap(216, 284);
+  hh::advance(20);
+  CHECK_MSG(tab::current_page() == 1, "a faded switch's go");
+  tab::go_to(0);
+  hh::advance(20);
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(D::card_unavailable(gm, *widget(1)));
+  for (const auto &p : {std::make_pair(500, 420), std::make_pair(216, 224)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(tab::current_page() == 1, std::to_string(p.first) + "," + std::to_string(p.second));
+    tab::go_to(0);
+    hh::advance(20);
+  }
+  CHECK(sent_words().empty());
+}
+
+// `vis` (contract 4.3, 4.4): 0 and no value hide a widget, which is not
+// drawn and not there for a touch: the press goes to what is under it, else
+// to the card. Two widgets on one rectangle.
+TEST(visible_by_value) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *arm = widget(48), *disarm = widget(49), *c46 = widget(46);
+  if (!CHECK(arm && disarm && c46)) return;
+  const D::CardLook *k = D::card_look(m, c46);
+  const int x = 1010, y = 472;  // the button's own background, left of its text
+  struct Row {
+    const char *values;
+    bool arm, disarm;
+    const char *sent;
+  };
+  const Row rows[] = {{"[31,1],[32,0]", true, false, "48t"},
+                      {"[31,0],[32,1]", false, true, "49t"},
+                      {"[31,null],[32,null]", false, false, "46t"},
+                      {"[31,0],[32,0]", false, false, "46t"},
+                      {"[31,1],[32,null]", true, false, "48t"}};
+  for (const Row &r : rows) {
+    CHECK_STR(rig.set(r.values), "");
+    CHECK_MSG(hidden(arm->obj) == !r.arm && hidden(disarm->obj) == !r.disarm, r.values);
+    hh::refresh();
+    const uint32_t want = r.arm || r.disarm ? k->t.card2 : k->k.background;
+    CHECK_MSG(hh::pixel(x, y) == hh::rgb565(want), r.values);
+    hh::tap(1124, y);
+    hh::advance(20);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.values) + ": sent \"" + sent_words() + "\"");
+    rig.settle();
+  }
+  // Without the key a widget always shows (the label next to them).
+  CHECK(!hidden(widget(51)->obj) && widget(51)->vis.how == D::B_ABSENT);
+}

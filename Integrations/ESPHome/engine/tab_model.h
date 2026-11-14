@@ -201,6 +201,11 @@ struct Widget {
   uint8_t c_has;     // c_now holds a colour of the widget's own `c` (or, for a slider and an image, always)
   uint8_t stale;     // a value changed while its page was not on screen: paint before the page shows
   uint32_t c_now, c_on;
+  // (2) Touch of version 2 (cards spec B.5).
+  uint8_t quiet;     // as last painted: hidden, faded or in a card that is not available (a card: `un`)
+  uint8_t ring;      // card: the width of the border of `lit` 2 drawn now over its own; 0 none
+  uint16_t ovr_slot; // card: the slot whose optimistic bool the card shows (contract 7.4); 0 none
+  uint16_t ovr_from; // card: the widget of the card whose tap set it (the card, a switch, a button)
 };
 
 // (2) One card's colours: its tokens, fixed at the build (a card is on one
@@ -212,6 +217,7 @@ struct CardLook {
   uint8_t ready;  // t and k were worked out (at the build)
   uint8_t on, unavailable, has_tint;
   uint32_t tint;
+  uint32_t pr;    // (2) the background while pressed and not filled: card_pr, or mix(tx, bg, 90) for a style with bg and no card_pr
 };
 
 struct Page {

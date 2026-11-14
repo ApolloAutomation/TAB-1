@@ -57,6 +57,11 @@ static const uint32_t CACHE_DELAY_MS = 30000;
 static const uint32_t EARLY_WINDOW_MS = 30000;  // a call before the state subscription counts this long
 static const int KNOCK_FIRST_S = 3, KNOCK_REPEATS = 5, KNOCK_MAX_S = 300;
 static const int SWIPE_PX = 48;
+// (2) A press that has moved this far from its first point is no longer a
+// card tap and no longer a hold, and stays so (contract 4.3): dx*dx + dy*dy.
+static const int32_t MOVED_PX2 = 12 * 12;
+static const uint32_t CARD_PRESS_MS = 80;  // a card shows its pressed look this long after the touch
+static const uint32_t HOLD_MS = 500;       // a press held this long opens the `hold` page
 // Hold-to-erase (design 10.8): a touch that starts within ERASE_ARM_MS of
 // power-on and stays down ERASE_HOLD_MS asks whether to erase the tablet.
 // After ERASE_ARM_MS nothing of this runs on the touch path any more.
@@ -361,6 +366,14 @@ struct State {
   lv_indev_t *indev;
   bool tracking, swallowed, press_on_slider;
   lv_point_t start;
+  // (2) The press now (cards spec B.5): when it began, whether it moved 12 px
+  // (never cleared before the next press), whether its hold was looked at,
+  // whether it began while the erase watch ran, and the card it is on.
+  uint32_t press_at;
+  bool moved, held, press_in_watch;
+  int8_t cp_layout;  // -1: no card has the press
+  uint8_t cp_gen;
+  uint16_t cp_widget;
   // Feedback.
   Pending pend[PENDING];
   FbRef fbl[FB_REFS];
@@ -541,14 +554,38 @@ inline Tok card_tokens(const Model &m, const Widget *card) {
   return style_tokens(th, &m.styles[card->style]);
 }
 
+inline Widget *card_of(Model &m, const Widget &w) {
+  return (w.card >= 0 && w.card < (int) m.nw) ? &m.w[w.card] : nullptr;
+}
+
+// (2) The optimistic bool a card shows for one slot (contract 7.4): set by
+// a tap with policy 0 on the card, a switch or a button of the card, and
+// shown by the card's `on` and every switch and button `value` of the card
+// bound to the same slot, while the widget that was tapped still shows it.
+// The card's own flip of its `on` slot keeps showing while a tap on another
+// slot of the card waits too (the record names only the last tap).
+inline bool slot_override(Model &m, const Widget *card, const Bound &b, double *v) {
+  if (!card || card->kind != W_CARD || b.how != B_SLOT) return false;
+  if (card->ovr_slot && card->ovr_slot == b.slot && card->ovr_from < m.nw) {
+    const Widget &o = m.w[card->ovr_from];
+    if (o.ovr) {
+      *v = o.ovr_value;
+      return true;
+    }
+  }
+  if (card->ovr && card->on.how == B_SLOT && card->on.slot == b.slot) {
+    *v = card->ovr_value;
+    return true;
+  }
+  return false;
+}
+
+// A card's `on` now: the optimistic value while one is shown, else the slot.
 inline bool card_is_on(Model &m, const Widget *card) {
   if (!card) return false;
   double v;
+  if (slot_override(m, card, card->on, &v)) return v != 0;
   return bound_num(m, card->on, &v) && v != 0;
-}
-
-inline Widget *card_of(Model &m, const Widget &w) {
-  return (w.card >= 0 && w.card < (int) m.nw) ? &m.w[w.card] : nullptr;
 }
 
 // The record of a card, or nullptr for a widget outside a card and a card
@@ -566,7 +603,13 @@ inline bool card_look_update(Model &m, Widget &card) {
   if (card.kind != W_CARD || card.cl < 0 || card.cl >= (int) m.nlooks) return false;
   TAB_COUNT(look_updates);
   CardLook &k = m.looks[card.cl];
-  if (!k.ready) k.t = card_tokens(m, &card);
+  if (!k.ready) {
+    k.t = card_tokens(m, &card);
+    // Pressed (contract 4.7): card_pr; a style with bg and no card_pr: mix(tx, bg, 90).
+    const CardStyle *s = card.style >= 0 && card.style < (int) m.nstyles ? &m.styles[card.style] : nullptr;
+    const bool own_bg = s && (s->mask & (1u << S_BG)) && !(s->mask & (1u << S_CARD_PR));
+    k.pr = own_bg ? mix(k.t.tx, k.t.bg, 90) : k.t.card_pr;
+  }
   uint32_t tint = 0;
   const bool has_tint = bound_colour(m, card.c, &tint);
   double un = 0;
@@ -581,6 +624,13 @@ inline bool card_look_update(Model &m, Widget &card) {
   k.unavailable = unavailable;
   k.ready = 1;
   return true;
+}
+
+// (2) The card is not available (`un` 1, contract 4.3): for a card, and for a
+// widget of a card. Read from the card's record, worked out with its state.
+inline bool card_unavailable(Model &m, const Widget &w) {
+  const CardLook *k = card_look(m, w.kind == W_CARD ? &w : card_of(m, w));
+  return k && k->unavailable;
 }
 
 // A widget's own colours that contract 4.7 gets through contrast, readable
