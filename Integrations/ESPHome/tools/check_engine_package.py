@@ -46,9 +46,12 @@ Static checks (always run, no ESPHome needed):
   - the release: .github/workflows/build.yml publishes TAB-1-engine.yaml
     through the shared workflow with a pinned ESPHome version equal to
     min_version in both engine files, .github/release-drafter.yml is there
-    (the shared workflow needs it), and ci.yml builds the engine file on
-    that pinned version only, still builds TAB-1.yaml, and runs this
-    script's static mode;
+    (the shared workflow needs it), and ci.yml, on every pull request and
+    every push to beta and main, builds the engine file on that pinned
+    version only, still builds TAB-1.yaml, runs this script's static mode
+    and runs engine_tests/run.sh with LVGL from lvgl/lvgl at the commit of
+    the version engine_tests/tools/fetch_lvgl.sh takes and read access
+    only, none of it skippable (with a self-test of that rule);
   - Engine.yaml includes exactly `engine` and `engine_glue.h`; engine/ holds
     only .h files; the Montserrat font and its licence are there;
   - docs/engine.md quotes each waiting screen of engine/tab_state.h with its
@@ -63,7 +66,8 @@ Static checks (always run, no ESPHome needed):
   - self-tests: the YAML reader on a sample (and against PyYAML on every
     file read, where PyYAML is installed), the files rule (a merge of two
     branches at one number among its cases), the docs check, the contract
-    check of the waiting screens, and the --compile warning gate.
+    check of the waiting screens, the ci.yml rule, and the --compile
+    warning gate.
 
 The static checks need Python 3.12 or later and nothing else: no PyYAML (the
 script reads the YAML itself), no network, no ESPHome, no compiler. This is
@@ -2426,6 +2430,290 @@ def check_docs_waiting(prod, rep):
     )
 
 
+# What ci.yml runs, on every pull request and every push to beta and main,
+# none of it skippable: the shared ESPHome CI for TAB-1.yaml on its default
+# versions and for the tablet file on the pinned version only (the lock is
+# checked against that one), this script's static mode (a changed engine file
+# needs a higher files number), and the host tests (engine_tests/run.sh) with
+# the LVGL the firmware builds with, checked out from lvgl/lvgl at its commit,
+# with read access only.
+CI_BRANCHES = ("beta", "main")
+CI_STATIC_RUN = "python3 -B tools/check_engine_package.py"
+CI_HOST_TESTS_RUN = "engine_tests/run.sh"
+CI_LVGL_REPOSITORY = "lvgl/lvgl"
+# The LVGL of ESPHome 2026.10.2 (its lvgl component's LVGL_VERSION, the
+# registry package in the build's dependencies.lock) and the commit of its
+# tag. A new ESPHome version that brings another LVGL changes both, the
+# commit in ci.yml and the version in engine_tests/tools/fetch_lvgl.sh.
+CI_LVGL_VERSION = "9.5.0"
+CI_LVGL_COMMIT = "85aa60d18b3d5e5588d7b247abf90198f07c8a63"
+FETCH_LVGL = "engine_tests/tools/fetch_lvgl.sh"
+CI_SHARED_RE = re.compile(r"ApolloAutomation/Workflows/\.github/workflows/esphome-ci\.yml@[0-9a-f]{40}")
+CI_LVGL_SRC_RE = re.compile(r"\$\{\{ *github\.workspace *\}\}/(.+)")
+CI_SHELLS = ("bash", "sh")
+
+
+def _ci_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _ci_list(value):
+    return value if isinstance(value, list) else []
+
+
+def _ci_off(ci, job, step=None):
+    """Why a job (or a step of it) could be skipped, pass without running, or
+    fail without failing the run; empty when it cannot."""
+    reasons = []
+    for what, item in (("job", job), ("step", step)):
+        if isinstance(item, dict) and ("if" in item or "continue-on-error" in item):
+            reasons.append(f"the {what} has an if or continue-on-error")
+    if "needs" in job:
+        reasons.append("the job waits for another (skipped with it)")
+    if step is not None:
+        shells = [step.get("shell")] if "shell" in step else []
+        shells += [_ci_dict(_ci_dict(scope.get("defaults")).get("run")).get("shell") for scope in (ci, job)]
+        if [s for s in shells if s is not None and str(s).strip() not in CI_SHELLS]:
+            reasons.append(f"a shell other than {' or '.join(CI_SHELLS)}")
+    return "; ".join(reasons)
+
+
+def _ci_triggers(ci):
+    # PyYAML reads the key `on` as True.
+    triggers = ci.get(True, ci.get("on"))
+    if isinstance(triggers, str):
+        return {triggers: None}
+    if isinstance(triggers, list):
+        return {t: None for t in triggers if isinstance(t, str)}
+    return _ci_dict(triggers)
+
+
+def _ci_trigger_problems(ci):
+    triggers = _ci_triggers(ci)
+    problems = []
+    if "pull_request" not in triggers:
+        problems.append("no pull_request trigger")
+    else:
+        filters = [k for k in ("types", "branches", "branches-ignore", "paths", "paths-ignore") if k in _ci_dict(triggers["pull_request"])]
+        if filters:
+            problems.append(f"pull_request has filters {filters}: some pull requests would skip the checks")
+    if "push" not in triggers:
+        problems.append("no push trigger")
+    else:
+        push = _ci_dict(triggers["push"])
+        if "branches" in push:
+            branches = push["branches"] if isinstance(push["branches"], list) else [push["branches"]]
+            missing = [b for b in CI_BRANCHES if b not in branches]
+            if missing or [b for b in branches if str(b).startswith("!")]:
+                problems.append(f"push runs for branches {branches!r}, not for all of {list(CI_BRANCHES)} without exceptions")
+        elif "branches-ignore" in push or "tags" in push or "tags-ignore" in push:
+            problems.append(f"push has a branches-ignore or tags filter, not branches {list(CI_BRANCHES)}")
+        if "paths" in push or "paths-ignore" in push:
+            problems.append("push has a paths filter: a change elsewhere would skip the checks")
+    return problems
+
+
+def _ci_host_tests_problems(ci, job_id, job):
+    """Why a job that runs engine_tests/run.sh does not count, or nothing."""
+    problems = []
+    steps = [s for s in _ci_list(job.get("steps")) if isinstance(s, dict)]
+    run_at = next(i for i, s in enumerate(steps) if _ci_runs(s, CI_HOST_TESTS_RUN))
+    off = [r for r in [_ci_off(ci, job)] + [_ci_off(ci, job, s) for s in steps] if r]
+    if off:
+        problems.append(f"{job_id} can be skipped or pass without running: {off[0]}")
+    permissions = job.get("permissions", ci.get("permissions"))
+    if permissions != {"contents": "read"}:
+        problems.append(f"{job_id} has permissions {permissions!r}, not only contents: read")
+    env = {}
+    for scope in (ci, job, steps[run_at]):  # the step's own env wins
+        env.update(_ci_dict(scope.get("env")))
+    if "TAB_LVGL_DIR" in env:
+        problems.append(f"{job_id} sets TAB_LVGL_DIR: run.sh would take an LVGL copy there instead of the checkout")
+    where = CI_LVGL_SRC_RE.fullmatch(str(env.get("TAB_LVGL_SRC", "")))
+    if not where:
+        problems.append(f"{job_id}: TAB_LVGL_SRC is {env.get('TAB_LVGL_SRC')!r}, not ${{{{ github.workspace }}}}/<the LVGL checkout's path>")
+        return problems
+    path = where.group(1).strip("/").removeprefix("./")
+    lvgl = [
+        s for s in steps[:run_at]
+        if str(s.get("uses", "")).startswith("actions/checkout@")
+        and str(_ci_dict(s.get("with")).get("path", "")).strip("/").removeprefix("./") == path
+    ]
+    if not lvgl:
+        problems.append(f"{job_id}: no actions/checkout of {path!r} before run.sh")
+        return problems
+    with_ = lvgl[-1]["with"]
+    if with_.get("repository") != CI_LVGL_REPOSITORY or str(with_.get("ref", "")) != CI_LVGL_COMMIT:
+        problems.append(f"{job_id}: LVGL comes from {with_.get('repository')!r} at {with_.get('ref')!r}, not {CI_LVGL_REPOSITORY} at {CI_LVGL_COMMIT} (LVGL {CI_LVGL_VERSION})")
+    return problems
+
+
+def _ci_runs(step, command):
+    return (
+        isinstance(step, dict)
+        and str(step.get("working-directory", "")) == "Integrations/ESPHome"
+        and str(step.get("run", "")).strip() == command
+    )
+
+
+def ci_problems(ci, pinned):
+    """What ci.yml (as load_yaml reads it) fails to run of CI_* above; empty
+    when it runs all of it."""
+    ci = _ci_dict(ci)
+    problems = _ci_trigger_problems(ci)
+    builds = {}  # file -> one version list per job that builds it (None: the shared default)
+    static_run = False
+    host_tests = []  # problems of each job that runs run.sh; one empty list is enough
+    switched_off = []  # jobs or steps that could be skipped or allowed to fail
+    for job_id, job in _ci_dict(ci.get("jobs")).items():
+        if not isinstance(job, dict):
+            continue
+        if CI_SHARED_RE.fullmatch(str(job.get("uses", ""))):
+            with_ = _ci_dict(job.get("with"))
+            versions = str(with_.get("esphome-versions", "")).split() or None
+            for name in str(with_.get("yaml-files", "")).split():
+                builds.setdefault(name, []).append(versions)
+                if _ci_off(ci, job):
+                    switched_off.append(f"{job_id} ({_ci_off(ci, job)})")
+        steps = _ci_list(job.get("steps"))
+        for step in steps:
+            if _ci_runs(step, CI_STATIC_RUN):
+                static_run = True
+                if _ci_off(ci, job, step):
+                    switched_off.append(f"{job_id} static step ({_ci_off(ci, job, step)})")
+        if any(_ci_runs(s, CI_HOST_TESTS_RUN) for s in steps):
+            host_tests.append(_ci_host_tests_problems(ci, job_id, job))
+    tablet, tab1 = builds.get(f"Integrations/ESPHome/{PROD}"), builds.get(f"Integrations/ESPHome/{TAB1}")
+    if tablet != [[pinned]]:
+        problems.append(f"{PROD} builds on {tablet!r}, not once on [{pinned!r}]")
+    if tab1 != [None]:
+        problems.append(f"{TAB1} builds on {tab1!r}, not once on the shared default versions")
+    if not static_run:
+        problems.append(f"no step runs `{CI_STATIC_RUN}` in Integrations/ESPHome")
+    if switched_off:
+        problems.append(f"skippable: {switched_off}")
+    if not host_tests:
+        problems.append(f"no step runs `{CI_HOST_TESTS_RUN}` in Integrations/ESPHome")
+    elif all(host_tests):
+        problems.extend(host_tests[0])
+    return problems
+
+
+def fetch_lvgl_guards():
+    """The version tests in engine_tests/tools/fetch_lvgl.sh, as (operator,
+    version): `=` keeps a copy already made, `!=` refuses a source."""
+    path = ROOT / FETCH_LVGL
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    return set(re.findall(r'\[ "\$v" (!?=) "([^"]*)" \]', text))
+
+
+# A ci.yml the rule must pass, and changes to it the rule must pass or fail
+# (the self-test): (what, {placeholder: text}, passes).
+CI_SAMPLE_PINNED = "2026.10.2"
+CI_SAMPLE = """\
+name: CI
+on:
+@PR@
+@PUSH@
+permissions:
+  contents: read
+jobs:
+  ci:
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf
+    with:
+      yaml-files: |
+        Integrations/ESPHome/TAB-1.yaml
+  engine:
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf
+    with:
+      yaml-files: |
+        Integrations/ESPHome/TAB-1-engine.yaml
+      esphome-versions: |
+        2026.10.2
+  engine-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - working-directory: Integrations/ESPHome
+        run: @STATIC@
+  engine-tests:
+    runs-on: ubuntu-latest
+@JOB@    steps:
+      - uses: actions/checkout@v6
+@STEPS@"""
+CI_SAMPLE_LVGL = """\
+      - uses: actions/checkout@v6
+        with:
+          repository: @REPO@
+          ref: @REF@
+          path: lvgl
+"""
+CI_SAMPLE_RUN = """\
+      - working-directory: Integrations/ESPHome
+@SHELL@        env:
+          TAB_LVGL_SRC: ${{ github.workspace }}/@SRC@
+@ENV@        run: @RUN@
+"""
+CI_SAMPLE_READ = "    permissions:\n      contents: read\n"
+CI_SAMPLE_DEFAULTS = {
+    "@PR@": "  pull_request:",
+    "@PUSH@": "  push:\n    branches:\n      - beta\n      - main",
+    "@STATIC@": CI_STATIC_RUN,
+    "@JOB@": CI_SAMPLE_READ,
+    "@STEPS@": CI_SAMPLE_LVGL + CI_SAMPLE_RUN,
+    "@SHELL@": "",
+    "@ENV@": "",
+    "@REPO@": CI_LVGL_REPOSITORY,
+    "@REF@": CI_LVGL_COMMIT,
+    "@SRC@": "lvgl",
+    "@RUN@": CI_HOST_TESTS_RUN,
+}
+CI_SELF_TESTS = (
+    ("as shipped", {}, True),
+    ("push on every branch (no filter)", {"@PUSH@": "  push:"}, True),
+    ("the job inherits read-only access from the workflow", {"@JOB@": ""}, True),
+    ("run.sh under bash", {"@SHELL@": "        shell: bash\n"}, True),
+    ("no push trigger", {"@PUSH@": ""}, False),
+    ("pushes to beta only", {"@PUSH@": "  push:\n    branches:\n      - beta"}, False),
+    ("main taken out again with !main", {"@PUSH@": "  push:\n    branches:\n      - beta\n      - main\n      - '!main'"}, False),
+    ("pushes of tags only", {"@PUSH@": "  push:\n    tags:\n      - v*"}, False),
+    ("a paths filter on pushes", {"@PUSH@": "  push:\n    branches:\n      - beta\n      - main\n    paths:\n      - docs/**"}, False),
+    ("pull requests into beta only", {"@PR@": "  pull_request:\n    branches:\n      - beta"}, False),
+    ("pull requests only when closed", {"@PR@": "  pull_request:\n    types:\n      - closed"}, False),
+    ("the static mode with a flag", {"@STATIC@": CI_STATIC_RUN + " --host"}, False),
+    ("the host tests job under an if", {"@JOB@": "    if: github.event_name == 'pull_request'\n" + CI_SAMPLE_READ}, False),
+    ("the host tests allowed to fail", {"@JOB@": "    continue-on-error: true\n" + CI_SAMPLE_READ}, False),
+    ("the host tests wait for another job", {"@JOB@": "    needs: engine-checks\n" + CI_SAMPLE_READ}, False),
+    ("run.sh under a shell that runs nothing", {"@SHELL@": "        shell: true {0}\n"}, False),
+    ("a job default shell that runs nothing", {"@JOB@": "    defaults:\n      run:\n        shell: true {0}\n" + CI_SAMPLE_READ}, False),
+    ("run.sh whose failure is ignored", {"@RUN@": CI_HOST_TESTS_RUN + " || true"}, False),
+    ("no run.sh step", {"@STEPS@": CI_SAMPLE_LVGL}, False),
+    ("write access", {"@JOB@": "    permissions:\n      contents: write\n"}, False),
+    ("LVGL at a tag, not a commit", {"@REF@": "v9.5.0"}, False),
+    ("LVGL at another commit", {"@REF@": "0123456789abcdef0123456789abcdef01234567"}, False),
+    ("LVGL from another repository", {"@REPO@": "someone/lvgl"}, False),
+    ("TAB_LVGL_SRC not the LVGL checkout", {"@SRC@": "other"}, False),
+    ("TAB_LVGL_DIR set (an LVGL copy there wins)", {"@ENV@": "          TAB_LVGL_DIR: /tmp/lvgl\n"}, False),
+    ("LVGL checked out after run.sh", {"@STEPS@": CI_SAMPLE_RUN + CI_SAMPLE_LVGL}, False),
+)
+
+
+def ci_sample(changes):
+    text = CI_SAMPLE
+    for key in CI_SAMPLE_DEFAULTS:  # @STEPS@ before the placeholders inside it
+        text = text.replace(key, changes.get(key, CI_SAMPLE_DEFAULTS[key]))
+    return parse_yaml(text, "<ci.yml sample>")
+
+
+def check_ci_self_test(rep):
+    wrong = [what for what, changes, passes in CI_SELF_TESTS if (not ci_problems(ci_sample(changes), CI_SAMPLE_PINNED)) != passes]
+    rep.check(
+        f"self-test: the ci.yml rule passes the shipped shape and fails a missing trigger, step or LVGL pin, a filtered, skippable or never-run step, or write access ({len(CI_SELF_TESTS)} cases)",
+        not wrong,
+        f"wrong for: {wrong}" if wrong else "",
+    )
+
+
 def check_release(prod, bench, rep):
     """The release workflow that publishes TAB-1-engine.yaml (design 10.8)."""
     gh = ROOT.parent.parent / ".github"
@@ -2462,47 +2750,21 @@ def check_release(prod, bench, rep):
         re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", pinned) is not None and all(v == pinned for v in mins.values()),
         f"esphome-version {pinned!r}, min_version {mins}",
     )
-    # ci.yml calls the shared ESPHome CI once per job: TAB-1.yaml on its
-    # default versions, TAB-1-engine.yaml on the pinned version only (the
-    # lock is checked against that one), and a job runs this script's static
-    # mode so a changed engine file needs a higher files number.
-    ci = load_yaml(ci_path) if ci_path.is_file() else {}
-    ci = ci if isinstance(ci, dict) else {}
-    # PyYAML reads the key `on` as True.
-    triggers = ci.get(True, ci.get("on"))
-    on_prs = "pull_request" in (triggers if isinstance(triggers, (dict, list)) else [triggers])
-    jobs = ci.get("jobs") if isinstance(ci.get("jobs"), dict) else {}
-    builds = {}  # file -> one version list per job that builds it (None: the shared default)
-    static_run = False
-    switched_off = []  # jobs or steps that could be skipped or allowed to fail
-    for job_id, job in jobs.items():
-        if not isinstance(job, dict):
-            continue
-        job_off = "if" in job or "continue-on-error" in job
-        if re.fullmatch(r"ApolloAutomation/Workflows/\.github/workflows/esphome-ci\.yml@[0-9a-f]{40}", str(job.get("uses", ""))):
-            with_ = job.get("with") if isinstance(job.get("with"), dict) else {}
-            versions = str(with_.get("esphome-versions", "")).split() or None
-            for name in str(with_.get("yaml-files", "")).split():
-                builds.setdefault(name, []).append(versions)
-                if job_off:
-                    switched_off.append(job_id)
-        for step in job.get("steps") or []:
-            if (
-                isinstance(step, dict)
-                and str(step.get("working-directory", "")) == "Integrations/ESPHome"
-                and str(step.get("run", "")).strip() == "python3 -B tools/check_engine_package.py"
-            ):
-                static_run = True
-                if job_off or "if" in step or "continue-on-error" in step:
-                    switched_off.append(f"{job_id} (static step)")
+    # ci.yml: see CI_* above ci_problems().
+    check_ci_self_test(rep)
+    problems = ci_problems(load_yaml(ci_path) if ci_path.is_file() else {}, pinned)
     rep.check(
-        "release: ci.yml runs on pull requests, builds TAB-1-engine.yaml in one job on the pinned ESPHome version only, builds TAB-1.yaml on the shared default versions, and runs this script's static mode, none of them skippable",
-        on_prs
-        and builds.get(f"Integrations/ESPHome/{PROD}") == [[pinned]]
-        and builds.get(f"Integrations/ESPHome/{TAB1}") == [None]
-        and static_run
-        and not switched_off,
-        f"pull_request trigger: {on_prs}, builds {builds!r}, static mode run: {static_run}, skippable: {switched_off}",
+        "release: ci.yml runs on every pull request and every push to beta and main, builds TAB-1-engine.yaml in one job on the pinned ESPHome version only, "
+        f"builds TAB-1.yaml on the shared default versions, runs this script's static mode, and runs engine_tests/run.sh with LVGL from lvgl/lvgl at {CI_LVGL_COMMIT[:12]} "
+        "and read access only, none of them skippable",
+        not problems,
+        "; ".join(problems),
+    )
+    guards = fetch_lvgl_guards()
+    rep.check(
+        f"release: ci.yml's LVGL commit is LVGL {CI_LVGL_VERSION}, the only version {FETCH_LVGL} takes, for a copy it keeps and for a source it copies",
+        guards == {("=", CI_LVGL_VERSION), ("!=", CI_LVGL_VERSION)},
+        f"{FETCH_LVGL} tests {sorted(guards)}",
     )
 
 
@@ -3809,8 +4071,8 @@ and fonts against the contract, both entry files and the update lock, the
 release workflow, the waiting-screen words in docs/engine.md (and no line
 of it starting with ">"), the waiting-screen words against the contract's
 screens.json, and the self-tests of the YAML reader, the files rule, the
-restart rule, the docs check, the contract check and the --compile warning
-gate. Where PyYAML happens to be installed, the YAML of every file read is
+restart rule, the docs check, the contract check, the ci.yml rule and the
+--compile warning gate. Where PyYAML happens to be installed, the YAML of every file read is
 also compared with PyYAML's.
 
 --host needs a C++17 compiler; --config and --compile need ESPHome; with
