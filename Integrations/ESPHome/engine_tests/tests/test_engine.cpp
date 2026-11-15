@@ -22,6 +22,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -895,8 +896,8 @@ static void same_shape(const tj::Value &got, const tj::Value &want, const std::s
 }
 
 // The answer has the shape and the values of the first case of
-// hello_v2.json (engine 0.2.0, proto [1, 2]: the host build sets
-// TAB_PROTO_HIGH 2), and its caps are contract.json's engine_caps
+// hello_v2.json (engine 0.2.0, proto [1, 2], as shipped: run.sh sets no
+// TAB_PROTO_HIGH), and its caps are contract.json's engine_caps
 // (contract 3, cards spec A.5).
 static void same_value(const tj::Value &got, const tj::Value &want, const std::string &path) {
   CHECK_MSG(got.t == want.t && got.n == want.n && got.s == want.s && got.size() == want.size(), path);
@@ -2257,6 +2258,23 @@ TEST(write_bucket) {
     CHECK_MSG(fake::st.save_calls == 1 + std::min(i + 1, bucket), std::to_string(i));
   }
   CHECK(stored(version(61)) && D::g.writes_left == 0);
+
+  // Erases take none while writes are left either (contract 5): tab_clear
+  // and the erase for a layout too large to keep leave the count as it was.
+  ha.boot(false, true);
+  CHECK(ha.show(version(70)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(stored(version(70)) && D::g.writes_left == bucket - 1);
+  const int erases = fake::st.erase_calls;
+  const std::string cleared2 = ha.clear();
+  CHECK_STR(cleared2, "");
+  CHECK(fake::st.erase_calls == erases + 1 && !fake::st.flash_has && D::g.writes_left == bucket - 1);
+  CHECK(ha.show(version(71)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(stored(version(71)) && D::g.writes_left == bucket - 2);
+  CHECK(ha.show(big));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.erase_calls == erases + 2 && !fake::st.flash_has && D::g.writes_left == bucket - 2);
 }
 
 // The tablet's timing numbers are contract.json's `timing`, not copies that
@@ -5192,6 +5210,14 @@ TEST(v1_pixels_unchanged) {
   CHECK_MSG(list == old_list, "the frames differ from engine 0.1.0's list");
   // Both fixtures, every page, without and with values.
   CHECK_MSG(tab::page_count() > 1 && frames_seen >= 1 + 3 * tab::page_count(), std::to_string(frames_seen));
+  // And every page of the cards fixture's version 1 form: engine 0.1.0
+  // loaded it (cards spec G.2, E12).
+  const int v1_pages = (int) fixture("layout_v2_cards.v1.meta.json")["counts"]["pages"].n;
+  CHECK(v1_pages > 0 && v1_pages == (int) fixture("layout_v2_cards.meta.json")["counts"]["normal_pages"].n);
+  for (int p = 0; p < v1_pages; p++) {
+    const std::string name = "layout_v2_cards.v1.none.p" + std::to_string(p) + "\n";
+    CHECK_MSG(old_list.find(name) != std::string::npos, "engine 0.1.0 drew no " + name);
+  }
 }
 
 // ================================================================ main
@@ -6122,8 +6148,8 @@ TEST(keys_found_at_once) {
 // No walk of the heap while a layout is being built (cards spec B.6): the
 // largest free block is read once per commit, in stage(); build steps read
 // free PSRAM, and tab_status and tab_hello report the block read at the
-// commit until the build ends (contract 3.1). The rest of this test comes
-// with package E9.
+// commit until the build ends (contract 3.1). What hangs under the shown
+// screen meanwhile is in offscreen_tree.
 TEST(offscreen_costs_nothing) {
   Ha ha;
   ha.boot(false);
@@ -10031,4 +10057,326 @@ TEST(rate_moves_the_bar) {
   // Drawn at most a second behind (3.4 px a second here).
   CHECK_MSG(abs(k5->sl_pos - D::slider_pos_now(sm, *k5)) <= 4 && k5->sl_pos > k5_at + 5,
             std::to_string(k5->sl_pos) + " " + std::to_string(D::slider_pos_now(sm, *k5)) + " " + std::to_string(k5_at));
+}
+
+// ================================================================ the cards fixture (package E12)
+//
+// layout_v2_cards is what apollo_tab makes from the nine cards of the first
+// version 2 library: 2 normal pages and a detail page for each light. Engine
+// 0.2.0 must load and draw it before it is released (cards spec A.5, G.4).
+// Its .v1 form is the same dashboard for engine 0.1.0: this engine loads it
+// here, and the frozen 0.1.0 program draws it in v1_pixels_unchanged
+// (frames.h).
+
+// Values a person would see, in the order of the fixture's 85 slots: the sofa
+// lamp on at 68 % in a warm colour, the ceiling light on at 40 %, the desk
+// lamp on, the porch light off, the kettle on, readings with numbers. The
+// fixture has no values of its own (cards spec I14a).
+static const char *CARDS_VALUES =
+    "[1,1],[2,16755021],[3,0],[4,\"On\"],[5,\"68%\"],[6,68],"
+    "[7,1],[8,0],[9,\"Kettle\"],[10,\"On\"],"
+    "[11,1],[12,16766112],[13,0],[14,\"Ceiling\"],[15,\"On\"],[16,40],"
+    "[17,0],[18,\"Movie\"],[19,\"Dinner\"],[20,\"All off\"],"
+    "[21,1],[22,0],[23,\"On\"],[24,68],[25,30],[26,65],[27,16744448],[28,2700],"
+    "[29,0],[30,7124223],[31,0],[32,984335],[33,\"21.5\xC2\xB0\"],[34,1],[35,0],[36,\"Temperature\"],"
+    "[37,0],[38,\"Outside\"],[39,\"8.5 \xC2\xB0" "C\"],[40,\"Garden\"],"
+    "[41,0],[42,\"Target\"],[43,\"21.5\"],[44,21.5],"
+    "[45,\"Mode\"],[46,0],[47,1],"
+    "[48,0],[49,\"Backlight\"],[50,\"45%\"],[51,45],"
+    "[52,0],[53,\"Night\"],[54,0],"
+    "[55,1],[56,16761722],[57,0],[58,\"Desk\"],[59,\"On\"],[60,80],[61,3000],"
+    "[62,0],[63,null],[64,0],[65,\"Porch\"],[66,\"Off\"],[67,\"\"],"
+    "[68,0],[69,\"Doorbell\"],"
+    "[70,0],[71,10133672],[72,0],[73,985115],[74,\"Front door\"],[75,\"Closed\"],[76,0],[77,1],"
+    "[78,\"Outside\"],"
+    "[79,0],[80,0],[81,\"Guest mode\"],[82,\"Off\"],"
+    "[83,30],[84,2700],[85,null]";
+
+// The light tiles with `hold`: each card's first label child is the card's
+// (contract 4.3), so a press there is the card's press.
+struct HoldCard {
+  uint32_t card;
+  int x, y, go;
+};
+static std::vector<HoldCard> cards_with_hold(const tj::Value &dl) {
+  std::vector<HoldCard> out;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      if (it["t"].s != "card" || !it["hold"].has("go")) continue;
+      for (const tj::Value &w : it["w"].a)
+        if (w["t"].s == "label") {
+          out.push_back({(uint32_t) it["id"].n, (int) (w["r"][0].n + w["r"][2].n / 2), (int) (w["r"][1].n + w["r"][3].n / 2),
+                         (int) it["hold"]["go"].n});
+          break;
+        }
+    }
+  return out;
+}
+
+// CARDS_VALUES by slot.
+static std::map<int, tj::Value> cards_values() {
+  std::map<int, tj::Value> out;
+  tj::Value v;
+  if (!CHECK_MSG(tj::parse(std::string("[") + CARDS_VALUES + "]", &v), "CARDS_VALUES does not parse")) return out;
+  for (const tj::Value &e : v.a) out[(int) e[0].n] = e[1];
+  return out;
+}
+
+// The slot an item's key is bound to ({"s": n}), or 0.
+static int bound_slot(const tj::Value &it, const char *key) {
+  return it.has(key) && it[key].t == tj::Value::OBJ && it[key].has("s") ? (int) it[key]["s"].n : 0;
+}
+
+// The fixture's card with this id.
+static const tj::Value *fixture_card(const tj::Value &dl, uint32_t id) {
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      if (it["id"].n == id) return &it;
+  return nullptr;
+}
+
+// Two caps objects with the same keys and values, in any order.
+static void same_caps(const tj::Value &got, const tj::Value &want, const std::string &path) {
+  if (!CHECK_MSG(got.t == tj::Value::OBJ && want.t == tj::Value::OBJ && got.size() == want.size(), path)) return;
+  for (auto &kv : want.o)
+    if (CHECK_MSG(got.has(kv.first.c_str()), path + " lacks " + kv.first))
+      same_value(got[kv.first.c_str()], kv.second, path + "." + kv.first);
+}
+
+TEST(cards_loads) {
+  const std::string bytes = layout_bytes("layout_v2_cards.dl.json");
+  const tj::Value dl = fixture("layout_v2_cards.dl.json");
+  const tj::Value meta = fixture("layout_v2_cards.meta.json");
+  const tj::Value contract = tj::load(CDIR + "/contract.json");
+  const std::string hash = sha_hex(bytes).substr(0, 16);
+  CHECK_STR(hash, meta["hash"].s);
+  CHECK(bytes.size() == meta["size"].n);
+  // Made for this engine: the caps of the layout are contract.json's
+  // engine_caps, which hello_fixture holds the engine's answer to.
+  same_caps(meta["caps"], contract["engine_caps"], "layout_v2_cards caps");
+  CHECK(meta["dropped"].size() == 0);
+  D::Loader ld;
+  CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+  CHECK(ld.c.version == 2);
+  CHECK(ld.c.pages == meta["counts"]["pages"].n && ld.c.normal == meta["counts"]["normal_pages"].n);
+  CHECK(ld.c.widgets == meta["counts"]["widgets"].n && ld.c.ids == meta["counts"]["widgets"].n);
+  CHECK(ld.c.slots == meta["counts"]["slots"].n && dl["slots"].s.size() == meta["slots"].size());
+  for (size_t i = 0; i < meta["slots"].size(); i++)
+    CHECK_MSG(meta["slots"][i]["d"].n == i + 1 && meta["slots"][i]["type"].s == dl["slots"].s.substr(i, 1),
+              "slot " + std::to_string(i + 1));
+  // Within what the engine keeps across a restart, and in one chunk.
+  CHECK(bytes.size() <= (size_t) contract["engine_caps"]["max_stored"].n &&
+        bytes.size() <= (size_t) contract["engine_caps"]["max_chunk"].n);
+
+  Ha ha;
+  ha.boot(true);
+  CHECK(ha.hello());
+  CHECK(ha.show(bytes));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  CHECK(m.npages == dl["pages"].size() && tab::page_count() == (int) m.npages);
+  int detail_pages = 0;
+  for (uint32_t p = 0; p < m.npages; p++) {
+    const tj::Value &pg = dl["pages"][(size_t) p];
+    const bool sub = pg["sub"].n == 1 && p > 0;
+    detail_pages += sub;
+    CHECK_MSG(m.pages[p].sub == (sub ? 1 : 0), "page " + std::to_string(p) + " sub");
+    // A page without `ttl` gets the contract's default (timing.sub_ttl_s).
+    CHECK_MSG(m.pages[p].ttl == (pg.has("ttl") ? pg["ttl"].n : contract["timing"]["sub_ttl_s"].n),
+              "page " + std::to_string(p) + " ttl");
+    CHECK_MSG(m.pages[p].theme == 0 && !pg.has("theme"), "page " + std::to_string(p) + " theme");
+    CHECK_MSG(D::is_detail(m, (int) p) == sub, "page " + std::to_string(p) + " is_detail");
+  }
+  CHECK(detail_pages > 0 && detail_pages == meta["counts"]["pages"].n - meta["counts"]["normal_pages"].n);
+  // The dashboard's theme is midnight (source.json: apollo_tab theme).
+  CHECK_STR(fixture("layout_v2_cards.source.json")["dashboard"]["apollo_tab"]["theme"].s, "midnight");
+  for (int c = 0; c < D::C_COUNT; c++)
+    CHECK_MSG(m.theme.c[c] == (uint32_t) dl["theme"][D::THEME_KEYS[c]].n, D::THEME_KEYS[c]);
+  check_v2_keys(dl, m, "layout_v2_cards");
+  // Every widget at its rectangle; a choice is one object.
+  int choices = 0, want_choices = 0;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      for (const tj::Value &w : it["w"].a) want_choices += w["t"].s == "choice";
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    const std::string id = "layout_v2_cards widget " + std::to_string(w.id);
+    if (!CHECK_MSG(w.obj, id)) continue;
+    if (w.kind == D::W_CHOICE) {
+      choices++;
+      CHECK_MSG(lv_obj_get_child_count(w.obj) == 0 && D::Loader::objects_of(w) == 1, id + " is one object");
+    }
+    int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+    if (w.kind == D::W_BUTTON) D::button_box(w, &bx, &by, &bw, &bh);
+    if (w.kind == D::W_IMAGE) D::image_box(w, &bx, &by, &bw, &bh);
+    CHECK_MSG(obj_at(w.obj, w.r[0] + bx, w.r[1] + by, bw, bh), id + " at " + rect_text(w.obj));
+  }
+  CHECK_MSG(choices == want_choices && want_choices > 0, std::to_string(choices) + " choices");
+
+  // Every page, with nothing set and then with values (pictures for the
+  // coordinator: cards_none_pageN.png and cards_values_pageN.png).
+  const uint16_t wall = hh::rgb565(m.theme.c[D::C_WALL]);
+  std::vector<std::vector<uint16_t>> none(m.npages);
+  const size_t px = (size_t) hh::W * hh::H;
+  auto pictures = [&](const char *label, std::vector<std::vector<uint16_t>> *keep) {
+    for (int p = 0; p < tab::page_count(); p++) {
+      tab::go_to(p);
+      hh::advance(40);
+      CHECK(tab::current_page() == p);
+      lv_obj_invalidate(lv_screen_active());
+      hh::refresh();
+      shot(std::string("cards_") + label + "_page" + std::to_string(p));
+      const double share = share_not(wall, 96);
+      CHECK_MSG(share > 0.05, std::string(label) + " page " + std::to_string(p) + ": " + std::to_string(share));
+      if (keep) (*keep)[p].assign(hh::g_fb, hh::g_fb + px);
+    }
+    tab::go_to(0);
+    hh::advance(20);
+  };
+  pictures("none", &none);
+  // The widgets the values below speak of, found in the fixture: the first
+  // light tile the values turn on (the sofa lamp), the one they leave off
+  // (the porch light), and the first reading shown in two sizes.
+  const auto holds = cards_with_hold(dl);
+  const std::map<int, tj::Value> vals = cards_values();
+  auto value_of = [&](int slot) { auto it = vals.find(slot); return it == vals.end() ? tj::Value() : it->second; };
+  const tj::Value *lit_card = nullptr, *off_card = nullptr;
+  for (const HoldCard &h : holds) {
+    const tj::Value *c = fixture_card(dl, h.card);
+    if (!c) continue;
+    const tj::Value on = value_of(bound_slot(*c, "on"));
+    if (!lit_card && on.t == tj::Value::NUM && on.n == 1) lit_card = c;
+    if (!off_card && on.t == tj::Value::NUM && on.n == 0) off_card = c;
+  }
+  const tj::Value *big = nullptr, *small = nullptr;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      for (const tj::Value &w : it["w"].a) {
+        if (big || w["t"].s != "label" || !w.has("px") || w["px"].n != 48 || !bound_slot(w, "vis")) continue;
+        for (const tj::Value &o : it["w"].a)
+          if (&o != &w && o["t"].s == "label" && bound_slot(o, "vis") && bound_slot(o, "text") == bound_slot(w, "text"))
+            big = &w, small = &o;
+      }
+  if (!CHECK(lit_card && off_card && big && small)) return;
+  const D::Widget *lit = widget((uint32_t) (*lit_card)["id"].n), *off = widget((uint32_t) (*off_card)["id"].n);
+  const D::Widget *wbig = widget((uint32_t) (*big)["id"].n), *wsmall = widget((uint32_t) (*small)["id"].n);
+  if (!CHECK(lit && off && wbig && wsmall)) return;
+  // The lit tile's labels bound to a text slot.
+  std::vector<std::pair<const D::Widget *, std::string>> lit_labels;
+  for (const tj::Value &w : (*lit_card)["w"].a) {
+    const int s = bound_slot(w, "text");
+    if (w["t"].s != "label" || !s || value_of(s).t != tj::Value::STR) continue;
+    const D::Widget *lw = widget((uint32_t) w["id"].n);
+    if (CHECK(lw)) lit_labels.push_back({lw, value_of(s).s});
+  }
+  CHECK(!lit_labels.empty());
+  // Nothing set: the labels bound to a slot are empty.
+  for (const auto &ll : lit_labels) CHECK_STR(label_text(ll.first->obj), "");
+  const std::string snap = std::string("{\"f\":1,\"h\":\"") + hash + "\",\"v\":[" + CARDS_VALUES + "]}";
+  CHECK_STR(ha.set(snap), "");
+  hh::advance(60);
+  for (const auto &ll : lit_labels) CHECK_STR(label_text(ll.first->obj), ll.second);
+  // A reading with a number: the values show the 48 px label.
+  const tj::Value vis_big = value_of(bound_slot(*big, "vis")), vis_small = value_of(bound_slot(*small, "vis"));
+  CHECK(vis_big.t == tj::Value::NUM && vis_big.n != 0 && vis_small.t == tj::Value::NUM && vis_small.n == 0);
+  CHECK(!hidden(wbig->obj) && hidden(wsmall->obj));
+  CHECK_STR(label_text(wbig->obj), value_of(bound_slot(*big, "text")).s);
+  pictures("values", nullptr);
+  // The lit tile changed with its values; the tile left off did not take a
+  // colour.
+  tab::go_to(lit->page);
+  hh::advance(40);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  long changed = 0;
+  for (int y = lit->r[1]; y < lit->r[1] + lit->r[3]; y++)
+    for (int x = lit->r[0]; x < lit->r[0] + lit->r[2]; x++)
+      changed += hh::pixel(x, y) != none[lit->page][(size_t) y * hh::W + x];
+  CHECK_MSG(changed > lit->r[2] * lit->r[3] / 4,
+            std::to_string(changed) + " pixels of card " + std::to_string(lit->id) + " changed");
+  CHECK(hh::pixel(lit->r[0] + lit->r[2] - 12, lit->r[1] + 12) != hh::rgb565(m.theme.c[D::C_CARD]));
+  tab::go_to(off->page);
+  hh::advance(40);
+  CHECK(hh::pixel(off->r[0] + off->r[2] - 12, off->r[1] + 12) == hh::rgb565(m.theme.c[D::C_CARD]));
+  tab::go_to(0);
+  hh::advance(20);
+
+  // A hold on each light tile opens its own detail page, which sends
+  // nothing; the back entry, or a swipe to the right on the wall under the
+  // card, goes back to the page it came from. Swipes skip the detail pages.
+  std::set<int> goes;
+  for (const HoldCard &h : holds) goes.insert(h.go);
+  CHECK(holds.size() == (size_t) detail_pages && goes.size() == holds.size());
+  fake::st.events.clear();
+  bool by_swipe = true;
+  for (const HoldCard &h : holds) {
+    const D::Widget *c = widget(h.card);
+    if (!CHECK(c)) continue;
+    tab::go_to(c->page);
+    hh::advance(40);
+    press_for(h.x, h.y, 700);
+    CHECK_MSG(tab::current_page() == h.go && D::g.on_detail && D::g.origin == c->page,
+              "card " + std::to_string(h.card) + " opened page " + std::to_string(tab::current_page()));
+    CHECK(D::is_detail(m, h.go));
+    if (by_swipe) {
+      hh::drag(500, 792, 900, 792, 120);
+    } else if (CHECK(m.back.obj && !hidden(m.back.obj))) {
+      lv_obj_update_layout(m.back.obj);
+      lv_area_t a;
+      lv_obj_get_coords(m.back.obj, &a);
+      hh::tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    }
+    hh::advance(40);
+    by_swipe = !by_swipe;
+    CHECK_MSG(tab::current_page() == c->page && !D::g.on_detail, "back from page " + std::to_string(h.go));
+  }
+  CHECK(fake::events("tab1_input").empty());
+  tab::go_to(0);
+  hh::advance(40);
+  swipe_left();
+  CHECK(tab::current_page() == 1);
+  swipe_left();
+  CHECK(tab::current_page() == 0);
+  swipe_right();
+  CHECK(tab::current_page() == 1);
+  tab::go_to(0);
+  hh::advance(20);
+
+  g_cut_report.clear();
+  report_cuts("layout_v2_cards");
+  FILE *f = fopen((OUT + "/cut_texts.txt").c_str(), "a");
+  if (f) {
+    fprintf(f, "%s", g_cut_report.empty() ? "layout_v2_cards: no text is cut.\n" : g_cut_report.c_str());
+    fclose(f);
+  }
+  draw_and_press_all("layout_v2_cards");
+
+  // The .v1 form: the same dashboard for engine 0.1.0, version 1 keys only.
+  // This engine loads it too (a tablet that took it before the update keeps
+  // drawing it, contract 9).
+  const std::string v1 = layout_bytes("layout_v2_cards.v1.dl.json");
+  const tj::Value v1meta = fixture("layout_v2_cards.v1.meta.json");
+  CHECK_STR(sha_hex(v1).substr(0, 16), v1meta["hash"].s);
+  CHECK(v1.size() == v1meta["size"].n && v1meta["dropped"].size() == 0);
+  same_caps(v1meta["caps"], fixture("hello.json")["cases"][0]["response"]["caps"], "layout_v2_cards.v1 caps");
+  D::Loader l1;
+  CHECK_STR(D::model_check(v1.data(), v1.size(), l1), "");
+  CHECK(l1.c.version == 1 && l1.c.pages == v1meta["counts"]["pages"].n && l1.c.normal == l1.c.pages);
+  CHECK(l1.c.widgets == v1meta["counts"]["widgets"].n && l1.c.slots == v1meta["counts"]["slots"].n);
+  CHECK(fixture("layout_v2_cards.v1.dl.json")["v"].n == 1);
+  CHECK(ha.show(v1));
+  if (!CHECK(active() && active()->model)) return;
+  // The version 1 form has the normal pages only.
+  CHECK(tab::page_count() == (int) meta["counts"]["normal_pages"].n);
+  const uint16_t wall1 = hh::rgb565(active()->model->theme.c[D::C_WALL]);
+  for (int p = 0; p < tab::page_count(); p++) {
+    tab::go_to(p);
+    hh::advance(40);
+    shot("cards_v1_page" + std::to_string(p));
+    CHECK_MSG(share_not(wall1, 96) > 0.05, "v1 page " + std::to_string(p));
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  draw_and_press_all("layout_v2_cards.v1");
 }

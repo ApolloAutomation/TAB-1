@@ -20,7 +20,7 @@
 substitutions:
   name: apollo-tab-1
   friendly_name: Apollo TAB-1
-  version: "26.11.13.1"
+  version: "26.11.14.1"
   # Which way up the picture is. "90" and "270" are the two landscape ways,
   # half a turn apart: if the picture is upside down where the tablet hangs,
   # use the other one. Touch turns with it, and both use the fast screen

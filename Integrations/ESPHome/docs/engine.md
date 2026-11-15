@@ -623,6 +623,12 @@ This is why the bench file has a fixed key.
 
 Everything goes over the ESPHome connection Home Assistant already has.
 
+- Engine 0.2.0 speaks contract versions 1 and 2: `tab_hello` answers
+  `proto [1, 2]` (`TAB_PROTO_HIGH` in `engine/tab_state.h`, which
+  `tools/check_engine_package.py` holds to `contract.json`; no build file
+  sets it). Home Assistant then sends version 2 dashboards (the new cards,
+  detail pages, page themes). A version 1 dashboard stored before the
+  update draws as on engine 0.1.0 until Home Assistant sends the new one.
 - Eight actions that Home Assistant calls: `tab_hello`, `tab_status`,
   `tab_pair`, `tab_layout`, `tab_commit`, `tab_set`, `tab_ack`, `tab_clear`.
   The integration calls them directly, so nothing lands in the recorder.
@@ -680,6 +686,7 @@ Run from `Integrations/ESPHome`. Use `python3 -B` so Python leaves no
 # and the screen rotation and flush of fast_display.h for both ways up.
 # LVGL 9.5.0 is copied once from a local build, nothing is downloaded.
 # engine_tests/tools/fetch_lvgl.sh pins it by commit and refuses another.
+# A copy made before the commit was recorded is copied again.
 engine_tests/run.sh
 
 # With another compiler (CI names its own); warnings are errors with each
@@ -724,7 +731,8 @@ It also builds a second program, `tests/test_frozen.cpp`, from the sources
 of engine 0.1.0 frozen in `engine_tests/frozen/0.1.0` (`engine/*.h`,
 `host/harness.h` and `host/fake_platform.h` as at `dd3e379`, copied once,
 never shipped), with the same compiler, flags, LVGL and fonts, and runs it
-first, the same two ways. It draws every page of `layout_small` and
+first, the same two ways. It draws every page of `layout_small`,
+`layout_v2_cards.v1` (the cards fixture's form for engine 0.1.0) and
 `layout_all_cards`, without values and after steps of `state_stream.json`
 (`tests/frames.h`), and the engine's test `v1_pixels_unchanged` draws the
 same and compares the frames byte for byte: a version 1 dashboard looks the
@@ -732,6 +740,15 @@ same on this engine as on 0.1.0. No hash of a frame is kept: the host draws
 glyphs with floating point, so a stored hash would hold only for one
 compiler and one CPU. A frame that differs is saved as
 `v1_pixels_<frame>.png` among the screenshots. Never edit the frozen copy.
+
+The cards fixture `layout_v2_cards` is what Home Assistant makes from the
+nine cards of the first version 2 library: 2 normal pages and a detail page
+for each of the 5 lights (7 pages, 157 widgets, 85 slots, 15,039 bytes).
+Test `cards_loads` loads it, checks its counts, keys and rectangles against
+the fixture, draws every page with nothing set and with values a person
+would see (`cards_none_page<n>.png`, `cards_values_page<n>.png`), opens each
+light's detail page by a hold and goes back, and presses every control.
+Then it loads the fixture's `.v1` form on this engine too.
 
 Card colours follow contract 4.7 in whole numbers: `engine/tab_colour.h`
 holds `mix`, `lum`, `contrast`, `readable`, `legible`, `blend` and the nine
@@ -923,21 +940,40 @@ must stop with the error that names the file and says to delete it.
 in this folder's `.esphome` and the copy's build folder (components already
 resolved there). ESP-IDF components that ESPHome's local component store
 lacks must then come from a folder you name in
-`IDF_COMPONENT_LOCAL_STORAGE_URL`.
+`IDF_COMPONENT_LOCAL_STORAGE_URL`. A worktree has no `.esphome` of its own:
+pass `--seed` with the main checkout's `.esphome` to copy the caches and the
+build folder's components from there. ESP-IDF itself is not copied; it must
+already be installed.
+
+ESPHome installs ESP-IDF (5.5.6 with ESPHome 2026.10.2), its compiler and
+its Python environment in the user's cache folder, not in `.esphome`:
+`~/Library/Caches/esphome/idf` on macOS, `~/.cache/esphome/idf` on Linux.
+A program that empties cache folders takes them away, and so does
+`esphome clean-all`. The next build downloads them again, which `--offline`
+blocks: each compile then fails with a line that starts "ESP-IDF 5.5.6 is
+not installed in ESPHome's tools cache". Run the check once without
+`--offline`. To keep the install out of the cache folder, set
+`ESPHOME_ESP_IDF_PREFIX` to another folder for that run and for every later
+one.
 
 ### Size
 
-Last full build: 2026-11-13, ESPHome 2026.10.2, Guition board. The tablet
-file is larger than the bench file by the update channel (HTTPS client and
-certificates).
+Last full build: 2026-11-14, ESPHome 2026.10.2, Guition board: engine 0.2.0
+as it was one step before the release. The release differs from that build
+in three numbers only (it answers `proto [1, 2]`, its firmware version is
+26.11.14.1 and its files version 18), so the table is that build's, not a
+build of the release itself. The firmware is 582,560 bytes larger than with
+engine 0.1.0 (2,111,424 bytes): the new fonts and icons, and the engine's
+new code. The tablet file is larger than the bench file by the update
+channel (HTTPS client and certificates).
 
 | | `TAB-1-engine.yaml` | `TAB-1-engine-bench.yaml` | Adopted in ESPHome Builder |
 |---|---|---|---|
-| Firmware (app) | 2,111,424 bytes | 1,899,616 bytes | 2,108,384 bytes |
-| Factory image (app + 64 KB boot and partition table) | 2,176,960 bytes | 1,965,152 bytes | 2,173,920 bytes |
-| Internal RAM (static) | 111,728 of 576,464 bytes (19.4%) | 109,690 of 576,464 bytes (19.0%) | 111,720 of 576,464 bytes (19.4%) |
-| PSRAM (static) | 2,029,476 bytes | 1,817,832 bytes | 2,026,436 bytes |
-| Flash (app partition) | 2,111,020 of 8,126,464 bytes (26.0%) | 1,899,222 of 8,126,464 bytes (23.4%) | 2,107,980 of 8,126,464 bytes (25.9%) |
+| Firmware (app) | 2,693,984 bytes | 2,480,880 bytes | 2,691,056 bytes |
+| Factory image (app + 64 KB boot and partition table) | 2,759,520 bytes | 2,546,416 bytes | 2,756,592 bytes |
+| Internal RAM (static) | 112,128 of 576,464 bytes (19.5%) | 110,090 of 576,464 bytes (19.1%) | 112,128 of 576,464 bytes (19.5%) |
+| PSRAM (static) | 2,612,036 bytes | 2,399,088 bytes | 2,609,108 bytes |
+| Flash (app partition) | 2,693,580 of 8,126,464 bytes (33.1%) | 2,480,478 of 8,126,464 bytes (30.5%) | 2,690,652 of 8,126,464 bytes (33.1%) |
 
 ## Contract readings
 
@@ -1020,6 +1056,36 @@ Choices the engine makes inside the contract:
   contract's characters (`fonts.text_glyphs`, `fonts.digits_glyphs`), like
   the tablet's, so a Greek letter is a box in the screenshots too.
 
+Choices the engine makes where contract version 2 says nothing (to be
+settled at the next contract edit; the tests pin what the engine does now):
+
+- **A swatch while it is pressed** takes `mix(readable(c), c, 85)`, as a
+  button with `c` does. Test: `choice_looks`.
+- **Text on a choice of dots** (`look` 1) goes inside each dot's box by the
+  button rule and is cut to it. Test: `choice_looks`.
+- **A pulse over a selected swatch:** the pulse colours win; the selected
+  border stays. No test of its own yet.
+- **Policy 3 on a choice:** after the yes the tapped option is not shown as
+  selected (only its outline, as with policy 2); the choice keeps showing
+  the value until Home Assistant sends a new one. Test: `choice_feedback`.
+- **The clock's minute** is drawn by the once-a-second pass, so it can show
+  the new minute up to 1 s after it starts. Test: `clock_keeps_going`.
+- **A layout too large to keep** erases the older stored copy at its save
+  time, 30 s after the swap, as engine 0.1.0 did, and never waits for a
+  flash write to come back. A restart within those 30 s loads the older
+  copy. Tests: `cache_oversize_erases_a_kept_copy`, `write_bucket`.
+- **`null` on a new key that is not bound** counts as absent; `px` is held
+  to 14 to 255 (0 is absent); an `icons` entry outside 0 to 0x10FFFF
+  answers `parse`; every list entry is type-checked, also past the entries
+  kept; a version 2 key in a version 1 layout is read and type-checked.
+  Tests: `hostile_v2`, `fuzz_keys`.
+- **A round button or badge in a rectangle that is not square** takes
+  presses only in the centred circle's square; the rest is the card's. No
+  test of its own yet (the fixtures have only square ones).
+- **A hold** is timed from the moment the engine sees the press, which is up
+  to one touch period (16 ms) after the finger went down. Test:
+  `hold_is_not_a_tap`.
+
 ## Hardware checklist
 
 Nothing below can be tested without a tablet. Flash
@@ -1044,6 +1110,36 @@ Measurements:
 | 11 | Stack high-water mark of the 4 KB flash writer task during a 128 KB write | Comfortable headroom |
 | 12 | Uptime when the engine starts: "Engine … started N ms after power-on" in the log (USB serial from power-on), cold start with no stored dashboard and with one near 128 KB. A hold must start before 10 s after power-on and only counts from this moment | Under 5 s, so at least 5 s are left to start the hold |
 | 13 | Lowest free internal RAM during the production file's HTTPS update check, with the all-cards dashboard on screen: log `heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)` and `heap_caps_get_free_size(MALLOC_CAP_INTERNAL)` (a temporary `interval:` lambda, read over USB serial: only Home Assistant has the production file's key) before and after "Check for updates" on its "Firmware Update" in Home Assistant, three times. TLS buffers come from internal RAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC` is off) | Note it; 20 KB or more left at the lowest point. If thinner, try `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: y` (`esp32: framework: sdkconfig_options`) and measure rows 2 and 13 again |
+
+Measured on the bench tablet on 2026-11-14 with engine 0.1.0 and the
+all-cards dashboard (Guition board, turned picture, Wi-Fi power saving off).
+The touch ribbon was loose during these runs, which cost about 1 ms in every
+pass of the main loop; they were not measured again.
+
+| # | Measured |
+|---|---|
+| 1 | Free internal RAM after boot 113,284 to 113,560 bytes (largest block 84 KB); 107 to 109 KB with the dashboard; the same before and after 100 dashboard switches (107,932 bytes) |
+| 2 | 7.3 and 9.4 ms on a slider (measured after the ribbon was reseated) |
+| 3 | 36.6, 45.3, 49.1 and 53.1 ms for the four pages (53.4 ms at most); 15.8 ms of each full frame is the flush. The turned picture costs under 2 ms |
+| 4 | 10.9 to 12.0 ms for 10 values (126 bytes, signed); the `auth` check alone 2.75 ms for 12 KB |
+| 5 | Build 198 to 230 ms, longest step 5.6 ms. Over a larger dashboard each step is longer while the old one is still there: 15.5 ms (64 KB), 22.9 ms (100 KB), 33.7 ms (128 KB); without the heap walk in a build step (engine 0.2.0) 6.3, 13.2 and 20.8 ms, the longest being the swap step |
+| 5b | Engine start 6.29 to 6.80 s after power-on (7.29 s in the tablet file with the turned picture); the stored all-cards dashboard on screen at 6.7 s, a 128 KB one at 11.8 s |
+| 6 | 38 ms (11.5 KB), 216 ms (65 KB), 334 ms (100 KB), 425 ms (130.5 KB): 3.3 µs a byte |
+| 7 | 257, 406 and 533 ms for 65, 100 and 130.5 KB, in the writer task; the main loop's longest pass meanwhile 8.0 ms. An erase takes 39 ms |
+| 8 | PSRAM |
+| 9 | Free PSRAM 28.76 MB before and 28.69 MB after a switch to the all-cards dashboard; largest block 28.3 MB both times |
+| 10 | 61 ms for the all-cards dashboard in steps of under 4 ms; 721 ms for the 128 KB one |
+| 11 | 2,812 of 4,096 bytes of stack free during a 128 KB write |
+| 12 | 6.29 to 6.80 s (row 5b) |
+| 13 | Lowest free internal RAM 33.7 to 37.5 KB while Wi-Fi starts and the update check runs; largest internal block 27.6 to 33.8 KB afterwards |
+
+Still to measure with engine 0.2.0 (cards spec G.5): page switches on the
+cards fixture and its detail pages, press to pixel on a card after its
+80 ms, one `tab_set` with a colour and 9 other values on and off screen,
+builds of the cards fixture over a small and over the 128 KB dashboard,
+free internal RAM at the same three moments, 6 track bars and the 192 px
+clock, every control of the owner's colour lamp, and the feel of a hold
+against a swipe.
 
 Checks:
 

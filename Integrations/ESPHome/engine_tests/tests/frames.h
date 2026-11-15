@@ -23,7 +23,10 @@
 
 namespace frames {
 
-static const char *LAYOUTS[] = {"layout_small", "layout_all_cards"};
+// layout_v2_cards.v1 is the cards fixture's form for engine 0.1.0 (cards spec
+// G.2, E12). layout_all_cards stays last: the steps of state_stream.json are
+// its values.
+static const char *LAYOUTS[] = {"layout_small", "layout_v2_cards.v1", "layout_all_cards"};
 static const char *FRAME_NONCE = "0123456789abcdef0123456789abcdef";
 static const char *FRAME_SECRET_HEX = "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283";
 static const char *FRAME_PSK_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";

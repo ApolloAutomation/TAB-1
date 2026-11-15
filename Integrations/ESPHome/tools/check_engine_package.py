@@ -62,8 +62,9 @@ Static checks (always run, no ESPHome needed):
     builds the whole of fast_display.h against the stand-in headers in
     engine_tests/host/fast_display_sim (one for each header it includes)
     and tests flush_cb, setup and set_enabled (tests/test_flush_cb.cpp);
-  - engine_tests/tools/fetch_lvgl.sh pins LVGL 9.5.0 by commit and refuses
-    a source or a copy of another commit (run on stand-in sources);
+  - engine_tests/tools/fetch_lvgl.sh pins LVGL 9.5.0 by commit, refuses
+    a source or a copy of another commit and never uses a copy with no
+    commit record as it is (run on stand-in sources);
   - engine_tests/run.sh builds everything with -ffp-contract=off, and builds
     and runs the frozen sources of engine 0.1.0 (engine_tests/frozen/0.1.0)
     optimised and with sanitizers before the engine, whose host test
@@ -142,14 +143,20 @@ folder). The copy gets a secrets.yaml with random throwaway secrets.
 --offline points every download of the ESPHome runs at a closed local port
 and copies the download caches (touch firmware, fonts, libraries) from this
 folder's .esphome into the work copy, so nothing is fetched from the
-internet. ESP-IDF components that are not in ESPHome's local component
+internet. --seed DIR names another .esphome folder (for a worktree, the main
+checkout's) to copy those caches and the build cache from when this folder
+has none. ESP-IDF components that are not in ESPHome's local component
 mirror must then come from a folder named in IDF_COMPONENT_LOCAL_STORAGE_URL,
 or from the work copy's build cache (dependencies.lock, managed_components).
+ESP-IDF itself (the framework, its compiler and its Python environment) is
+never copied: ESPHome keeps it in the user's cache folder. When it is not
+there, ESPHome tries to download it, --offline blocks that, and the failed
+compile check names that as its cause.
 
 Usage (-B: Python writes no __pycache__ into tools/):
   python3 -B tools/check_engine_package.py [--contract DIR] [--engine-dir DIR]
       [--peer-contract DIR] [--host] [--config] [--compile] [--work DIR] [--offline]
-      [--esphome PATH] [--report FILE]
+      [--seed DIR] [--esphome PATH] [--report FILE]
   python3 -B tools/check_engine_package.py --record-files
       (after raising the files version: writes the SHA-256 lines)
 
@@ -225,6 +232,7 @@ COPY_IGNORE = shutil.ignore_patterns(
 )
 OFFLINE_PROXY = "http://127.0.0.1:9"
 OFFLINE_CACHE_DIRS = ("gsl3670", "font", "pio_components")
+SEED_DIRS = []  # --seed: more .esphome folders to copy caches from, after this folder's
 
 
 # ---------------------------------------------------------------------------
@@ -2900,55 +2908,82 @@ def host_test_problems(run_sh, frozen_present):
     return problems
 
 
-# The engine answers protocol 2 only once the whole of version 2 is drawn
-# (cards spec B.8): until then tab_state.h keeps TAB_PROTO_HIGH at 1, no
-# shipped YAML raises it, and only the host tests build with 2.
+# The contract versions the engine tells Home Assistant it speaks (cards spec
+# B.8, package E12): tab_state.h sets TAB_PROTO_HIGH once, to contract.json's
+# `proto`, and PROTO_LOW to its `proto_low`. Nothing else names
+# TAB_PROTO_HIGH: no YAML (in any folder), no other engine file and no build
+# line of run.sh, so the host tests build what the tablet runs.
 PROTO_DEFAULT_RE = re.compile(r"^#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH (\d+)\n#endif$", re.M)
-PROTO_FLAG_RE = re.compile(r"-DTAB_PROTO_HIGH(?:=(\S+))?")
+PROTO_CONST_RE = re.compile(r"static const int PROTO_LOW = (\d+), PROTO_HIGH = TAB_PROTO_HIGH;")
 
 
-def proto_high_problems(state_h, yamls, run_sh):
+def proto_yaml_files(root):
+    """Every YAML under root, apart from build output and dot folders."""
+    out = []
+    for p in sorted(root.rglob("*.yaml")):
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts) or rel.parts[0] == "engine_tests":
+            continue
+        out.append(p)
+    return out
+
+
+def proto_high_problems(state_h, others, run_sh, proto, proto_low):
     problems = []
     live = live_cpp(state_h)
     found = PROTO_DEFAULT_RE.findall(live)
-    if found != ["1"]:
-        problems.append(f"tab_state.h does not default TAB_PROTO_HIGH to 1 (found {found})")
+    if found != [str(proto)]:
+        problems.append(f"tab_state.h does not set TAB_PROTO_HIGH to contract.json's proto {proto} (found {found})")
     elif re.findall(r"#\s*(?:define|undef)\s+TAB_PROTO_HIGH\b", live) != ["#define TAB_PROTO_HIGH"]:
         problems.append("tab_state.h sets TAB_PROTO_HIGH more than once")
-    for name, text in sorted(yamls.items()):
+    low = PROTO_CONST_RE.findall(live)
+    if low != [str(proto_low)]:
+        problems.append(f"tab_state.h does not set PROTO_LOW to contract.json's proto_low {proto_low} beside PROTO_HIGH (found {low})")
+    for name, text in sorted(others.items()):
         if "TAB_PROTO_HIGH" in text:
             problems.append(f"{name} names TAB_PROTO_HIGH")
-    flags = [m for line in run_sh.splitlines() if not line.lstrip().startswith("#") for m in PROTO_FLAG_RE.findall(line)]
-    if flags != ["2"]:
-        problems.append(f"engine_tests/run.sh does not build the engine tests with -DTAB_PROTO_HIGH=2 exactly once (found {flags})")
+    flags = [line for line in run_sh.splitlines() if not line.lstrip().startswith("#") and "TAB_PROTO_HIGH" in line]
+    if flags:
+        problems.append(f"engine_tests/run.sh builds with its own TAB_PROTO_HIGH ({flags})")
     return problems
 
 
-def check_proto_high(rep):
+def check_proto_high(contract, rep):
     state_h = _read_or_empty(ROOT / "engine" / "tab_state.h")
-    yamls = {p.name: _read_or_empty(p) for p in sorted(ROOT.glob("*.yaml"))}
+    others = {str(p.relative_to(ROOT)): _read_or_empty(p) for p in proto_yaml_files(ROOT)}
+    for p in sorted((ROOT / "engine").glob("*.h")):
+        if p.name != "tab_state.h":
+            others[f"engine/{p.name}"] = live_cpp(_read_or_empty(p))
+    for name in ("engine_glue.h", "ota_lock.h"):
+        others[name] = live_cpp(_read_or_empty(ROOT / name))
     run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
-    problems = proto_high_problems(state_h, yamls, run_sh)
+    proto, proto_low = contract.get("proto"), contract.get("proto_low")
+    problems = proto_high_problems(state_h, others, run_sh, proto, proto_low)
     rep.check(
-        "protocol: the shipped engine speaks up to protocol 1 (TAB_PROTO_HIGH defaults to 1 in tab_state.h, no YAML raises it), the host tests build with -DTAB_PROTO_HIGH=2",
+        f"protocol: the engine speaks contract versions {proto_low} to {proto} (TAB_PROTO_HIGH and PROTO_LOW in tab_state.h are contract.json's proto and proto_low), and no YAML, other engine file or run.sh build line sets TAB_PROTO_HIGH",
         not problems,
         "; ".join(problems),
     )
-    block = "#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 1\n#endif"
-    flag = "-DTAB_PROTO_HIGH=2"
+    block = f"#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH {proto}\n#endif"
+    const = f"static const int PROTO_LOW = {proto_low}, PROTO_HIGH = TAB_PROTO_HIGH;"
+    build = '$COMMON -I"$FW/engine" "$T/tests/test_engine.cpp"'
     cases = (
-        ("as shipped", state_h, yamls, run_sh, True),
-        ("default 2", state_h.replace(block, block.replace("HIGH 1", "HIGH 2")), yamls, run_sh, False),
-        ("default commented out", state_h.replace(block, "// " + block.replace("\n", "\n// ")), yamls, run_sh, False),
-        ("raised after the default", state_h + "\n#undef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 2\n", yamls, run_sh, False),
-        ("a YAML build flag", state_h, {**yamls, "TAB-1-engine.yaml": yamls.get("TAB-1-engine.yaml", "") + "\n  build_flags:\n    - -DTAB_PROTO_HIGH=2\n"}, run_sh, False),
-        ("no flag in run.sh", state_h, yamls, run_sh.replace(flag, ""), False),
-        ("the flag only in a comment", state_h, yamls, run_sh.replace(flag, "") + "\n# " + flag + "\n", False),
-        ("the flag set to 1", state_h, yamls, run_sh.replace(flag, "-DTAB_PROTO_HIGH=1"), False),
+        ("as shipped", state_h, others, run_sh, True),
+        ("default 1", state_h.replace(block, block.replace(f"HIGH {proto}", "HIGH 1")), others, run_sh, False),
+        ("default commented out", state_h.replace(block, "// " + block.replace("\n", "\n// ")), others, run_sh, False),
+        ("lowered after the default", state_h + "\n#undef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 1\n", others, run_sh, False),
+        ("PROTO_LOW 2", state_h.replace(const, const.replace(f"LOW = {proto_low}", "LOW = 2")), others, run_sh, False),
+        ("a YAML build flag", state_h, {**others, "TAB-1-engine.yaml": others.get("TAB-1-engine.yaml", "") + "\n  build_flags:\n    - -DTAB_PROTO_HIGH=1\n"}, run_sh, False),
+        ("a YAML in a folder", state_h, {**others, "adopt/tab1-adopted.yaml": "esphome:\n  platformio_options:\n    build_flags: -DTAB_PROTO_HIGH=1\n"}, run_sh, False),
+        ("another engine file", state_h, {**others, "engine/tab_core.h": "#define TAB_PROTO_HIGH 1\n"}, run_sh, False),
+        ("a flag in run.sh", state_h, others, run_sh.replace(build, "-DTAB_PROTO_HIGH=1 " + build), False),
+        ("the flag only in a comment of run.sh", state_h, others, run_sh + "\n# -DTAB_PROTO_HIGH=1\n", True),
     )
-    wrong = [what for what, h, y, r, passes in cases if (not proto_high_problems(h, y, r)) != passes]
+    wrong = [what for what, h, o, r, passes in cases if (not proto_high_problems(h, o, r, proto, proto_low)) != passes]
+    if build not in run_sh:
+        wrong.append("run.sh has no engine build line to try a flag on")
     rep.check(
-        f"self-test: the protocol rule passes the shipped files and fails a raised default, a YAML flag or a host build without 2 ({len(cases)} cases)",
+        f"self-test: the protocol rule passes the shipped files and fails another default, a lowered value, another PROTO_LOW, a flag in a YAML (also in a folder), in another engine file or in run.sh ({len(cases)} cases)",
         not wrong,
         f"wrong for: {wrong}" if wrong else "",
     )
@@ -2982,8 +3017,10 @@ def check_host_tests(rep):
 
 # LVGL for the host tests, pinned by commit (cards spec B.9, G.2 E11):
 # engine_tests/tools/fetch_lvgl.sh names LVGL_COMMIT and refuses a source or
-# a copy that names another one. --compile compares the pin with the LVGL the
-# firmware build got (its idf_component.yml names the commit).
+# a copy that names another one. A copy with no commit record is copied again
+# from a source, or refused when there is none. --compile compares the pin
+# with the LVGL the firmware build got (its idf_component.yml names the
+# commit).
 FETCH_LVGL = Path("engine_tests") / "tools" / "fetch_lvgl.sh"
 LVGL_PIN_RE = re.compile(r"^LVGL_COMMIT=([0-9a-f]{40})$", re.M)
 
@@ -3034,6 +3071,15 @@ def lvgl_fetch_problems(script):
             (tmp / "c1" / ".lvgl_commit").write_text("0" * 40 + "\n", encoding="utf-8")
             if run(None, tmp / "c1") == 0:
                 problems.append("a copy of another commit is taken")
+            # A copy from before the commit was recorded: nothing says which
+            # commit it is, so it is never used as it is.
+            (tmp / "c1" / ".lvgl_commit").unlink()
+            if run(None, tmp / "c1") == 0:
+                problems.append("a copy with no commit record is taken as it is")
+            if run(source("other2", "1" * 40), tmp / "c1") == 0:
+                problems.append("a copy with no commit record is taken although the source names another commit")
+            if run(good, tmp / "c1") != 0 or _read_or_empty(tmp / "c1" / ".lvgl_commit").strip() != pin:
+                problems.append("a copy with no commit record is not copied again from the pinned source")
         if run(source("other", "1" * 40), tmp / "c2") == 0:
             problems.append("a source naming another commit is taken")
         if run(source("none"), tmp / "c3") != 0:
@@ -3055,16 +3101,18 @@ def check_lvgl_pin(rep):
     script = _read_or_empty(ROOT / FETCH_LVGL)
     problems = lvgl_fetch_problems(script)
     rep.check(
-        f"host tests: {FETCH_LVGL.as_posix()} pins LVGL 9.5.0 by commit ({lvgl_pin() or 'none'}): it copies a source of that commit and records it, refuses a source or a copy of another commit (named in idf_component.yml or as a git checkout's HEAD), and takes one that names none",
+        f"host tests: {FETCH_LVGL.as_posix()} pins LVGL 9.5.0 by commit ({lvgl_pin() or 'none'}): it copies a source of that commit and records it, refuses a source or a copy of another commit (named in idf_component.yml or as a git checkout's HEAD), takes a source that names none, and copies a copy with no commit record again (or refuses it when there is no source)",
         not problems,
         "; ".join(problems),
     )
     unpinned = re.sub(r"(?m)^LVGL_COMMIT=.*\n", "", script, count=1)
     no_check = script.replace('if [ -n "$c" ] && [ "$c" != "$LVGL_COMMIT" ]; then', 'if false; then', 1)
-    cases = {"no pin": unpinned, "the source check gone": no_check}
+    # A copy with no record taken as it is, the way the script once did.
+    no_record = script.replace('  if [ -z "$c" ]; then\n    NO_RECORD=1\n', '  if [ -z "$c" ]; then\n    exit 0\n', 1)
+    cases = {"no pin": unpinned, "the source check gone": no_check, "a copy with no record taken": no_record}
     missed = [name for name, text in cases.items() if text == script or not lvgl_fetch_problems(text)]
     rep.check(
-        f"self-test: the LVGL pin rule fails a fetch_lvgl.sh without the pin or without the source check ({len(cases)} cases)",
+        f"self-test: the LVGL pin rule fails a fetch_lvgl.sh without the pin, without the source check or one that takes a copy with no commit record ({len(cases)} cases)",
         not problems and not missed,
         f"not caught: {missed}" if missed else ("skipped: the pin rule fails" if problems else ""),
     )
@@ -3855,7 +3903,9 @@ def data_dir_for(copy_dir):
 
 def seed_offline_caches(copy_dir, dst_root=None):
     dst_root = Path(dst_root) if dst_root else data_dir_for(copy_dir)
-    for src_root, names in ((ROOT / ".esphome", OFFLINE_CACHE_DIRS), (data_dir_for(copy_dir), OFFLINE_CACHE_DIRS + (".espressif",))):
+    sources = [(ROOT / ".esphome", OFFLINE_CACHE_DIRS)] + [(d, OFFLINE_CACHE_DIRS) for d in SEED_DIRS]
+    sources.append((data_dir_for(copy_dir), OFFLINE_CACHE_DIRS + (".espressif",)))
+    for src_root, names in sources:
         if src_root.resolve() == dst_root.resolve():
             continue
         for name in names:
@@ -4342,9 +4392,59 @@ def check_warning_gate_self_test(rep):
     )
 
 
+# ESPHome keeps ESP-IDF, its compiler and its Python environment in the
+# user's cache folder, not in .esphome. When they are gone (a program that
+# empties caches removes them) ESPHome downloads them again, and --offline
+# blocks that. The failed compile then says so itself, ahead of the log's
+# last lines.
+IDF_DOWNLOAD_RE = re.compile(r"Downloading ESP-IDF (\S+) framework")
+IDF_DOWNLOAD_FAILED = "Failed to download from all mirrors"
+MISSING_TOOLCHAIN_SELF_TESTS = (
+    (
+        "not installed, download blocked",
+        "INFO Checking ESP-IDF 5.5.6 framework ...\nINFO Downloading ESP-IDF 5.5.6 framework ...\nERROR Failed to download from all mirrors:\n  https://example.invalid/esp-idf-v5.5.6.tar.xz\n",
+        "5.5.6",
+    ),
+    ("installed", "INFO Checking ESP-IDF 5.5.6 framework ...\nINFO Checking ESP-IDF 5.5.6 framework installation ...\nINFO Successfully compiled program.\n", ""),
+    ("downloaded, then a compiler error", "INFO Downloading ESP-IDF 5.5.6 framework ...\nsrc/main.cpp:1:1: error: 'x' was not declared in this scope\n", ""),
+    ("another download failed", "INFO Checking ESP-IDF 5.5.6 framework ...\nERROR Failed to download from all mirrors:\n  https://example.invalid/font.ttf\n", ""),
+)
+
+
+def missing_toolchain(log_text):
+    """The ESP-IDF version a failed `esphome compile` could not download
+    because it is not installed, or "" when the log shows another cause."""
+    text = ANSI_RE.sub("", log_text)
+    m = IDF_DOWNLOAD_RE.search(text)
+    return m.group(1) if m and IDF_DOWNLOAD_FAILED in text[m.end() :] else ""
+
+
+def missing_toolchain_hint(log_text, offline):
+    version = missing_toolchain(log_text)
+    if not version:
+        return ""
+    way_out = "--offline blocks every download: run the check once without it" if offline else "ESPHome needs the network once to install it"
+    return f"ESP-IDF {version} is not installed in ESPHome's tools cache, and its download failed. {way_out} (docs/engine.md, Checks)\n      "
+
+
+def check_missing_toolchain_self_test(rep):
+    wrong = [name for name, text, want in MISSING_TOOLCHAIN_SELF_TESTS if missing_toolchain(text) != want]
+    rep.check(
+        f"self-test: a compile that failed because ESP-IDF is not installed and could not be downloaded is named as that, and no other failure is ({len(MISSING_TOOLCHAIN_SELF_TESTS)} cases)",
+        not wrong,
+        f"wrong: {wrong}" if wrong else "",
+    )
+
+
 def run_compile(esphome, copy_dir, work, env, rep):
-    seed = data_dir_for(copy_dir) / "build" / (load_yaml(copy_dir / PROD).get("substitutions") or {}).get("name", "apollo-tab-1")
-    seeded = (seed / "managed_components").is_dir() and (seed / "dependencies.lock").is_file()
+    prod_name = (load_yaml(copy_dir / PROD).get("substitutions") or {}).get("name", "apollo-tab-1")
+    for root in [data_dir_for(copy_dir)] + SEED_DIRS:
+        seed = root / "build" / prod_name
+        seeded = (seed / "managed_components").is_dir() and (seed / "dependencies.lock").is_file()
+        if seeded:
+            break
+    else:
+        seed = data_dir_for(copy_dir) / "build" / prod_name
     print(f"note  compile: seed build cache {seed}{'' if seeded else ' (none: components come from the network or the local mirror)'}", flush=True)
     for label, entry, folder in VARIANTS:
         data = work / folder
@@ -4373,7 +4473,7 @@ def run_compile(esphome, copy_dir, work, env, rep):
         if not rep.check(
             f"compile {label}: esphome compile {entry} for the P4",
             ok,
-            f"log {log}" if ok else f"exit {code}, log {log}\n      {_tail(log, 40)}",
+            f"log {log}" if ok else f"exit {code}, log {log}\n      {missing_toolchain_hint(text, env.get('HTTPS_PROXY') == OFFLINE_PROXY)}{_tail(log, 40)}",
         ):
             continue
         own, other = compile_warnings(text)
@@ -4456,8 +4556,9 @@ engine_tests/run.sh), the
 release workflow, the waiting-screen words in docs/engine.md (and no line
 of it starting with ">"), the waiting-screen words against the contract's
 screens.json, and the self-tests of the YAML reader, the files rule, the
-restart rule, the docs check, the contract check, the contract comparison
-and the --compile warning gate. With --peer-contract the contract folder is
+restart rule, the docs check, the contract check, the contract comparison,
+the --compile warning gate and the line a failed compile gives when ESP-IDF
+is not installed. With --peer-contract the contract folder is
 also compared with the integration's copy, file for file. Where PyYAML happens to be installed, the YAML of every file read is
 also compared with PyYAML's.
 
@@ -4483,6 +4584,7 @@ def main():
     parser.add_argument("--compile", action="store_true", help="also run esphome compile for production, bench and an adoption")
     parser.add_argument("--work", help="work folder outside this repository (default: a new temporary folder)")
     parser.add_argument("--offline", action="store_true", help="block downloads in ESPHome runs and reuse local caches")
+    parser.add_argument("--seed", action="append", default=[], help="another .esphome folder to copy download and build caches from (repeatable)")
     parser.add_argument("--esphome", help="esphome command (default: esphome on PATH)")
     parser.add_argument("--report", help="write the results as JSON to this file")
     parser.add_argument(
@@ -4497,6 +4599,11 @@ def main():
         if problem:
             sys.exit(problem)
         return
+
+    for seed_dir in args.seed:
+        if not Path(seed_dir).is_dir():
+            sys.exit(f"--seed {seed_dir}: no such folder")
+        SEED_DIRS.append(Path(seed_dir).resolve())
 
     contract_dir = Path(args.contract)
     if not (contract_dir / "contract.json").is_file():
@@ -4517,7 +4624,7 @@ def main():
         check_display(rep)
         check_host_tests(rep)
         check_lvgl_pin(rep)
-        check_proto_high(rep)
+        check_proto_high(contract, rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
         check_fonts(engine, contract, icons, contract_dir, rep)
@@ -4531,6 +4638,7 @@ def main():
         check_release(prod, bench, rep)
         check_files(engine_dir, rep, substitute)
         check_warning_gate_self_test(rep)
+        check_missing_toolchain_self_test(rep)
         check_lv_conf_self_test(rep)
         yaml_cross_check(rep)
     except YamlError as err:

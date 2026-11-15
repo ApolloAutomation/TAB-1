@@ -16,6 +16,10 @@
 # commit), is refused. A source that names none is taken by its version, with
 # a warning. The copy keeps the commit in .lvgl_commit.
 #
+# A copy without .lvgl_commit was made before the commit was recorded, so
+# nothing says which commit it is. It is not used as it is: it is copied
+# again from a source, and refused when there is no source.
+#
 # Usage: tools/fetch_lvgl.sh [dest]
 set -eu
 T="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,19 +51,26 @@ commit_of() {
   echo ""
 }
 
+NO_RECORD=""
 if [ -f "$DEST/lv_version.h" ] && [ -d "$DEST/src" ]; then
   v=$(version_of "$DEST")
-  c=$(cat "$DEST/.lvgl_commit" 2>/dev/null || true)
-  if [ "$v" = "9.5.0" ] && { [ -z "$c" ] || [ "$c" = "$LVGL_COMMIT" ] || [ "$c" = "unknown" ]; }; then
-    echo "LVGL $v already copied to $DEST (commit ${c:-not recorded})"
-    exit 0
+  if [ "$v" != "9.5.0" ]; then
+    echo "LVGL copy in $DEST is version '$v', not 9.5.0. Delete it and run again." >&2
+    exit 1
   fi
-  if [ "$v" = "9.5.0" ]; then
+  c=$(cat "$DEST/.lvgl_commit" 2>/dev/null || true)
+  if [ -z "$c" ]; then
+    NO_RECORD=1
+  elif [ "$c" = "$LVGL_COMMIT" ]; then
+    echo "LVGL $v already copied to $DEST (commit $c)"
+    exit 0
+  elif [ "$c" = "unknown" ]; then
+    echo "LVGL $v already copied to $DEST (its source named no commit; taken by its version only)"
+    exit 0
+  else
     echo "LVGL copy in $DEST is commit $c, not $LVGL_COMMIT. Delete it and run again." >&2
     exit 1
   fi
-  echo "LVGL copy in $DEST is version '$v', not 9.5.0. Delete it and run again." >&2
-  exit 1
 fi
 
 SRC=""
@@ -70,8 +81,15 @@ for c in "${TAB_LVGL_SRC:-}" "$FW/.esphome/build/apollo-tab-1/managed_components
   fi
 done
 if [ -z "$SRC" ]; then
-  echo "No LVGL sources found. Set TAB_LVGL_SRC to an LVGL 9.5.0 folder, or compile the firmware once." >&2
+  if [ -n "$NO_RECORD" ]; then
+    echo "LVGL copy in $DEST has no commit record (.lvgl_commit), and no LVGL sources were found to copy it again. Set TAB_LVGL_SRC to an LVGL 9.5.0 folder, or compile the firmware once." >&2
+  else
+    echo "No LVGL sources found. Set TAB_LVGL_SRC to an LVGL 9.5.0 folder, or compile the firmware once." >&2
+  fi
   exit 1
+fi
+if [ -n "$NO_RECORD" ]; then
+  echo "LVGL copy in $DEST has no commit record (.lvgl_commit); copying it again from $SRC"
 fi
 
 v=$(version_of "$SRC")

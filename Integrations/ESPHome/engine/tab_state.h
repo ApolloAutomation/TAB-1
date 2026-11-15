@@ -24,12 +24,12 @@ namespace tab {
 namespace detail {
 
 static const char *const ENGINE_VERSION = "0.2.0";
-// The highest contract version this build tells Home Assistant it speaks.
-// It stays 1 until the engine draws all of version 2: a build from the
-// middle of that work must get version 1 layouts, which it draws as engine
-// 0.1.0 did (cards spec B.8). The host tests and a bench build set it to 2.
+// The highest contract version this build tells Home Assistant it speaks
+// (contract.json `proto`). Engine 0.2.0 draws all of version 2, so it is 2;
+// the shipped files and the host tests use this one value, and nothing
+// sets it from outside (tools/check_engine_package.py).
 #ifndef TAB_PROTO_HIGH
-#define TAB_PROTO_HIGH 1
+#define TAB_PROTO_HIGH 2
 #endif
 static const int PROTO_LOW = 1, PROTO_HIGH = TAB_PROTO_HIGH;
 // Field 1 of the input payload and of the knock: `input_version` in
