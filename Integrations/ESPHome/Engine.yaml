@@ -385,7 +385,10 @@ lvgl:
   touchscreens:
     - touchscreen_id: touchscreen_id
       long_press_time: 900ms
-  rotation: 270°
+  # Which way up: `screen_rotation` in the entry file, "90" or "270" (the same
+  # picture, half a turn apart). ESPHome turns the picture in software and
+  # each touch point with it, so the engine only ever sees 1280x800.
+  rotation: ${screen_rotation}
   buffer_size: 12%   # 1/8 screen in internal SRAM; fast_display.h relies on it
   default_font: tab_text_16
   bg_color: 0x000000

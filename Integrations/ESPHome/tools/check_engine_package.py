@@ -51,6 +51,14 @@ Static checks (always run, no ESPHome needed):
     script's static mode;
   - Engine.yaml includes exactly `engine` and `engine_glue.h`; engine/ holds
     only .h files; the Montserrat font and its licence are there;
+  - the screen's way up: Engine.yaml takes `lvgl: rotation:` from the
+    substitution `screen_rotation`, both entry files set it to "90", and
+    fast_display.h has its fast path for 90 and for 270 (a kernel for each,
+    both used by the one flush, anything else left to ESPHome's own flush)
+    with the host test of both in engine_tests/run.sh; that script also
+    builds the whole of fast_display.h against the stand-in headers in
+    engine_tests/host/fast_display_sim (one for each header it includes)
+    and tests flush_cb, setup and set_enabled (tests/test_flush_cb.cpp);
   - docs/engine.md quotes each waiting screen of engine/tab_state.h with its
     exact headline and step (none alone or cut short, no old wording; the
     erased one with its second line and the tablet's name) and each Wi-Fi
@@ -80,7 +88,10 @@ Optional steps:
              the copy to delete.
   --config   copies this folder to the work folder and runs `esphome config`
              on both engine files, a simulated ESPHome Builder adoption,
-             TAB-1.yaml and TAB-1-showcase.yaml.
+             TAB-1.yaml and TAB-1-showcase.yaml. The engine files and the
+             adoption must come out with LVGL rotation 90, the two protected
+             files with 270, and an adoption that sets `screen_rotation` to
+             "270" in its own file with 270.
   --compile  also runs `esphome compile` for the P4 on three variants:
              production, bench and the adoption (a device file in a subfolder
              that pulls TAB-1-engine.yaml in as a package with its own key,
@@ -89,7 +100,8 @@ Optional steps:
              Checks the generated src/ folder (engine headers, engine_glue.h
              and ota_lock.h are there, nothing from engine_tests/, string
              arguments are views, the defines and hooks of each variant; what
-             the lock checks read in the YAML, in the generated code: no
+             the lock checks read in the YAML, in the generated code: the
+             LVGL rotation of `screen_rotation`, no
              set_auth_password, the 15-minute window, set_verify_ssl(true)
              and the certificate bundle, USE_SAFE_MODE_CALLBACK, the
              files-version checks with their numbers), builds the adoption
@@ -164,6 +176,18 @@ ADOPT = "adopt/tab1-adopted.yaml"  # written into the work copy only
 ADOPT_NAME = "apollo-tab-1-a1b2c3"
 ADOPT_SECRETS = ("wifi_ssid", "wifi_password")
 ENTRY_INCLUDES = ["fast_display.h", "ota_lock.h"]
+FAST = "fast_display.h"
+FAST_TEST = "engine_tests/tests/test_fast_display.cpp"
+# The whole of fast_display.h on a computer: the test of flush_cb, setup and
+# set_enabled, and the folder of stand-ins for the headers it includes.
+FLUSH_TEST = "engine_tests/tests/test_flush_cb.cpp"
+FAST_SIM = "engine_tests/host/fast_display_sim"
+# The screen's way up: one substitution in the entry files, used by
+# Engine.yaml. 90 and 270 are the two landscape ways, half a turn apart.
+ROTATION_SUB = "screen_rotation"
+ROTATION_DEFAULT = "90"
+ROTATION_OTHER = "270"
+ADOPT_TURNED = "adopt/tab1-adopted-turned.yaml"  # written into the work copy only
 LOCK = "ota_lock.h"
 GLUE = "engine_glue.h"
 MANIFEST_URL = "https://apolloautomation.github.io/TAB-1/firmware/manifest.json"
@@ -929,6 +953,7 @@ top:
   bools: [yes, No, on, OFF, true, False]
   nulls: [~, null]
   strings: [2026.10.2, 15min, 0s, 1e3, 09, "1", 270°]
+  substituted: ${screen_rotation}
   empty:
   flow: { text: " ", font: tab_text_16, nested: [a, {b: c}], none: }
   multi: [a,
@@ -976,6 +1001,7 @@ YAML_SAMPLE_WANT = {
         "bools": [True, False, True, False, True, False],
         "nulls": [None, None],
         "strings": ["2026.10.2", "15min", "0s", "1e3", "09", "1", "270°"],
+        "substituted": "${screen_rotation}",
         "empty": None,
         "flow": {"text": " ", "font": "tab_text_16", "nested": ["a", {"b": "c"}], "none": None},
         "multi": ["a", "b", "c"],
@@ -1813,6 +1839,12 @@ def check_entries(prod, bench, tab1, rep):
             and (esp.get("project") or {}).get("name") == (esp1.get("project") or {}).get("name")
         )
         rep.check(f"entry: {name} is the same device and project as {TAB1}", same)
+        turn = subs.get(ROTATION_SUB)
+        rep.check(
+            f'entry: {name} sets the substitution {ROTATION_SUB} to "{ROTATION_DEFAULT}" ("{ROTATION_OTHER}" is the other way up)',
+            isinstance(turn, (str, int)) and not isinstance(turn, bool) and str(turn).removesuffix("°") == ROTATION_DEFAULT,
+            f"got {turn!r}",
+        )
         check_lock_hooks(name, cfg, rep)
         check_setup(name, cfg, rep)
         check_buttons(name, cfg, rep)
@@ -2510,8 +2542,138 @@ def check_package(engine, rep):
     esp = engine.get("esphome") or {}
     rep.check(f"package: {ENGINE} includes exactly {INCLUDES}", esp.get("includes") == INCLUDES, f"got {esp.get('includes')}")
     lv = engine.get("lvgl") or {}
-    rep.check("package: lvgl rotation 270° and buffer_size 12%", str(lv.get("rotation")) == "270°" and lv.get("buffer_size") == "12%")
+    rep.check(
+        f"package: lvgl rotation is ${{{ROTATION_SUB}}} (the entry file's substitution) and buffer_size 12%",
+        lv.get("rotation") == f"${{{ROTATION_SUB}}}" and lv.get("buffer_size") == "12%",
+        f"got rotation {lv.get('rotation')!r}, buffer_size {lv.get('buffer_size')!r}",
+    )
     rep.check("package: lvgl draws on dsi_display with touchscreen_id", lv.get("displays") == ["dsi_display"])
+
+
+def fast_display_problems(text, test_text, run_sh):
+    """What keeps fast_display.h from having its fast path for both landscape
+    rotations, with the host test of both. An empty list when nothing does."""
+    code = live_cpp(text)
+    problems = []
+    for angle in (ROTATION_DEFAULT, ROTATION_OTHER):
+        if not re.search(rf"\bstatic inline void rot{angle}_rgb565\(", code):
+            problems.append(f"no kernel rot{angle}_rgb565")
+    area = _function(code, "static inline void rotate_area(")
+    for angle in (ROTATION_DEFAULT, ROTATION_OTHER):
+        if f"rot{angle}_rgb565(" not in area:
+            problems.append(f"rotate_area does not use rot{angle}_rgb565")
+    fast = _function(code, "static inline bool fast_rotation(")
+    for angle in (ROTATION_DEFAULT, ROTATION_OTHER):
+        if f"DISPLAY_ROTATION_{angle}_DEGREES" not in fast:
+            problems.append(f"fast_rotation() does not take {angle} degrees")
+    if re.search(r"DISPLAY_ROTATION_(?:0|180)_DEGREES", fast):
+        problems.append("fast_rotation() takes a rotation that has no kernel")
+    flush = _function(code, "static void flush_cb(")
+    if "if (!fast_rotation(" not in flush or "s_stock(d, area, px);" not in flush:
+        problems.append("flush_cb does not leave other rotations to the stock flush")
+    if "rotate_area(" not in flush or f"DISPLAY_ROTATION_{ROTATION_DEFAULT}_DEGREES" not in flush:
+        problems.append("flush_cb does not rotate through rotate_area for both")
+    setup = _function(code, "static bool setup(")
+    if "!fast_rotation(comp->get_rotation())" not in setup:
+        problems.append("setup() does not ask fast_rotation()")
+    if "#ifndef FAST_DISPLAY_HOST_TEST" not in text:
+        problems.append("no FAST_DISPLAY_HOST_TEST guard around the ESPHome part")
+    if "#define FAST_DISPLAY_HOST_TEST" not in test_text or f'#include "{FAST}"' not in test_text:
+        problems.append(f"{FAST_TEST} does not build {FAST} with FAST_DISPLAY_HOST_TEST")
+    for name in (f"rot{ROTATION_DEFAULT}_rgb565(", f"rot{ROTATION_OTHER}_rgb565(", "rotate_area("):
+        if name not in test_text:
+            problems.append(f"{FAST_TEST} does not test {name.rstrip('(')}")
+    if "tests/test_fast_display.cpp" not in run_sh or "test_fast_display_o2" not in run_sh or "test_fast_display_asan" not in run_sh:
+        problems.append("engine_tests/run.sh does not build and run the screen rotation test twice (optimised, sanitizers)")
+    return problems
+
+
+def flush_test_problems(text, test_text, run_sh, stand_ins):
+    """What keeps the host tests from building the whole of fast_display.h
+    (not only the rotation) and testing flush_cb, setup and set_enabled.
+    `stand_ins` are the files in the stand-in folder, relative to it. An
+    empty list when nothing does."""
+    problems = []
+    if f'#include "{FAST}"' not in test_text:
+        problems.append(f"{FLUSH_TEST} does not include {FAST}")
+    if re.search(r"^[ \t]*#[ \t]*define[ \t]+FAST_DISPLAY_HOST_TEST\b", test_text, re.M):
+        problems.append(f"{FLUSH_TEST} defines FAST_DISPLAY_HOST_TEST, which leaves flush_cb and setup out of the build")
+    test_code = live_cpp(test_text)
+    for name in ("fast_display::flush_cb", "fast_display::setup(", "fast_display::set_enabled("):
+        if name not in test_code:
+            problems.append(f"{FLUSH_TEST} does not use {name.rstrip('(')}")
+    # Every header fast_display.h includes by name needs its stand-in, or the
+    # test stops building when one is added.
+    for inc in re.findall(r'^[ \t]*#[ \t]*include[ \t]+"([^"]+)"', text, re.M):
+        if inc not in stand_ins:
+            problems.append(f"{FAST_SIM} has no stand-in for {inc}")
+    script = "\n".join(line for line in run_sh.splitlines() if not line.lstrip().startswith("#"))
+    built = "tests/test_flush_cb.cpp" in script and "host/fast_display_sim" in script
+    # Each run counts: a failure sets the script's exit status.
+    runs = [name for name in ("o2", "asan") if re.search(rf'"\$WORK/test_flush_cb_{name}"[^\n]*\|\| status=1', script)]
+    if not built or runs != ["o2", "asan"]:
+        problems.append("engine_tests/run.sh does not build and run the screen flush test twice (optimised, sanitizers)")
+    return problems
+
+
+def _read_or_empty(path):
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def check_display(rep):
+    text = _read_or_empty(ROOT / FAST)
+    rep.check(f"display: {FAST} is there", bool(text))
+    problems = fast_display_problems(text, _read_or_empty(ROOT / FAST_TEST), _read_or_empty(ROOT / "engine_tests" / "run.sh"))
+    rep.check(
+        f"display: {FAST} has the fast path for {ROTATION_DEFAULT} and {ROTATION_OTHER} degrees (a kernel each, one flush, the stock flush for anything else) and engine_tests/run.sh tests both",
+        not problems,
+        "; ".join(problems),
+    )
+    # The rule itself, on what it must catch: the fast path for 270 only (as
+    # the file was), a flush without the fallback, a kernel gone.
+    only_270 = text.replace(f"rotation == esphome::display::DISPLAY_ROTATION_{ROTATION_DEFAULT}_DEGREES ||", "")
+    no_fallback = text.replace("s_stock(d, area, px);", "")
+    cases = (
+        ("270 only", only_270, f"fast_rotation() does not take {ROTATION_DEFAULT} degrees"),
+        ("no fallback", no_fallback, "flush_cb does not leave other rotations to the stock flush"),
+        ("no 90 kernel", text.replace(f"rot{ROTATION_DEFAULT}_rgb565", "rot_other"), f"no kernel rot{ROTATION_DEFAULT}_rgb565"),
+    )
+    missed = [name for name, changed, want in cases if changed == text or want not in fast_display_problems(changed, "", "")]
+    rep.check(f"self-test: the {FAST} rule catches a fast path for 270 only, a missing fallback and a missing kernel ({len(cases)} cases)", not missed, f"not caught: {missed}")
+    # flush_cb and setup() are below the FAST_DISPLAY_HOST_TEST guard, so the
+    # rotation test does not build them: a second test builds the whole file.
+    flush_test = _read_or_empty(ROOT / FLUSH_TEST)
+    run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
+    sim = ROOT / FAST_SIM
+    stand_ins = {path.relative_to(sim).as_posix() for path in sim.rglob("*.h")} if sim.is_dir() else set()
+    problems = flush_test_problems(text, flush_test, run_sh, stand_ins)
+    rep.check(
+        f"display: engine_tests/run.sh builds the whole of {FAST} against the stand-in headers in {FAST_SIM} and tests flush_cb, setup and set_enabled ({FLUSH_TEST}), optimised and with sanitizers",
+        not problems,
+        "; ".join(problems),
+    )
+    # That rule, on what it must catch.
+    run_line = '"$WORK/test_flush_cb_asan" "$@" || status=1'
+    cases = (
+        ("only the rotation is built", text, "#define FAST_DISPLAY_HOST_TEST 1\n" + flush_test, run_sh, stand_ins, "defines FAST_DISPLAY_HOST_TEST"),
+        ("setup() is not tested", text, flush_test.replace("fast_display::setup(", "setup("), run_sh, stand_ins, "does not use fast_display::setup"),
+        ("flush_cb only in a comment", text, flush_test.replace("fast_display::flush_cb", "flush") + "// fast_display::flush_cb\n", run_sh, stand_ins, "does not use fast_display::flush_cb"),
+        ("a header without a stand-in", text + '\n#include "esp_timer.h"\n', flush_test, run_sh, stand_ins, "no stand-in for esp_timer.h"),
+        ("no stand-in folder", text, flush_test, run_sh, set(), "no stand-in for lvgl.h"),
+        ("the sanitizer run is commented out", text, flush_test, run_sh.replace(run_line, "# " + run_line), stand_ins, "does not build and run the screen flush test twice"),
+        ("a failed run does not count", text, flush_test, run_sh.replace(run_line, run_line.replace(" || status=1", " || true")), stand_ins, "does not build and run the screen flush test twice"),
+        ("the test is not built", text, flush_test, run_sh.replace("tests/test_flush_cb.cpp", "tests/other.cpp"), stand_ins, "does not build and run the screen flush test twice"),
+    )
+    missed = [
+        name
+        for name, fast, test, script, sims, want in cases
+        if (fast, test, script, sims) == (text, flush_test, run_sh, stand_ins) or not any(want in problem for problem in flush_test_problems(fast, test, script, sims))
+    ]
+    rep.check(
+        f"self-test: the screen flush test rule catches a test that builds only the rotation or leaves out setup() or flush_cb, a header without a stand-in, and a run.sh that does not build it, run it or count its result ({len(cases)} cases)",
+        not missed,
+        f"not caught: {missed}",
+    )
 
 
 def check_files(engine_dir, rep, substitute):
@@ -3253,6 +3415,13 @@ def write_adoption(copy_dir):
         "  password: !secret wifi_password\n",
         encoding="utf-8",
     )
+    # The same tablet the other way up: the person's own file sets the
+    # substitution, and it must win over the package's.
+    text = path.read_text(encoding="utf-8")
+    (copy_dir / ADOPT_TURNED).write_text(
+        text.replace("  friendly_name: Apollo TAB-1 a1b2c3\n", f'  friendly_name: Apollo TAB-1 a1b2c3\n  {ROTATION_SUB}: "{ROTATION_OTHER}"\n', 1),
+        encoding="utf-8",
+    )
     # ESPHome reads !secret from the secrets.yaml beside the device file (the
     # Builder's config folder).
     (path.parent / "secrets.yaml").write_text(
@@ -3309,12 +3478,31 @@ def _tail(path, lines=25):
     return "\n      ".join(text[-lines:])
 
 
+# The LVGL rotation `esphome config` prints for each file: the engine files
+# and the adoption take the substitution's default, an adoption that sets the
+# substitution itself gets its own value, the two protected files keep 270.
+CONFIG_ROTATION = {PROD: ROTATION_DEFAULT, BENCH: ROTATION_DEFAULT, ADOPT: ROTATION_DEFAULT, ADOPT_TURNED: ROTATION_OTHER, TAB1: "270", SHOWCASE: "270"}
+LVGL_ROTATION_RE = re.compile(r"(?:  - |    )rotation: '?(\d+)'?")
+
+
+def config_rotations(text):
+    """The `rotation` of each `lvgl:` entry in what `esphome config` printed
+    (a widget's own rotation sits deeper and does not count)."""
+    found, inside = [], False
+    for line in ANSI_RE.sub("", text).splitlines():
+        if line and not line[0].isspace():
+            inside = line.rstrip() == "lvgl:"
+        elif inside and (m := LVGL_ROTATION_RE.fullmatch(line.rstrip())):
+            found.append(m.group(1))
+    return found
+
+
 def run_config(esphome, copy_dir, work, env, rep):
-    for entry in (PROD, BENCH, ADOPT, TAB1, SHOWCASE):
+    for entry in (PROD, BENCH, ADOPT, ADOPT_TURNED, TAB1, SHOWCASE):
         log = work / f"config-{Path(entry).name}.log"
         # ESPHome keeps its data beside the device file; the adopted file sits
         # in a subfolder, so point it at the copy's data (downloaded files).
-        venv = dict(env, ESPHOME_DATA_DIR=str(data_dir_for(copy_dir))) if entry == ADOPT else env
+        venv = dict(env, ESPHOME_DATA_DIR=str(data_dir_for(copy_dir))) if entry in (ADOPT, ADOPT_TURNED) else env
         code = run_esphome(esphome, "config", entry, copy_dir, log, venv, 900)
         text = log.read_text(encoding="utf-8", errors="replace")
         ok = code == 0 and "Configuration is valid!" in text
@@ -3323,6 +3511,9 @@ def run_config(esphome, copy_dir, work, env, rep):
             ok,
             f"log {log}" if ok else f"exit {code}, log {log}\n      {_tail(log)}",
         )
+        if ok:
+            got = config_rotations(text)
+            rep.check(f"config: {entry} comes out with lvgl rotation {CONFIG_ROTATION[entry]}", got == [CONFIG_ROTATION[entry]], f"got {got}")
 
 
 SIZE_RE = {
@@ -3541,6 +3732,12 @@ def check_variant_src(build_dir, copy_dir, rep, label, entry):
     rep.check(f"compile {label}: src/{LOCK} is there and identical (includes resolve from {entry})", lock_ok)
     main = (src / "main.cpp").read_text(encoding="utf-8", errors="replace") if (src / "main.cpp").is_file() else ""
     rep.check(f"compile {label}: main.cpp includes {LOCK} and fast_display.h", f'#include "{LOCK}"' in main and '#include "fast_display.h"' in main)
+    turned = re.findall(r"->set_rotation\(display::DISPLAY_ROTATION_(\d+)_DEGREES\)", main)
+    rep.check(
+        f"compile {label}: main.cpp sets the LVGL rotation to {ROTATION_DEFAULT} degrees ({ROTATION_SUB} reached the generated code)",
+        turned == [ROTATION_DEFAULT],
+        f"got {turned}",
+    )
     for call in ("tab_lock::boot(", "tab_lock::poll(", "tab_lock::safe_mode(", "tab_glue::setup_window_closed()"):
         rep.check(f"compile {label}: main.cpp calls {call.rstrip('(')}", call in main)
     i_lock, i_safe = main.find("tab_lock::safe_mode("), main.find("should_enter_safe_mode(")
@@ -3806,6 +4003,9 @@ number fails, and so does a merge of two branches that raised it to the
 same number, through the `all` hash; raise the number, then
 --record-files), the actions, events
 and fonts against the contract, both entry files and the update lock, the
+screen's way up (the screen_rotation substitution, the fast path of
+fast_display.h for 90 and 270, and its two host tests in
+engine_tests/run.sh), the
 release workflow, the waiting-screen words in docs/engine.md (and no line
 of it starting with ">"), the waiting-screen words against the contract's
 screens.json, and the self-tests of the YAML reader, the files rule, the
@@ -3862,6 +4062,7 @@ def main():
         bench = load_yaml(ROOT / BENCH)
         tab1 = load_yaml(ROOT / TAB1)
         check_package(engine, rep)
+        check_display(rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
         check_fonts(engine, contract, icons, contract_dir, rep)

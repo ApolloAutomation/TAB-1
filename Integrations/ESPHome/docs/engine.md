@@ -6,6 +6,7 @@ new or changed dashboard needs no reflash. An admin picks which dashboard each
 tablet shows.
 
 The screen is landscape, 1280 × 800. Pages switch at once, with no animation.
+It can hang either way up: see "Which way up".
 
 ## Files
 
@@ -16,6 +17,7 @@ The screen is landscape, 1280 × 800. Pages switch at once, with no animation.
 | `Engine.yaml` | The dashboard engine package: actions, events, fonts, screen setup. |
 | `engine_glue.h` | Connects the engine to the tablet: memory, flash storage, encryption key, events, erase. |
 | `ota_lock.h` | Locks firmware updates to the tablet's own key once it has one. |
+| `fast_display.h` | The fast screen path, for both ways up. Shared with `TAB-1.yaml` and the showcase. |
 | `engine/` | The engine itself. Header files only; all of them go into the firmware. |
 | `engine_tests/` | Tests that run on a computer, and their copy of the contract. Never part of the firmware. |
 | `fonts/Montserrat-Medium.ttf` | The text font, with its licence in `fonts/Montserrat-OFL.txt`. |
@@ -335,6 +337,63 @@ default; the Waveshare line is next to it). Keep the two engine files the
 same apart from the key, the `ota` block, the web page and the update
 channel; the package check fails if they drift.
 
+### Which way up
+
+The dashboard is landscape, and the tablet can hang either way up.
+`screen_rotation` in the `substitutions:` block of the entry file says which:
+
+| `screen_rotation` | Picture |
+|---|---|
+| `"90"` | Landscape. The default from firmware 26.11.13.1 on. |
+| `"270"` | The same picture turned by half a turn. Firmware up to 26.11.12.1 was always this way up. |
+
+If the dashboard is upside down where your tablet hangs, set the other
+value, then build and install the firmware again. Touch turns with the
+picture: ESPHome turns every touch point the same way before the dashboard
+sees it, so taps, swipes and the hold to erase need nothing else. Both ways
+up use the fast screen path of `fast_display.h`, so pages switch as fast
+either way. Keep the value the same in both engine files; the package check
+fails if they differ or if the default is not `"90"`.
+
+On a tablet adopted in ESPHome Builder, set it in your own file. It wins
+over the package's value:
+
+```yaml
+substitutions:
+  name: apollo-tab-1-a1b2c3
+  screen_rotation: "270"
+```
+
+A tablet that takes Apollo's releases is always the default way up: the
+value is built into the firmware. So the update from 26.11.12.1 or older to
+26.11.13.1 or newer turns its picture by half a turn. If that is upside down
+where the tablet hangs, turn the tablet, or adopt it in ESPHome Builder and
+set `"270"` as above.
+
+`"0"` and `"180"` are upright, 800 × 1280. ESPHome builds them, but
+dashboards are made for 1280 × 800 and would be cut off, and
+`fast_display.h` leaves them to ESPHome's own screen path. Any other value
+stops the build with ESPHome's error for `rotation`.
+
+`TAB-1.yaml` and `TAB-1-showcase.yaml` keep their own setting (270) and are
+not changed by this.
+
+On the tablet, after flashing (nothing here can be checked without one):
+
+- The dashboard is upright for the way the tablet hangs, and fills the
+  screen edge to edge with the side bar on the left.
+- The log line `fast_display: CPU-rotate flush active (90 degrees,
+  overlapped DMA, …)` shows at start (USB serial from power-on; network
+  logs connect later). "keeping the stock flush" means the fast path is
+  off.
+- A tap on a card presses that card, also in the four corners of the screen.
+- A swipe to the left shows the next page, a swipe to the right the one
+  before, and a slider follows the finger in the same direction.
+- A finger held on the screen in the first 10 s after power-on opens the
+  erase question, and "Cancel" (on the right) closes it.
+- Page switches look as fast as before (row 3 of the hardware checklist),
+  with no stripes or torn bands while a page is drawn.
+
 ### Old copies of the package's files
 
 ESPHome looks for each file under `includes:` in your ESPHome config folder
@@ -375,7 +434,9 @@ check, and `--record-files` refuses it, until the number is raised.
 
 `fast_display.h` and `fonts/` are shared with `TAB-1.yaml` and carry no
 number: a different copy in the config folder is built too, so keep those
-the package's own.
+the package's own. An older `fast_display.h` there has the fast path for
+270 only: at 90 the picture is right, but the log says "keeping the stock
+flush" and pages switch slower.
 
 ## Switching between the 12 tiles, the showcase and the engine
 
@@ -607,7 +668,8 @@ Run from `Integrations/ESPHome`. Use `python3 -B` so Python leaves no
 `__pycache__` folder in `tools/`.
 
 ```sh
-# Engine tests on this computer: protocol, drawing, memory, flash cache.
+# Engine tests on this computer: protocol, drawing, memory, flash cache,
+# and the screen rotation and flush of fast_display.h for both ways up.
 # LVGL 9.5.0 is copied once from a local build, nothing is downloaded.
 engine_tests/run.sh
 
@@ -637,6 +699,39 @@ and undefined-behaviour checks), runs both, saves a screenshot of every page
 of the test dashboards and lists texts that are cut with "…". Its default
 folders (`engine_tests/.lvgl`, `.build`, `out`) are ignored by git.
 
+It also builds and runs `tests/test_fast_display.cpp` the same two ways.
+That test takes the rotation out of `fast_display.h` (with
+`FAST_DISPLAY_HOST_TEST` defined, no LVGL and no ESPHome) and compares it,
+for 90 and for 270, pixel by pixel with ESPHome's own software rotation,
+copied into the test from ESPHome 2026.10.2: whole pictures, single pixels,
+the first and last rows and columns, and areas that cross the tile and its
+two halves, each drawn at the same place on a made-up panel, in bands from
+the top down. It also checks ESPHome's touch rotation against it: a touch
+on a drawn pixel is that pixel, both ways up. Copy the two ESPHome
+functions again when the pinned ESPHome version changes.
+
+The rotation test leaves out the part of `fast_display.h` that talks to the
+tablet, so `tests/test_flush_cb.cpp` builds the whole file, as the firmware
+does, against stand-in headers for ESPHome, ESP-IDF and LVGL
+(`host/fast_display_sim`, one file for each header `fast_display.h`
+includes). It runs the same two ways and plays LVGL and the panel. For 90
+and for 270 it checks that `flush_cb` turns the picture the right way and
+takes the panel's 800 for its width and 1280 for its height (the picture's
+pixel (x, y) is the panel's pixel (799 − y, x) at 90 and (y, 1279 − x) at
+270); that the bands go to the panel from the top down, each as large as
+its part of the tile holds, in the two tile halves by turns when the copies
+overlap and in the whole tile when they do not; that each copy is waited
+for before the next one starts and before LVGL is told the flush is done,
+that the next band is rotated while a copy runs (the overlap), and that a
+copy which did not start is not waited for; that a tablet
+without the panel handle or its semaphore draws through ESPHome's
+`draw_pixels_at`; that nothing is drawn while LVGL is paused; and that
+ESPHome's own flush keeps rotation 0 and 180 (also when the rotation
+changes while the tablet runs), another resolution, another colour depth
+and a tablet with no memory for the tile, each with the line `setup` logs.
+When `fast_display.h` includes a new header, add its stand-in there. Look
+at the stand-ins again when the pinned ESPHome version changes.
+
 With no flags the package check runs only its static checks, and CI runs
 it so: it needs Python 3.12 or later and nothing else (no PyYAML or other
 package to install: it reads the YAML itself, the way PyYAML's safe loader
@@ -654,8 +749,16 @@ the set-up window is not 15 minutes; the update lock hooks are missing
 (`tab_lock::boot`, `poll`, `safe_mode`); a key from the YAML is no longer
 kept in the settings (`keep_key`); the update channel is not the HTTPS
 address above with the certificate checked; a factory reset or safe mode
-button is added; or the two engine files differ in anything but the key,
-`ota`, the web page and the update channel. It also reads the erase (it
+button is added; the two engine files differ in anything but the key,
+`ota`, the web page and the update channel; `Engine.yaml` no longer takes
+its `rotation` from `screen_rotation`, or an engine file sets another
+default than `"90"`; `fast_display.h` loses its fast path for 90 or for
+270, its fallback to ESPHome's flush, or its test in `engine_tests/run.sh`
+(a self-test checks that rule too); or `engine_tests/run.sh` no longer
+builds the whole of `fast_display.h` and runs `tests/test_flush_cb.cpp`
+twice, that test leaves out `flush_cb`, `setup` or `set_enabled`, or a
+header `fast_display.h` includes has no stand-in (with a self-test of that
+rule as well). It also reads the erase (it
 feeds the watchdog before each step and erases the partition once), the
 lock's two restarts (each in its own case, run first in it: not commented
 out or under `#if 0`, not under a condition, before any `break` or
@@ -684,14 +787,19 @@ stop with the error that names it.
 with throwaway secrets in a `secrets.yaml` there. The copy also gets
 `adopt/tab1-adopted.yaml`, the file ESPHome Builder writes when it adopts a
 tablet: it pulls in `TAB-1-engine.yaml` from a subfolder, so every include
-must resolve beside that file, as for the package from GitHub.
+must resolve beside that file, as for the package from GitHub. A second
+one, `adopt/tab1-adopted-turned.yaml`, sets `screen_rotation: "270"` in its
+own substitutions. `--config` reads the rotation ESPHome prints for each
+file: 90 for the two engine files and the adoption, 270 for the turned
+adoption, and 270 for `TAB-1.yaml` and `TAB-1-showcase.yaml`.
 
 The compile builds the three files, each in its own data folder under
 `--work`, and checks the build: `src/` holds the `engine/*.h` headers,
 `engine_glue.h`, `ota_lock.h` and `fast_display.h`, nothing from
 `engine_tests/` and no engine `.c` or `.cpp` file; the lock runs at boot, on
 each loop and in safe mode (before the safe mode check); the build flags for
-updates are the ones each file needs; the generated code sets no update
+updates are the ones each file needs; the generated code sets the LVGL
+rotation to 90, sets no update
 password (`set_auth_password`), sets the 15-minute window, checks the
 update server's certificate (`set_verify_ssl(true)` and the certificate
 bundle in `sdkconfig`), has the safe mode hook (`USE_SAFE_MODE_CALLBACK`)
@@ -723,11 +831,11 @@ certificates).
 
 | | `TAB-1-engine.yaml` | `TAB-1-engine-bench.yaml` | Adopted in ESPHome Builder |
 |---|---|---|---|
-| Firmware (app) | 2,109,104 bytes | 1,897,424 bytes | 2,106,064 bytes |
-| Factory image (app + 64 KB boot and partition table) | 2,174,640 bytes | 1,962,960 bytes | 2,171,600 bytes |
+| Firmware (app) | 2,111,424 bytes | 1,899,616 bytes | 2,108,384 bytes |
+| Factory image (app + 64 KB boot and partition table) | 2,176,960 bytes | 1,965,152 bytes | 2,173,920 bytes |
 | Internal RAM (static) | 111,728 of 576,464 bytes (19.4%) | 109,690 of 576,464 bytes (19.0%) | 111,720 of 576,464 bytes (19.4%) |
-| PSRAM (static) | 2,027,156 bytes | 1,815,640 bytes | 2,024,116 bytes |
-| Flash (app partition) | 2,108,700 of 8,126,464 bytes (25.9%) | 1,897,030 of 8,126,464 bytes (23.3%) | 2,105,660 of 8,126,464 bytes (25.9%) |
+| PSRAM (static) | 2,029,476 bytes | 1,817,832 bytes | 2,026,436 bytes |
+| Flash (app partition) | 2,111,020 of 8,126,464 bytes (26.0%) | 1,899,222 of 8,126,464 bytes (23.4%) | 2,107,980 of 8,126,464 bytes (25.9%) |
 
 ## Contract readings
 

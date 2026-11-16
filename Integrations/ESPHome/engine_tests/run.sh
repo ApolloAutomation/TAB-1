@@ -7,7 +7,13 @@
 # 2. builds LVGL twice: optimised, and with AddressSanitizer
 # 3. builds the test program against engine/ with each, warnings as errors;
 #    the second one with AddressSanitizer and UBSan
-# 4. runs both; the optimised run writes the screenshots and the cut-text report
+# 4. builds the screen rotation test (tests/test_fast_display.cpp, the
+#    rotation of fast_display.h without LVGL or ESPHome) the same two ways
+# 5. builds the screen flush test (tests/test_flush_cb.cpp, the whole of
+#    fast_display.h against the stand-in headers in host/fast_display_sim)
+#    the same two ways
+# 6. runs all six; the optimised engine run writes the screenshots and the
+#    cut-text report
 #
 # Folders (all git-ignored defaults, override to keep the repo clean):
 #   TAB_LVGL_DIR   LVGL copy        default engine_tests/.lvgl
@@ -15,7 +21,9 @@
 #   TAB_OUT_DIR    report           default engine_tests/out
 #   TAB_SHOTS_DIR  screenshots      default $TAB_OUT_DIR/shots
 #
-# Exit code 0 only when both runs pass every check.
+# A test name runs only that test; each program skips the names it lacks.
+#
+# Exit code 0 only when every run passes every check.
 set -u
 T="$(cd "$(dirname "$0")" && pwd)"
 FW="$(cd "$T/.." && pwd)"
@@ -101,10 +109,33 @@ build_test() {
     $COMMON -I"$FW/engine" "$T/tests/test_engine.cpp" "$WORK/liblvgl_$name.a" -lz -o "$WORK/test_engine_$name"
 }
 
+# The rotation in fast_display.h is plain C++: no LVGL, no ESPHome.
+build_display_test() {
+  name="$1"; flags="$2"
+  echo "compiling test_fast_display_$name"
+  # shellcheck disable=SC2086
+  $CXX -std=c++17 $flags -Wall -Wextra -Werror -I"$FW" "$T/tests/test_fast_display.cpp" \
+    -o "$WORK/test_fast_display_$name"
+}
+
+# flush_cb, setup and set_enabled of fast_display.h need ESPHome, ESP-IDF and
+# LVGL names: host/fast_display_sim has a stand-in for each header it includes.
+build_flush_test() {
+  name="$1"; flags="$2"
+  echo "compiling test_flush_cb_$name"
+  # shellcheck disable=SC2086
+  $CXX -std=c++17 $flags -Wall -Wextra -Werror -I"$T/host/fast_display_sim" -I"$FW" "$T/tests/test_flush_cb.cpp" \
+    -o "$WORK/test_flush_cb_$name"
+}
+
 build_lib o2 "$O2_FLAGS" || { echo "LVGL build failed (o2)"; exit 1; }
 build_lib asan "$ASAN_LIB_FLAGS" || { echo "LVGL build failed (asan)"; exit 1; }
 build_test o2 "$O2_FLAGS" || { echo "test build failed (o2)"; exit 1; }
 build_test asan "$ASAN_FLAGS" || { echo "test build failed (asan)"; exit 1; }
+build_display_test o2 "$O2_FLAGS" || { echo "screen rotation test build failed (o2)"; exit 1; }
+build_display_test asan "$ASAN_FLAGS" || { echo "screen rotation test build failed (asan)"; exit 1; }
+build_flush_test o2 "$O2_FLAGS" || { echo "screen flush test build failed (o2)"; exit 1; }
+build_flush_test asan "$ASAN_FLAGS" || { echo "screen flush test build failed (asan)"; exit 1; }
 
 status=0
 echo
@@ -116,6 +147,21 @@ mkdir -p "$WORK/asan_out"
 ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=0:halt_on_error=1}" UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}" \
   TAB_SHOTS_DIR="$WORK/asan_out/shots" \
   "$WORK/test_engine_asan" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/asan_out" --quick "$@" || status=1
+echo
+echo "== screen rotation, optimised build"
+"$WORK/test_fast_display_o2" "$@" || status=1
+echo
+echo "== screen rotation, AddressSanitizer and UBSan build"
+ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=0:halt_on_error=1}" UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}" \
+  "$WORK/test_fast_display_asan" --quick "$@" || status=1
+echo
+echo "== screen flush, optimised build"
+"$WORK/test_flush_cb_o2" "$@" || status=1
+echo
+echo "== screen flush, AddressSanitizer and UBSan build"
+# Short enough to run in full here too.
+ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=0:halt_on_error=1}" UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}" \
+  "$WORK/test_flush_cb_asan" "$@" || status=1
 echo
 if [ "$status" = 0 ]; then echo "ALL PASSED"; else echo "FAILED"; fi
 exit "$status"

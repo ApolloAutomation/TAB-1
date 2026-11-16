@@ -25,7 +25,15 @@
 substitutions:
   name: apollo-tab-1
   friendly_name: Apollo TAB-1
-  version: "26.11.12.1"
+  version: "26.11.13.1"
+  # Which way up the picture is. "90" and "270" are the two landscape ways,
+  # half a turn apart: if the picture is upside down where the tablet hangs,
+  # use the other one. Touch turns with it, and both use the fast screen
+  # path (fast_display.h). "0" and "180" are upright (800x1280): ESPHome
+  # takes them, but the dashboard is made for 1280x800 and would be cut off,
+  # and fast_display.h leaves the screen to ESPHome's own path. Any other
+  # value stops the build. docs/engine.md, "Which way up".
+  screen_rotation: "90"
 
 esphome:
   name: ${name}
