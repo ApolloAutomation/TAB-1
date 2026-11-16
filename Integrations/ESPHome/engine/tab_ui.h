@@ -1132,7 +1132,10 @@ inline void on_chart_draw(lv_event_t *e) {
     // (2) The bars before the mark as usual, the one at it in acc, later
     // ones in card2.
     double k = 0;
-    const int mark = chart_mark(n, bound_num(m, w->mark, &k), k);
+    // bound_num first: the order of a call's arguments is unspecified, and
+    // GCC on x86 reads k before bound_num writes it.
+    const bool has_mark = bound_num(m, w->mark, &k);
+    const int mark = chart_mark(n, has_mark, k);
     for (int i = 0; i < n; i++) {
       const double scaled = (v[i] - lo) / span * h2;
       const double bh = fmin(h2, fmax(2.0, scaled));
@@ -1241,7 +1244,8 @@ inline void on_thermo_draw(lv_event_t *e) {
   // none, and then faded with the widget.
   double mv = 0;
   int32_t d[4];
-  if (!thermo_mark(W, H, bound_num(m, w->mark, &mv), mv, lo, hi, d)) return;
+  const bool has_mark = bound_num(m, w->mark, &mv);  // before mv is read (see on_chart_draw)
+  if (!thermo_mark(W, H, has_mark, mv, lo, hi, d)) return;
   lv_draw_rect_dsc_t dot;
   lv_draw_rect_dsc_init(&dot);
   dot.bg_color = lv_color_hex(k.k.text);
