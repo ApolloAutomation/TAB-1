@@ -57,7 +57,14 @@ static bool check(bool ok, int line, const std::string &what) {
 }
 #define CHECK(c) check((c), __LINE__, #c)
 #define CHECK_MSG(c, msg) check((c), __LINE__, std::string(#c) + "  " + (msg))
-#define CHECK_STR(a, b) check(std::string(a) == std::string(b), __LINE__, std::string(#a) + " == \"" + std::string(b) + "\" (got \"" + std::string(a) + "\")")
+// Each side once: `a` is often a call that changes state (a signed action
+// takes its counter, a chunk moves the transfer on), and a compiler may
+// evaluate a call's arguments in any order (GCC on x86-64 goes right to
+// left), so a second call for the message would be the one compared.
+static bool check_str(const std::string &got, const std::string &want, int line, const char *expr) {
+  return check(got == want, line, std::string(expr) + " == \"" + want + "\" (got \"" + got + "\")");
+}
+#define CHECK_STR(a, b) check_str(std::string(a), std::string(b), __LINE__, #a)
 
 // ---------------------------------------------------------------- environment
 
