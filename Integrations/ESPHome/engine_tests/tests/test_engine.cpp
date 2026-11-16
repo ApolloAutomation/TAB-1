@@ -10062,35 +10062,37 @@ TEST(rate_moves_the_bar) {
 // ================================================================ the cards fixture (package E12)
 //
 // layout_v2_cards is what apollo_tab makes from the nine cards of the first
-// version 2 library: 2 normal pages and a detail page for each light. Engine
-// 0.2.0 must load and draw it before it is released (cards spec A.5, G.4).
+// version 2 library: 2 normal pages and a detail page for each light card
+// that does more than turn on and off (the porch light only turns on and off:
+// its card has no hold and no detail page). Engine 0.2.0 must load and draw it
+// before it is released (cards spec A.5, G.4).
 // Its .v1 form is the same dashboard for engine 0.1.0: this engine loads it
 // here, and the frozen 0.1.0 program draws it in v1_pixels_unchanged
 // (frames.h).
 
-// Values a person would see, in the order of the fixture's 85 slots: the sofa
-// lamp on at 68 % in a warm colour, the ceiling light on at 40 %, the desk
-// lamp on, the porch light off, the kettle on, readings with numbers. The
-// fixture has no values of its own (cards spec I14a).
+// Values a person would see, in the order of the fixture's 104 slots: the
+// sofa lamp on at 68 % in a warm colour, the ceiling light on at 40 %, the
+// desk lamp on at 80 %, the porch light off, the kettle on, readings with
+// numbers. The fixture has no values of its own (cards spec I14a). They are
+// what the fixture's own slot templates (source.json bindings) give for one
+// set of device states, not numbers written by hand.
 static const char *CARDS_VALUES =
-    "[1,1],[2,16755021],[3,0],[4,\"On\"],[5,\"68%\"],[6,68],"
-    "[7,1],[8,0],[9,\"Kettle\"],[10,\"On\"],"
-    "[11,1],[12,16766112],[13,0],[14,\"Ceiling\"],[15,\"On\"],[16,40],"
-    "[17,0],[18,\"Movie\"],[19,\"Dinner\"],[20,\"All off\"],"
-    "[21,1],[22,0],[23,\"On\"],[24,68],[25,30],[26,65],[27,16744448],[28,2700],"
-    "[29,0],[30,7124223],[31,0],[32,984335],[33,\"21.5\xC2\xB0\"],[34,1],[35,0],[36,\"Temperature\"],"
-    "[37,0],[38,\"Outside\"],[39,\"8.5 \xC2\xB0" "C\"],[40,\"Garden\"],"
-    "[41,0],[42,\"Target\"],[43,\"21.5\"],[44,21.5],"
-    "[45,\"Mode\"],[46,0],[47,1],"
-    "[48,0],[49,\"Backlight\"],[50,\"45%\"],[51,45],"
-    "[52,0],[53,\"Night\"],[54,0],"
-    "[55,1],[56,16761722],[57,0],[58,\"Desk\"],[59,\"On\"],[60,80],[61,3000],"
-    "[62,0],[63,null],[64,0],[65,\"Porch\"],[66,\"Off\"],[67,\"\"],"
-    "[68,0],[69,\"Doorbell\"],"
-    "[70,0],[71,10133672],[72,0],[73,985115],[74,\"Front door\"],[75,\"Closed\"],[76,0],[77,1],"
-    "[78,\"Outside\"],"
-    "[79,0],[80,0],[81,\"Guest mode\"],[82,\"Off\"],"
-    "[83,30],[84,2700],[85,null]";
+    "[1,1],[2,16755021],[3,0],[4,\"On \xC2\xB7 68%\"],[5,68],[6,1],[7,0],[8,\"Kettle\"],[9,\"On\"],"
+    "[10,1],[11,16766112],[12,0],[13,\"Ceiling\"],[14,\"On \xC2\xB7 40%\"],[15,40],[16,0],"
+    "[17,\"Movie\"],[18,\"Dinner\"],[19,\"All off\"],[20,1],[21,0],"
+    "[22,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[23,68],[24,30],[25,0],[26,65],[27,16744448],[28,2700],"
+    "[29,0],[30,null],[31,0],[32,\"Temperature\"],[33,\"\"],[34,\"21.5 \xC2\xB0" "C\"],[35,1],[36,0],"
+    "[37,\"\"],[38,0],[39,\"Temperature\"],[40,\"\"],[41,\"21.5 \xC2\xB0" "C\"],[42,983362],[43,0],"
+    "[44,\"Target\"],[45,\"21.5\"],[46,21.5],[47,\"Mode\"],[48,0],[49,\"\"],[50,1],[51,0],"
+    "[52,\"Backlight\"],[53,\"45%\"],[54,45],[55,0],[56,\"Night\"],[57,0],[58,983362],[59,1],"
+    "[60,16761722],[61,0],[62,\"Desk\"],[63,\"On \xC2\xB7 80% \xC2\xB7 3000 K\"],[64,80],[65,3000],"
+    "[66,0],[67,0],[68,null],[69,0],[70,\"Porch\"],[71,\"Off\"],[72,0],[73,\"Doorbell\"],[74,0],"
+    "[75,null],[76,0],[77,985115],[78,\"Front door\"],[79,\"\"],[80,\"Closed\"],[81,0],[82,1],"
+    "[83,984335],[84,\"Temperature\"],[85,0],[86,0],[87,\"Guest mode\"],[88,\"Off\"],[89,\"Night\"],"
+    "[90,\"Mode\"],[91,\"Comfort\"],[92,\"Target\"],[93,\"21.5\"],[94,\"Backlight\"],"
+    "[95,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[96,30],[97,0],[98,2700],[99,\"Ceiling\"],"
+    "[100,\"On \xC2\xB7 40%\"],[101,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[102,\"Desk\"],"
+    "[103,\"On \xC2\xB7 80% \xC2\xB7 3000 K\"],[104,null]";
 
 // The light tiles with `hold`: each card's first label child is the card's
 // (contract 4.3), so a press there is the card's press.
@@ -10236,8 +10238,9 @@ TEST(cards_loads) {
   };
   pictures("none", &none);
   // The widgets the values below speak of, found in the fixture: the first
-  // light tile the values turn on (the sofa lamp), the one they leave off
-  // (the porch light), and the first reading shown in two sizes.
+  // light tile with a hold the values turn on (the sofa lamp), the first
+  // tinted card with a tap they leave off (the porch light, which only turns
+  // on and off and so has no hold), and the first reading shown in two sizes.
   const auto holds = cards_with_hold(dl);
   const std::map<int, tj::Value> vals = cards_values();
   auto value_of = [&](int slot) { auto it = vals.find(slot); return it == vals.end() ? tj::Value() : it->second; };
@@ -10247,8 +10250,16 @@ TEST(cards_loads) {
     if (!c) continue;
     const tj::Value on = value_of(bound_slot(*c, "on"));
     if (!lit_card && on.t == tj::Value::NUM && on.n == 1) lit_card = c;
-    if (!off_card && on.t == tj::Value::NUM && on.n == 0) off_card = c;
   }
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      // A light the tap turns on and off: a reading card has a tint but no tap.
+      if (off_card || it["t"].s != "card" || !bound_slot(it, "tint") || !it.has("tap")) continue;
+      const tj::Value on = value_of(bound_slot(it, "on"));
+      if (on.t == tj::Value::NUM && on.n == 0) off_card = &it;
+    }
+  // The light left off is the on/off one: it has no hold.
+  CHECK(off_card && !off_card->has("hold"));
   const tj::Value *big = nullptr, *small = nullptr;
   for (const tj::Value &p : dl["pages"].a)
     for (const tj::Value &it : p["w"].a)
@@ -10302,7 +10313,7 @@ TEST(cards_loads) {
   tab::go_to(0);
   hh::advance(20);
 
-  // A hold on each light tile opens its own detail page, which sends
+  // A hold on each light card that has one opens its own detail page, which sends
   // nothing; the back entry, or a swipe to the right on the wall under the
   // card, goes back to the page it came from. Swipes skip the detail pages.
   std::set<int> goes;
@@ -10334,12 +10345,33 @@ TEST(cards_loads) {
   CHECK(fake::events("tab1_input").empty());
   tab::go_to(0);
   hh::advance(40);
-  swipe_left();
+  // Swipes on the wall of both normal pages. The usual swipe line (y 700 from
+  // x 900) starts on the brightness bar of page 1's screen card, and a press
+  // that starts on a slider with `change` is never a swipe (contract 4.8).
+  auto item_at = [&](int page, int x, int y, const char *type) {
+    for (const tj::Value &it : dl["pages"][(size_t) page]["w"].a) {
+      const tj::Value &r = it["r"];
+      if (!type && x >= r[0].n && x < r[0].n + r[2].n && y >= r[1].n && y < r[1].n + r[3].n) return true;
+      if (type)
+        for (const tj::Value &w : it["w"].a)
+          if (w["t"].s == type && x >= w["r"][0].n && x < w["r"][0].n + w["r"][2].n && y >= w["r"][1].n &&
+              y < w["r"][1].n + w["r"][3].n)
+            return true;
+    }
+    return false;
+  };
+  CHECK(item_at(1, 900, 700, "slider"));
+  for (int page = 0; page < 2; page++)
+    for (int x : {400, 800})
+      CHECK_MSG(!item_at(page, x, 720, nullptr), "page " + std::to_string(page) + " wall at " + std::to_string(x));
+  auto swipe = [](int x0, int x1) { hh::drag(x0, 720, x1, 720, 120); };
+  swipe(800, 400);
   CHECK(tab::current_page() == 1);
-  swipe_left();
+  swipe(800, 400);
   CHECK(tab::current_page() == 0);
-  swipe_right();
+  swipe(400, 800);
   CHECK(tab::current_page() == 1);
+  CHECK(fake::events("tab1_input").empty());
   tab::go_to(0);
   hh::advance(20);
 

@@ -743,11 +743,14 @@ compiler and one CPU. A frame that differs is saved as
 
 The cards fixture `layout_v2_cards` is what Home Assistant makes from the
 nine cards of the first version 2 library: 2 normal pages and a detail page
-for each of the 5 lights (7 pages, 157 widgets, 85 slots, 15,039 bytes).
-Test `cards_loads` loads it, checks its counts, keys and rectangles against
-the fixture, draws every page with nothing set and with values a person
-would see (`cards_none_page<n>.png`, `cards_values_page<n>.png`), opens each
-light's detail page by a hold and goes back, and presses every control.
+for each of the 4 light cards that do more than turn on and off (6 pages,
+161 widgets, 104 slots, 15,937 bytes); the porch light only turns on and off,
+so its card has no hold and no detail page, and a detail page holds only the
+card, centred, with no heading. Test `cards_loads` loads it, checks its
+counts, keys and rectangles against the fixture, draws every page with
+nothing set and with values a person would see (`cards_none_page<n>.png`,
+`cards_values_page<n>.png`), opens each detail page by a hold and goes back,
+and presses every control.
 Then it loads the fixture's `.v1` form on this engine too.
 
 Card colours follow contract 4.7 in whole numbers: `engine/tab_colour.h`
