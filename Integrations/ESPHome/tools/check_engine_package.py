@@ -7,9 +7,12 @@ Static checks (always run, no ESPHome needed):
   - the two events match contract.json and send `data:` (never a template);
   - every action chain holds only `lambda` and `api.respond`: no delay,
     wait_until or other step that would make ESPHome copy the arguments;
-  - fonts: the ids, sizes and glyph lists equal contract.json `fonts` and
-    icons.json level 1, the generated block is up to date, and the start-up
-    script hands each font to the right slot of tab::Fonts;
+  - fonts: the ids, sizes, bits a pixel and glyph lists equal contract.json
+    `fonts` and icons.json up to level 2 (the 14 fonts), the generated block
+    is up to date, the start-up script hands each font to the right place of
+    tab::Fonts, and the metrics table of engine_tests/host/harness.h has one
+    row per font in that order with no digits font's line higher than
+    contract.json fonts.row_px;
   - both entry files: api and wifi reboot_timeout 0s, the same device as
     TAB-1.yaml, an open hotspot with the set-up page, a 15-minute set-up
     window that tells the waiting screen when it closes, and the update lock
@@ -62,6 +65,13 @@ Static checks (always run, no ESPHome needed):
     builds the whole of fast_display.h against the stand-in headers in
     engine_tests/host/fast_display_sim (one for each header it includes)
     and tests flush_cb, setup and set_enabled (tests/test_flush_cb.cpp);
+  - engine_tests/tools/fetch_lvgl.sh pins LVGL 9.5.0 by commit, refuses
+    a source or a copy of another commit and never uses a copy with no
+    commit record as it is (run on stand-in sources);
+  - engine_tests/run.sh builds everything with -ffp-contract=off, and builds
+    and runs the frozen sources of engine 0.1.0 (engine_tests/frozen/0.1.0)
+    optimised and with sanitizers before the engine, whose host test
+    v1_pixels_unchanged compares their frames byte for byte;
   - docs/engine.md quotes each waiting screen of engine/tab_state.h with its
     exact headline and step (none alone or cut short, no old wording; the
     erased one with its second line and the tablet's name) and each Wi-Fi
@@ -71,17 +81,25 @@ Static checks (always run, no ESPHome needed):
   - the waiting screens and Wi-Fi notes of engine/tab_state.h are the
     contract's screens.json word for word (engine_tests/contract), and so
     are CONTRACT.md section 11 and the hotspot name of both entry files;
+  - with --peer-contract, the contract folder is the integration's, file
+    for file;
   - self-tests: the YAML reader on a sample (and against PyYAML on every
     file read, where PyYAML is installed), the files rule (a merge of two
     branches at one number among its cases), the docs check, the contract
-    check of the waiting screens, the ci.yml rule, and the --compile
-    warning gate.
+    check of the waiting screens, the contract comparison (--peer-contract),
+    the ci.yml rule, and the --compile warning gate.
 
 The static checks need Python 3.12 or later and nothing else: no PyYAML (the
 script reads the YAML itself), no network, no ESPHome, no compiler. This is
 the mode CI runs (no flags).
 
 Optional steps:
+  --peer-contract DIR
+             compares the contract folder with the integration's copy
+             (TAB-Dashboard tests/contract, or a checkout of it), file for
+             file, as the integration's own test compares it with this one.
+             CI checks the integration out and passes it here. Without the
+             flag only the self-test of the comparison runs.
   --host     builds and runs host tests of the flash queue in engine_glue.h
              and of the lock decisions in ota_lock.h (C++17 compiler; with
              address, undefined and thread sanitizers where the compiler has
@@ -114,6 +132,8 @@ Optional steps:
              stop with the error naming it), reads
              every NVS namespace the firmware opens and compares it with the
              erase list, compares the font metrics with the host harness and
+             the host's lv_conf.h with the tablet's (LV_HOST_ONLY apart), the
+             firmware's LVGL commit with the host tests' pin, and
              reports firmware size and RAM and flash use. Any compiler
              warning from engine/, engine_glue.h, ota_lock.h or the lambdas
              of Engine.yaml and the entry files fails (main.cpp, where all
@@ -126,14 +146,20 @@ folder). The copy gets a secrets.yaml with random throwaway secrets.
 --offline points every download of the ESPHome runs at a closed local port
 and copies the download caches (touch firmware, fonts, libraries) from this
 folder's .esphome into the work copy, so nothing is fetched from the
-internet. ESP-IDF components that are not in ESPHome's local component
+internet. --seed DIR names another .esphome folder (for a worktree, the main
+checkout's) to copy those caches and the build cache from when this folder
+has none. ESP-IDF components that are not in ESPHome's local component
 mirror must then come from a folder named in IDF_COMPONENT_LOCAL_STORAGE_URL,
 or from the work copy's build cache (dependencies.lock, managed_components).
+ESP-IDF itself (the framework, its compiler and its Python environment) is
+never copied: ESPHome keeps it in the user's cache folder. When it is not
+there, ESPHome tries to download it, --offline blocks that, and the failed
+compile check names that as its cause.
 
 Usage (-B: Python writes no __pycache__ into tools/):
   python3 -B tools/check_engine_package.py [--contract DIR] [--engine-dir DIR]
-      [--host] [--config] [--compile] [--work DIR] [--offline]
-      [--esphome PATH] [--report FILE]
+      [--peer-contract DIR] [--host] [--config] [--compile] [--work DIR] [--offline]
+      [--seed DIR] [--esphome PATH] [--report FILE]
   python3 -B tools/check_engine_package.py --record-files
       (after raising the files version: writes the SHA-256 lines)
 
@@ -209,6 +235,7 @@ COPY_IGNORE = shutil.ignore_patterns(
 )
 OFFLINE_PROXY = "http://127.0.0.1:9"
 OFFLINE_CACHE_DIRS = ("gsl3670", "font", "pio_components")
+SEED_DIRS = []  # --seed: more .esphome folders to copy caches from, after this folder's
 
 
 # ---------------------------------------------------------------------------
@@ -1230,26 +1257,68 @@ def check_events(engine, contract, rep):
         rep.check(f"events: {script_id} parameters are {sorted(want[name])}", sorted(params) == sorted(want[name]), f"got {params}")
 
 
+HARNESS = Path("engine_tests") / "host" / "harness.h"
+FONT_FAMILY = {"tab_text_": "text", "tab_digits_": "digits", "tab_icon_": "icons"}
+
+
+def harness_metrics(text):
+    """[(family, px, line_height, base_line)] of the DEVICE_METRICS table."""
+    return [(fam, int(px), int(lh), int(bl)) for fam, px, lh, bl in METRIC_RE.findall(text)]
+
+
+def harness_metric_problems(text, contract):
+    """What is wrong with the harness table against contract.json `fonts`:
+    one row per font of Engine.yaml, in its order (--compile compares the
+    numbers with a build), and no digits font whose line is higher than its
+    fonts.row_px (the lowest rectangle HA gives a label of that size)."""
+    problems = []
+    rows = harness_metrics(text)
+    want = []
+    for fid, (_file, px) in gen.font_ids(contract).items():
+        family = next(fam for prefix, fam in FONT_FAMILY.items() if fid.startswith(prefix))
+        want.append((family, px))
+    got = [(fam, px) for fam, px, _lh, _bl in rows]
+    if got != want:
+        problems.append(f"the table has {got}, Engine.yaml's fonts are {want}")
+    row_px = contract["fonts"].get("row_px") or {}
+    for fam, px, lh, _bl in rows:
+        if fam != "digits":
+            continue
+        limit = row_px.get(str(px))
+        if not isinstance(limit, int):
+            problems.append(f"fonts.row_px has no row for the {px} px digits")
+        elif lh > limit:
+            problems.append(f"the {px} px digits font's line is {lh} px, higher than its fonts.row_px {limit}")
+    return problems
+
+
 def check_fonts(engine, contract, icons, contract_dir, rep):
     fonts = {f.get("id"): f for f in _as_list(engine.get("font")) if isinstance(f, dict)}
     expected = gen.font_ids(contract)
     tab_ids = {fid for fid in fonts if str(fid).startswith("tab_")}
     rep.check(
-        "fonts: exactly the contract sizes (text, digits, icons)",
-        tab_ids == set(expected),
-        f"missing {sorted(set(expected) - tab_ids)}, extra {sorted(tab_ids - set(expected))}",
+        f"fonts: exactly the contract sizes ({len(expected)} fonts: text, digits, icons)",
+        tab_ids == set(expected) and len(expected) == 14,
+        f"missing {sorted(set(expected) - tab_ids)}, extra {sorted(tab_ids - set(expected))}, {len(expected)} in the contract",
+    )
+    level = gen.ICON_LEVEL
+    rep.check(
+        f"fonts: the firmware embeds icon level {level}, the newest of icons.json",
+        level == icons.get("version"),
+        f"icons.json version {icons.get('version')!r}",
     )
     text_set = {chr(c) for c in gen.text_codepoints(contract)}
     digit_set = set(gen.digit_glyphs(contract))
-    level1 = {chr(cp) for _name, cp in gen.icon_entries(icons, 1)}
-    all_level1 = {chr(cp) for cp, lvl in icons["icons"].values() if lvl <= 1}
+    embedded = {chr(cp) for _name, cp in gen.icon_entries(icons, level)}
+    all_up_to = {chr(cp) for cp, lvl in icons["icons"].values() if lvl <= level}
     for fid, (file, size) in expected.items():
         f = fonts.get(fid)
         if f is None:
             continue
+        bpp = gen.bpp_of(fid)
         rep.check(
-            f"fonts: {fid} is {file} at {size} px, {gen.BPP} bpp",
-            f.get("file") == file and f.get("size") == size and f.get("bpp") == gen.BPP,
+            f"fonts: {fid} is {file} at {size} px, {bpp} bpp",
+            f.get("file") == file and f.get("size") == size and f.get("bpp") == bpp,
             f"got file={f.get('file')!r} size={f.get('size')!r} bpp={f.get('bpp')!r}",
         )
         chars = _flatten_glyphs(f.get("glyphs"))
@@ -1258,17 +1327,17 @@ def check_fonts(engine, contract, icons, contract_dir, rep):
         elif fid.startswith("tab_digits_"):
             want, what = digit_set, f"only {gen.digit_glyphs(contract)!r}"
         else:
-            want, what = level1, "every icons.json level 1 icon"
+            want, what = embedded, f"every icons.json icon up to level {level}"
         rep.check(
             f"fonts: {fid} glyphs are {what}",
             set(chars) == want and len(chars) == len(set(chars)),
             f"{len(set(chars))} glyphs, {len(chars) - len(set(chars))} duplicates, "
             f"missing {len(want - set(chars))}, extra {len(set(chars) - want)}",
         )
-    rep.check("fonts: icon glyph list equals icons.json level 1", level1 == all_level1)
+    rep.check(f"fonts: icon glyph list equals icons.json up to level {level}", embedded == all_up_to and len(embedded) == len(icons["icons"]))
     for key in ("fallback", "placeholder"):
         cp = icons["icons"][icons[key]][0]
-        rep.check(f"fonts: the {key} icon {icons[key]} is embedded", chr(cp) in level1)
+        rep.check(f"fonts: the {key} icon {icons[key]} is embedded", chr(cp) in embedded)
     try:
         fresh = gen.is_up_to_date(str(contract_dir), str(ROOT / ENGINE))
     except ValueError as err:
@@ -1283,19 +1352,47 @@ def check_fonts(engine, contract, icons, contract_dir, rep):
         for step in _as_list(start.get("then")):
             if isinstance(step, dict) and "lambda" in step:
                 body += str(step["lambda"])
-    text_map = dict(re.findall(r"fonts\.text\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
-    icon_map = dict(re.findall(r"fonts\.icon\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
-    digits = re.findall(r"fonts\.digits\s*=\s*id\((\w+)\)->get_lv_font\(\)", body)
-    want_text = {str(i): f"tab_text_{px}" for i, px in enumerate(contract["fonts"]["text_px"])}
-    want_icon = {str(i): f"tab_icon_{px}" for i, px in enumerate(contract["fonts"]["icon_px"])}
-    rep.check("fonts: tab::Fonts.text[] gets 14, 15, 16, 18, 20, 34 px in order", text_map == want_text, f"got {text_map}")
+    maps = {}
+    for kind in ("text", "digits", "icon"):
+        maps[kind] = dict(re.findall(rf"fonts\.{kind}\[(\d+)\]\s*=\s*id\((\w+)\)->get_lv_font\(\)", body))
+    for kind, key, prefix in (("text", "text_px", "tab_text_"), ("digits", "digits_px", "tab_digits_"), ("icon", "icon_px", "tab_icon_")):
+        sizes = contract["fonts"][key]
+        want = {str(i): f"{prefix}{px}" for i, px in enumerate(sizes)}
+        rep.check(
+            f"fonts: tab::Fonts.{kind}[] gets {', '.join(str(px) for px in sizes)} px in order",
+            maps[kind] == want,
+            f"got {maps[kind]}",
+        )
     rep.check(
-        "fonts: tab::Fonts.digits gets the digits font",
-        digits == [f"tab_digits_{contract['fonts']['digits_px'][0]}"],
-        f"got {digits}",
+        "fonts: tab_engine_start hands every font by its place (no tab::Fonts.digits without a place)",
+        not re.search(r"fonts\.digits\s*=", body),
     )
-    rep.check("fonts: tab::Fonts.icon[] gets 24, 28, 48, 72 px in order", icon_map == want_icon, f"got {icon_map}")
     rep.check("start: tab_engine_start calls tab_glue::start", "tab_glue::start(" in body)
+
+    harness = _read_or_empty(ROOT / HARNESS)
+    problems = harness_metric_problems(harness, contract)
+    rep.check(
+        f"fonts: {HARNESS} has the metrics of the {len(expected)} fonts in Engine.yaml's order, and no digits font's line is higher than contract.json fonts.row_px",
+        bool(harness) and not problems,
+        "; ".join(problems) if problems else ", ".join(f"{px}: {lh}" for fam, px, lh, _bl in harness_metrics(harness) if fam == "digits"),
+    )
+    # That rule, on what it must catch.
+    rows = re.findall(r'\{"digits",\s*\d+,\s*\d+,\s*\d+\}', harness)
+    cases = []
+    if rows:
+        big = re.sub(r"(\{\"digits\",\s*96,\s*)\d+", lambda m: m.group(1) + "121", harness)
+        cases.append(("a 96 px line of 121", big, contract, "higher than its fonts.row_px"))
+        no_row = json.loads(json.dumps(contract))
+        no_row["fonts"]["row_px"].pop("192", None)
+        cases.append(("no row for 192", harness, no_row, "no row for the 192 px digits"))
+        cases.append(("a row missing", harness.replace(rows[-1], ""), contract, "Engine.yaml's fonts are"))
+        cases.append(("two rows swapped", harness.replace(rows[0], "@@").replace(rows[1], rows[0]).replace("@@", rows[1]), contract, "Engine.yaml's fonts are"))
+    missed = [name for name, text, c, want in cases if not any(want in p for p in harness_metric_problems(text, c))]
+    rep.check(
+        f"self-test: the harness metrics rule fails a digits line above fonts.row_px, a size without a row, and a table row missing or out of order ({len(cases)} cases)",
+        len(cases) == 4 and not missed,
+        f"not caught: {missed}",
+    )
 
 
 def _walk(value):
@@ -2289,6 +2386,103 @@ def check_screens_contract(prod, bench, contract_dir, rep):
     )
 
 
+# ---------------------------------------------------------------------------
+# The contract is one folder in two repositories (cards spec B.9, G.2 E11):
+# this one and the integration's tests/contract in TAB-Dashboard. Both read
+# its fixtures as the law, so the two must be the same file for file. The
+# rule is the integration's own comparison (tests/frontend/
+# tablet-screens.test.mjs): every file under the folder, except its
+# top-level ruff.toml (the integration's lint settings) and __pycache__.
+
+
+def contract_files(folder):
+    """The files of a contract folder that must be the same in both
+    repositories, as relative POSIX paths."""
+    folder = Path(folder)
+    out = []
+    for path in folder.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(folder)
+        if rel.as_posix() == "ruff.toml" or "__pycache__" in rel.parts:
+            continue
+        out.append(rel.as_posix())
+    return sorted(out)
+
+
+def peer_contract_dir(peer):
+    """The contract folder in what --peer-contract names: the folder itself,
+    or a TAB-Dashboard checkout (its tests/contract)."""
+    peer = Path(peer)
+    if (peer / "contract.json").is_file():
+        return peer
+    return peer / "tests" / "contract"
+
+
+def contract_peer_problems(ours, theirs):
+    """Where two contract folders differ: a file only in one, or other bytes."""
+    ours, theirs = Path(ours), Path(theirs)
+    if not (theirs / "contract.json").is_file():
+        return [f"no contract.json in {theirs}"]
+    mine, other = contract_files(ours), contract_files(theirs)
+    problems = [f"only here: {f}" for f in sorted(set(mine) - set(other))]
+    problems += [f"only in {theirs}: {f}" for f in sorted(set(other) - set(mine))]
+    for f in sorted(set(mine) & set(other)):
+        if (ours / f).read_bytes() != (theirs / f).read_bytes():
+            problems.append(f"differs: {f}")
+    return problems
+
+
+def check_contract_peer(contract_dir, peer, rep):
+    """With --peer-contract, this contract folder against the integration's.
+    Always: a self-test of the comparison on copies of this folder."""
+    if peer is not None:
+        theirs = peer_contract_dir(peer)
+        problems = contract_peer_problems(contract_dir, theirs)
+        rep.check(
+            f"contract: {contract_dir} is the same as the integration's copy in {theirs}, file for file (ruff.toml and __pycache__ apart)",
+            not problems,
+            "; ".join(problems[:8]) + (f" (+{len(problems) - 8} more)" if len(problems) > 8 else ""),
+        )
+    wrong = []
+    with tempfile.TemporaryDirectory(prefix="tab1-contract-self-test-") as tmp:
+        base = Path(tmp) / "theirs"
+        shutil.copytree(contract_dir, base, ignore=shutil.ignore_patterns("__pycache__"))
+        same = not contract_peer_problems(contract_dir, base)
+        fixture = sorted((base / "fixtures").glob("*.json"))[0]
+        edits = {
+            "a byte of a fixture": lambda d: (d / "fixtures" / fixture.name).write_bytes((d / "fixtures" / fixture.name).read_bytes() + b"\n"),
+            "CONTRACT.md gone": lambda d: (d / "CONTRACT.md").unlink(),
+            "an extra fixture": lambda d: (d / "fixtures" / "extra.json").write_text("{}", encoding="utf-8"),
+            "a reference file changed": lambda d: (d / "reference" / "tabproto.py").write_text("", encoding="utf-8"),
+            "no contract.json": lambda d: (d / "contract.json").unlink(),
+        }
+        for name, edit in edits.items():
+            case = Path(tmp) / f"case{len(wrong)}-{abs(hash(name))}"
+            shutil.copytree(base, case)
+            edit(case)
+            if not contract_peer_problems(contract_dir, case):
+                wrong.append(name)
+        # What the integration's copy may hold besides: its lint settings and caches.
+        extra = Path(tmp) / "extra"
+        shutil.copytree(base, extra)
+        (extra / "ruff.toml").write_text("line-length = 120\n", encoding="utf-8")
+        (extra / "reference" / "__pycache__").mkdir()
+        (extra / "reference" / "__pycache__" / "tabproto.cpython-314.pyc").write_bytes(b"x")
+        if contract_peer_problems(contract_dir, extra):
+            wrong.append("ruff.toml or __pycache__ counted")
+        # A TAB-Dashboard checkout is found by its tests/contract.
+        repo = Path(tmp) / "repo"
+        shutil.copytree(base, repo / "tests" / "contract")
+        if peer_contract_dir(repo) != repo / "tests" / "contract" or contract_peer_problems(contract_dir, peer_contract_dir(repo)):
+            wrong.append("a checkout's tests/contract")
+    rep.check(
+        f"self-test: the contract comparison passes an identical copy, also with ruff.toml, __pycache__ or as a checkout's tests/contract, and fails a changed fixture, a missing or extra file, a changed reference file and a folder without contract.json ({len(edits) + 3} cases)",
+        same and not wrong,
+        "an identical copy fails" if not same else (f"not caught: {wrong}" if wrong else ""),
+    )
+
+
 # Waiting-screen words the firmware no longer shows (rounds 9 to 11 changed
 # them). A quote cut short (the start of a waiting text) fails on its own.
 RETIRED_WAITING_TEXTS = (
@@ -2632,11 +2826,12 @@ def ci_problems(ci, pinned):
 
 
 def fetch_lvgl_guards():
-    """The version tests in engine_tests/tools/fetch_lvgl.sh, as (operator,
-    version): `=` keeps a copy already made, `!=` refuses a source."""
+    """The version tests in engine_tests/tools/fetch_lvgl.sh, in order, as
+    (operator, version): one for a copy already made (`=` keeps it, or `!=`
+    refuses it), then one for a source it copies."""
     path = ROOT / FETCH_LVGL
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    return set(re.findall(r'\[ "\$v" (!?=) "([^"]*)" \]', text))
+    return re.findall(r'\[ "\$v" (!?=) "([^"]*)" \]', text)
 
 
 # A ci.yml the rule must pass, and changes to it the rule must pass or fail
@@ -2795,7 +2990,7 @@ def check_release(prod, bench, rep):
     guards = fetch_lvgl_guards()
     rep.check(
         f"release: ci.yml's LVGL commit is LVGL {CI_LVGL_VERSION}, the only version {FETCH_LVGL} takes, for a copy it keeps and for a source it copies",
-        guards == {("=", CI_LVGL_VERSION), ("!=", CI_LVGL_VERSION)},
+        len(guards) >= 2 and all(version == CI_LVGL_VERSION for _, version in guards),
         f"{FETCH_LVGL} tests {sorted(guards)}",
     )
 
@@ -2935,6 +3130,264 @@ def check_display(rep):
         f"self-test: the screen flush test rule catches a test that builds only the rotation or leaves out setup() or flush_cb, a header without a stand-in, and a run.sh that does not build it, run it or count its result ({len(cases)} cases)",
         not missed,
         f"not caught: {missed}",
+    )
+
+
+FROZEN = Path("engine_tests") / "frozen" / "0.1.0"
+FROZEN_FILES = tuple(f"engine/{n}" for n in (
+    "tab_core.h", "tab_crypto.h", "tab_engine.h", "tab_files.h", "tab_json.h", "tab_model.h", "tab_state.h", "tab_ui.h",
+)) + ("host/harness.h", "host/fake_platform.h")
+
+
+def host_test_problems(run_sh, frozen_present):
+    """What engine_tests/run.sh lacks for v1_pixels_unchanged and for doubles
+    as the tablet works them out (cards spec B.1, B.9): -ffp-contract=off in
+    COMMON (LVGL and every test), the frozen engine 0.1.0 built before host/
+    and run optimised and with sanitizers before the engine, each run
+    counted, and the engine told where its frames are."""
+    problems = []
+    script = "\n".join(line for line in run_sh.splitlines() if not line.lstrip().startswith("#"))
+    common = re.search(r'^COMMON="([^"]*)"', script, re.M)
+    if not common or "-ffp-contract=off" not in common.group(1).split():
+        problems.append("COMMON in engine_tests/run.sh lacks -ffp-contract=off")
+    built = re.search(r'-I"\$T/frozen/0\.1\.0/host" -I"\$T/frozen/0\.1\.0/engine" \$COMMON "\$T/tests/test_frozen\.cpp"', script)
+    if not built:
+        problems.append("engine_tests/run.sh does not build tests/test_frozen.cpp against frozen/0.1.0 (its host/ and engine/ before host/)")
+    for name in ("o2", "asan"):
+        if not re.search(rf'^build_frozen {name} ', script, re.M):
+            problems.append(f"engine_tests/run.sh does not build test_frozen_{name}")
+        if not re.search(rf'"\$WORK/test_frozen_{name}"[^\n]*"\$WORK/frozen_frames_{name}" \|\| status=1', script):
+            problems.append(f"engine_tests/run.sh does not run test_frozen_{name} into frozen_frames_{name}, or its failure does not count")
+        run_engine = script.find(f'"$WORK/test_engine_{name}"')
+        run_frozen = script.find(f'"$WORK/test_frozen_{name}"')
+        if run_engine < 0 or run_frozen < 0 or run_frozen > run_engine:
+            problems.append(f"engine_tests/run.sh does not run test_frozen_{name} before test_engine_{name}")
+        if not re.search(rf'TAB_FROZEN_FRAMES="\$WORK/frozen_frames_{name}"[^\n]*(\\\n[^\n]*)?"\$WORK/test_engine_{name}"', script):
+            problems.append(f"engine_tests/run.sh does not hand frozen_frames_{name} to test_engine_{name} (TAB_FROZEN_FRAMES)")
+    missing = [f for f, there in frozen_present.items() if not there]
+    if missing:
+        problems.append(f"{FROZEN} lacks {missing}")
+    return problems
+
+
+# The contract versions the engine tells Home Assistant it speaks (cards spec
+# B.8, package E12): tab_state.h sets TAB_PROTO_HIGH once, to contract.json's
+# `proto`, and PROTO_LOW to its `proto_low`. Nothing else names
+# TAB_PROTO_HIGH: no YAML (in any folder), no other engine file and no build
+# line of run.sh, so the host tests build what the tablet runs.
+PROTO_DEFAULT_RE = re.compile(r"^#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH (\d+)\n#endif$", re.M)
+PROTO_CONST_RE = re.compile(r"static const int PROTO_LOW = (\d+), PROTO_HIGH = TAB_PROTO_HIGH;")
+
+
+def proto_yaml_files(root):
+    """Every YAML under root, apart from build output and dot folders."""
+    out = []
+    for p in sorted(root.rglob("*.yaml")):
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts) or rel.parts[0] == "engine_tests":
+            continue
+        out.append(p)
+    return out
+
+
+def proto_high_problems(state_h, others, run_sh, proto, proto_low):
+    problems = []
+    live = live_cpp(state_h)
+    found = PROTO_DEFAULT_RE.findall(live)
+    if found != [str(proto)]:
+        problems.append(f"tab_state.h does not set TAB_PROTO_HIGH to contract.json's proto {proto} (found {found})")
+    elif re.findall(r"#\s*(?:define|undef)\s+TAB_PROTO_HIGH\b", live) != ["#define TAB_PROTO_HIGH"]:
+        problems.append("tab_state.h sets TAB_PROTO_HIGH more than once")
+    low = PROTO_CONST_RE.findall(live)
+    if low != [str(proto_low)]:
+        problems.append(f"tab_state.h does not set PROTO_LOW to contract.json's proto_low {proto_low} beside PROTO_HIGH (found {low})")
+    for name, text in sorted(others.items()):
+        if "TAB_PROTO_HIGH" in text:
+            problems.append(f"{name} names TAB_PROTO_HIGH")
+    flags = [line for line in run_sh.splitlines() if not line.lstrip().startswith("#") and "TAB_PROTO_HIGH" in line]
+    if flags:
+        problems.append(f"engine_tests/run.sh builds with its own TAB_PROTO_HIGH ({flags})")
+    return problems
+
+
+def check_proto_high(contract, rep):
+    state_h = _read_or_empty(ROOT / "engine" / "tab_state.h")
+    others = {str(p.relative_to(ROOT)): _read_or_empty(p) for p in proto_yaml_files(ROOT)}
+    for p in sorted((ROOT / "engine").glob("*.h")):
+        if p.name != "tab_state.h":
+            others[f"engine/{p.name}"] = live_cpp(_read_or_empty(p))
+    for name in ("engine_glue.h", "ota_lock.h"):
+        others[name] = live_cpp(_read_or_empty(ROOT / name))
+    run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
+    proto, proto_low = contract.get("proto"), contract.get("proto_low")
+    problems = proto_high_problems(state_h, others, run_sh, proto, proto_low)
+    rep.check(
+        f"protocol: the engine speaks contract versions {proto_low} to {proto} (TAB_PROTO_HIGH and PROTO_LOW in tab_state.h are contract.json's proto and proto_low), and no YAML, other engine file or run.sh build line sets TAB_PROTO_HIGH",
+        not problems,
+        "; ".join(problems),
+    )
+    block = f"#ifndef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH {proto}\n#endif"
+    const = f"static const int PROTO_LOW = {proto_low}, PROTO_HIGH = TAB_PROTO_HIGH;"
+    build = '$COMMON -I"$FW/engine" "$T/tests/test_engine.cpp"'
+    cases = (
+        ("as shipped", state_h, others, run_sh, True),
+        ("default 1", state_h.replace(block, block.replace(f"HIGH {proto}", "HIGH 1")), others, run_sh, False),
+        ("default commented out", state_h.replace(block, "// " + block.replace("\n", "\n// ")), others, run_sh, False),
+        ("lowered after the default", state_h + "\n#undef TAB_PROTO_HIGH\n#define TAB_PROTO_HIGH 1\n", others, run_sh, False),
+        ("PROTO_LOW 2", state_h.replace(const, const.replace(f"LOW = {proto_low}", "LOW = 2")), others, run_sh, False),
+        ("a YAML build flag", state_h, {**others, "TAB-1-engine.yaml": others.get("TAB-1-engine.yaml", "") + "\n  build_flags:\n    - -DTAB_PROTO_HIGH=1\n"}, run_sh, False),
+        ("a YAML in a folder", state_h, {**others, "adopt/tab1-adopted.yaml": "esphome:\n  platformio_options:\n    build_flags: -DTAB_PROTO_HIGH=1\n"}, run_sh, False),
+        ("another engine file", state_h, {**others, "engine/tab_core.h": "#define TAB_PROTO_HIGH 1\n"}, run_sh, False),
+        ("a flag in run.sh", state_h, others, run_sh.replace(build, "-DTAB_PROTO_HIGH=1 " + build), False),
+        ("the flag only in a comment of run.sh", state_h, others, run_sh + "\n# -DTAB_PROTO_HIGH=1\n", True),
+    )
+    wrong = [what for what, h, o, r, passes in cases if (not proto_high_problems(h, o, r, proto, proto_low)) != passes]
+    if build not in run_sh:
+        wrong.append("run.sh has no engine build line to try a flag on")
+    rep.check(
+        f"self-test: the protocol rule passes the shipped files and fails another default, a lowered value, another PROTO_LOW, a flag in a YAML (also in a folder), in another engine file or in run.sh ({len(cases)} cases)",
+        not wrong,
+        f"wrong for: {wrong}" if wrong else "",
+    )
+
+
+def check_host_tests(rep):
+    run_sh = _read_or_empty(ROOT / "engine_tests" / "run.sh")
+    present = {f: (ROOT / FROZEN / f).is_file() for f in FROZEN_FILES}
+    problems = host_test_problems(run_sh, present)
+    rep.check(
+        f"host tests: engine_tests/run.sh builds with -ffp-contract=off, and builds and runs the frozen engine 0.1.0 ({FROZEN}) optimised and with sanitizers before the engine, whose v1_pixels_unchanged compares their frames",
+        not problems,
+        "; ".join(problems),
+    )
+    frozen_run = '"$WORK/test_frozen_asan" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/frozen_frames_asan" || status=1'
+    cases = (
+        ("no -ffp-contract=off", run_sh.replace(" -ffp-contract=off", ""), present, "lacks -ffp-contract=off"),
+        ("the flag only in a comment", run_sh.replace(" -ffp-contract=off", "") + "\n# -ffp-contract=off\n", present, "lacks -ffp-contract=off"),
+        ("frozen built against engine/", run_sh.replace('-I"$T/frozen/0.1.0/engine" ', ""), present, "does not build tests/test_frozen.cpp"),
+        ("the sanitizer run does not count", run_sh.replace(frozen_run, frozen_run.replace(" || status=1", " || true")), present, "does not run test_frozen_asan"),
+        ("no frames for the engine", run_sh.replace('TAB_FROZEN_FRAMES="$WORK/frozen_frames_o2" ', ""), present, "does not hand frozen_frames_o2"),
+        ("a frozen file gone", run_sh, dict(present, **{"engine/tab_ui.h": False}), "lacks ['engine/tab_ui.h']"),
+    )
+    missed = [name for name, text, there, want in cases if not any(want in p for p in host_test_problems(text, there))]
+    rep.check(
+        f"self-test: the host test rule fails a run.sh without -ffp-contract=off, a frozen program built against engine/, a frozen run that does not count or whose frames the engine does not get, and a frozen file gone ({len(cases)} cases)",
+        not missed,
+        f"not caught: {missed}",
+    )
+
+
+# LVGL for the host tests, pinned by commit (cards spec B.9, G.2 E11):
+# engine_tests/tools/fetch_lvgl.sh names LVGL_COMMIT and refuses a source or
+# a copy that names another one. A copy with no commit record is copied again
+# from a source, or refused when there is none. --compile compares the pin
+# with the LVGL the firmware build got (its idf_component.yml names the
+# commit).
+FETCH_LVGL = Path("engine_tests") / "tools" / "fetch_lvgl.sh"
+LVGL_PIN_RE = re.compile(r"^LVGL_COMMIT=([0-9a-f]{40})$", re.M)
+
+
+def lvgl_pin():
+    m = LVGL_PIN_RE.search(_read_or_empty(ROOT / FETCH_LVGL))
+    return m.group(1) if m else ""
+
+
+def lvgl_fetch_problems(script):
+    """Runs a fetch_lvgl.sh text against stand-in sources in a temporary
+    folder (sh and awk; git where installed): what it does wrong."""
+    pin = LVGL_PIN_RE.search(script)
+    if not pin:
+        return ["no LVGL_COMMIT=<40 hex> line"]
+    pin = pin.group(1)
+    sh = shutil.which("sh")
+    if not sh:
+        return ["no sh to run it"]
+    problems = []
+    with tempfile.TemporaryDirectory(prefix="tab1-lvgl-pin-") as tmp:
+        tmp = Path(tmp)
+        tools = tmp / "engine_tests" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "fetch_lvgl.sh").write_text(script, encoding="utf-8")
+
+        def source(name, commit_yml=None):
+            d = tmp / name
+            (d / "src").mkdir(parents=True)
+            (d / "src" / "a.c").write_text("int a;\n", encoding="utf-8")
+            (d / "lvgl.h").write_text("", encoding="utf-8")
+            (d / "lv_version.h").write_text("#define LVGL_VERSION_MAJOR 9\n#define LVGL_VERSION_MINOR 5\n#define LVGL_VERSION_PATCH 0\n", encoding="utf-8")
+            if commit_yml:
+                (d / "idf_component.yml").write_text(f"repository_info:\n  commit_sha: {commit_yml}\n  path: .\nversion: 9.5.0\n", encoding="utf-8")
+            return d
+
+        def run(src, dest):
+            env = dict(os.environ, TAB_LVGL_SRC=str(src) if src else "")
+            r = subprocess.run([sh, str(tools / "fetch_lvgl.sh"), str(dest)], env=env, capture_output=True, text=True, timeout=60)
+            return r.returncode
+
+        good = source("good", pin)
+        if run(good, tmp / "c1") != 0 or _read_or_empty(tmp / "c1" / ".lvgl_commit").strip() != pin:
+            problems.append("the pinned commit is not copied with its commit recorded")
+        elif run(None, tmp / "c1") != 0:
+            problems.append("its own copy is refused")
+        else:
+            (tmp / "c1" / ".lvgl_commit").write_text("0" * 40 + "\n", encoding="utf-8")
+            if run(None, tmp / "c1") == 0:
+                problems.append("a copy of another commit is taken")
+            # A copy from before the commit was recorded: nothing says which
+            # commit it is, so it is never used as it is.
+            (tmp / "c1" / ".lvgl_commit").unlink()
+            if run(None, tmp / "c1") == 0:
+                problems.append("a copy with no commit record is taken as it is")
+            if run(source("other2", "1" * 40), tmp / "c1") == 0:
+                problems.append("a copy with no commit record is taken although the source names another commit")
+            if run(good, tmp / "c1") != 0 or _read_or_empty(tmp / "c1" / ".lvgl_commit").strip() != pin:
+                problems.append("a copy with no commit record is not copied again from the pinned source")
+        if run(source("other", "1" * 40), tmp / "c2") == 0:
+            problems.append("a source naming another commit is taken")
+        if run(source("none"), tmp / "c3") != 0:
+            problems.append("a source naming no commit is refused")
+        git = shutil.which("git")
+        if git:
+            repo = source("checkout")
+            genv = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            ok = all(
+                subprocess.run([git, "-C", str(repo), *a], env=genv, capture_output=True, timeout=60).returncode == 0
+                for a in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "x"])
+            )
+            if ok and run(repo, tmp / "c4") == 0:
+                problems.append("a git checkout at another commit is taken")
+    return problems
+
+
+def check_lvgl_pin(rep):
+    script = _read_or_empty(ROOT / FETCH_LVGL)
+    problems = lvgl_fetch_problems(script)
+    rep.check(
+        f"host tests: {FETCH_LVGL.as_posix()} pins LVGL 9.5.0 by commit ({lvgl_pin() or 'none'}): it copies a source of that commit and records it, refuses a source or a copy of another commit (named in idf_component.yml or as a git checkout's HEAD), takes a source that names none, and copies a copy with no commit record again (or refuses it when there is no source)",
+        not problems,
+        "; ".join(problems),
+    )
+    unpinned = re.sub(r"(?m)^LVGL_COMMIT=.*\n", "", script, count=1)
+    no_check = script.replace('if [ -n "$c" ] && [ "$c" != "$LVGL_COMMIT" ]; then', 'if false; then', 1)
+    # A copy with no record taken as it is, the way the script once did.
+    no_record = script.replace('  if [ -z "$c" ]; then\n    NO_RECORD=1\n', '  if [ -z "$c" ]; then\n    exit 0\n', 1)
+    cases = {"no pin": unpinned, "the source check gone": no_check, "a copy with no record taken": no_record}
+    missed = [name for name, text in cases.items() if text == script or not lvgl_fetch_problems(text)]
+    rep.check(
+        f"self-test: the LVGL pin rule fails a fetch_lvgl.sh without the pin, without the source check or one that takes a copy with no commit record ({len(cases)} cases)",
+        not problems and not missed,
+        f"not caught: {missed}" if missed else ("skipped: the pin rule fails" if problems else ""),
+    )
+
+
+def check_lvgl_commit(build_dir, rep, label):
+    yml = _read_or_empty(build_dir / "managed_components" / "lvgl__lvgl" / "idf_component.yml")
+    m = re.search(r"^\s*commit_sha:\s*([0-9a-f]{40})\s*$", yml, re.M)
+    got = m.group(1) if m else ""
+    rep.check(
+        f"compile {label}: the firmware's LVGL is the commit {FETCH_LVGL.as_posix()} pins for the host tests",
+        bool(got) and got == lvgl_pin(),
+        f"build {got or 'names no commit'}, pin {lvgl_pin() or 'none'}",
     )
 
 
@@ -3712,7 +4165,9 @@ def data_dir_for(copy_dir):
 
 def seed_offline_caches(copy_dir, dst_root=None):
     dst_root = Path(dst_root) if dst_root else data_dir_for(copy_dir)
-    for src_root, names in ((ROOT / ".esphome", OFFLINE_CACHE_DIRS), (data_dir_for(copy_dir), OFFLINE_CACHE_DIRS + (".espressif",))):
+    sources = [(ROOT / ".esphome", OFFLINE_CACHE_DIRS)] + [(d, OFFLINE_CACHE_DIRS) for d in SEED_DIRS]
+    sources.append((data_dir_for(copy_dir), OFFLINE_CACHE_DIRS + (".espressif",)))
+    for src_root, names in sources:
         if src_root.resolve() == dst_root.resolve():
             continue
         for name in names:
@@ -3974,16 +4429,56 @@ def check_nvs(build_dir, rep, label):
     )
 
 
+# Settings of the host's lv_conf.h that differ from the tablet's on purpose:
+# one draw unit, the font the host has, the C library allocator (so
+# AddressSanitizer sees every block), no LVGL log.
+LV_HOST_ONLY = {"LV_DRAW_SW_DRAW_UNIT_CNT", "LV_FONT_DEFAULT", "LV_USE_LOG", "LV_USE_STDLIB_MALLOC"}
+LV_DEFINE_RE = re.compile(r"^#define\s+(LV_\w+)\s+(.*?)\s*$", re.M)
+
+
+def lv_conf_problems(host_text, build_text):
+    """Settings both lv_conf.h files name with another value, apart from
+    LV_HOST_ONLY: a host test could pass with what the tablet lacks."""
+    host = dict(LV_DEFINE_RE.findall(host_text))
+    build = dict(LV_DEFINE_RE.findall(build_text))
+    if not host or not build:
+        return ["an lv_conf.h has no LV_ settings"]
+    return [f"{k} is {host[k]} on the host, {build[k]} on the tablet" for k in sorted(host) if k in build and k not in LV_HOST_ONLY and host[k] != build[k]]
+
+
+def check_lv_conf_self_test(rep):
+    host = _read_or_empty(ROOT / "engine_tests" / "host" / "lv_conf.h")
+    cases = (
+        ("the image widget on", host.replace("#define LV_USE_IMAGE 0", "#define LV_USE_IMAGE 1"), "LV_USE_IMAGE is 0 on the host, 1"),
+        ("A8 layers on", host.replace("#define LV_DRAW_SW_SUPPORT_A8 0", "#define LV_DRAW_SW_SUPPORT_A8 1"), "LV_DRAW_SW_SUPPORT_A8 is 0 on the host, 1"),
+        ("no settings", "", "no LV_ settings"),
+    )
+    missed = [name for name, build, want in cases if not any(want in p for p in lv_conf_problems(host, build))]
+    rep.check(
+        f"self-test: the --compile lv_conf.h rule fails a tablet build with the image widget or A8 layers the host lacks, and an empty file ({len(cases)} cases), and passes the host file against itself",
+        bool(host) and not missed and not lv_conf_problems(host, host),
+        f"not caught: {missed}",
+    )
+
+
+def check_lv_conf(build_dir, rep, label):
+    problems = lv_conf_problems(_read_or_empty(ROOT / "engine_tests" / "host" / "lv_conf.h"), _read_or_empty(build_dir / "src" / "lv_conf.h"))
+    rep.check(
+        f"compile {label}: engine_tests/host/lv_conf.h has the tablet's LVGL settings (src/lv_conf.h), apart from {sorted(LV_HOST_ONLY)}",
+        not problems,
+        "; ".join(problems),
+    )
+
+
 def check_font_metrics(build_dir, rep, label):
     main = build_dir / "src" / "main.cpp"
     got = FONT_RE.findall(main.read_text(encoding="utf-8", errors="replace")) if main.is_file() else []
-    harness = ROOT / "engine_tests" / "host" / "harness.h"
-    want = METRIC_RE.findall(harness.read_text(encoding="utf-8")) if harness.is_file() else []
+    want = harness_metrics(_read_or_empty(ROOT / HARNESS))
     pairs = [(int(h), int(h) - int(a)) for a, h in got]
-    table = [(int(lh), int(bl)) for _f, _px, lh, bl in want]
+    table = [(lh, bl) for _f, _px, lh, bl in want]
     rep.check(
-        f"compile {label}: font line_height and base_line equal the host harness table (engine_tests/host/harness.h)",
-        len(pairs) == 11 and pairs == table,
+        f"compile {label}: font line_height and base_line equal the host harness table ({HARNESS}, {len(table)} fonts)",
+        len(table) == 14 and pairs == table,
         f"build {pairs}, harness {table}",
     )
 
@@ -4159,9 +4654,59 @@ def check_warning_gate_self_test(rep):
     )
 
 
+# ESPHome keeps ESP-IDF, its compiler and its Python environment in the
+# user's cache folder, not in .esphome. When they are gone (a program that
+# empties caches removes them) ESPHome downloads them again, and --offline
+# blocks that. The failed compile then says so itself, ahead of the log's
+# last lines.
+IDF_DOWNLOAD_RE = re.compile(r"Downloading ESP-IDF (\S+) framework")
+IDF_DOWNLOAD_FAILED = "Failed to download from all mirrors"
+MISSING_TOOLCHAIN_SELF_TESTS = (
+    (
+        "not installed, download blocked",
+        "INFO Checking ESP-IDF 5.5.6 framework ...\nINFO Downloading ESP-IDF 5.5.6 framework ...\nERROR Failed to download from all mirrors:\n  https://example.invalid/esp-idf-v5.5.6.tar.xz\n",
+        "5.5.6",
+    ),
+    ("installed", "INFO Checking ESP-IDF 5.5.6 framework ...\nINFO Checking ESP-IDF 5.5.6 framework installation ...\nINFO Successfully compiled program.\n", ""),
+    ("downloaded, then a compiler error", "INFO Downloading ESP-IDF 5.5.6 framework ...\nsrc/main.cpp:1:1: error: 'x' was not declared in this scope\n", ""),
+    ("another download failed", "INFO Checking ESP-IDF 5.5.6 framework ...\nERROR Failed to download from all mirrors:\n  https://example.invalid/font.ttf\n", ""),
+)
+
+
+def missing_toolchain(log_text):
+    """The ESP-IDF version a failed `esphome compile` could not download
+    because it is not installed, or "" when the log shows another cause."""
+    text = ANSI_RE.sub("", log_text)
+    m = IDF_DOWNLOAD_RE.search(text)
+    return m.group(1) if m and IDF_DOWNLOAD_FAILED in text[m.end() :] else ""
+
+
+def missing_toolchain_hint(log_text, offline):
+    version = missing_toolchain(log_text)
+    if not version:
+        return ""
+    way_out = "--offline blocks every download: run the check once without it" if offline else "ESPHome needs the network once to install it"
+    return f"ESP-IDF {version} is not installed in ESPHome's tools cache, and its download failed. {way_out} (docs/engine.md, Checks)\n      "
+
+
+def check_missing_toolchain_self_test(rep):
+    wrong = [name for name, text, want in MISSING_TOOLCHAIN_SELF_TESTS if missing_toolchain(text) != want]
+    rep.check(
+        f"self-test: a compile that failed because ESP-IDF is not installed and could not be downloaded is named as that, and no other failure is ({len(MISSING_TOOLCHAIN_SELF_TESTS)} cases)",
+        not wrong,
+        f"wrong: {wrong}" if wrong else "",
+    )
+
+
 def run_compile(esphome, copy_dir, work, env, rep):
-    seed = data_dir_for(copy_dir) / "build" / (load_yaml(copy_dir / PROD).get("substitutions") or {}).get("name", "apollo-tab-1")
-    seeded = (seed / "managed_components").is_dir() and (seed / "dependencies.lock").is_file()
+    prod_name = (load_yaml(copy_dir / PROD).get("substitutions") or {}).get("name", "apollo-tab-1")
+    for root in [data_dir_for(copy_dir)] + SEED_DIRS:
+        seed = root / "build" / prod_name
+        seeded = (seed / "managed_components").is_dir() and (seed / "dependencies.lock").is_file()
+        if seeded:
+            break
+    else:
+        seed = data_dir_for(copy_dir) / "build" / prod_name
     print(f"note  compile: seed build cache {seed}{'' if seeded else ' (none: components come from the network or the local mirror)'}", flush=True)
     for label, entry, folder in VARIANTS:
         data = work / folder
@@ -4190,7 +4735,7 @@ def run_compile(esphome, copy_dir, work, env, rep):
         if not rep.check(
             f"compile {label}: esphome compile {entry} for the P4",
             ok,
-            f"log {log}" if ok else f"exit {code}, log {log}\n      {_tail(log, 40)}",
+            f"log {log}" if ok else f"exit {code}, log {log}\n      {missing_toolchain_hint(text, env.get('HTTPS_PROXY') == OFFLINE_PROXY)}{_tail(log, 40)}",
         ):
             continue
         own, other = compile_warnings(text)
@@ -4221,6 +4766,8 @@ def run_compile(esphome, copy_dir, work, env, rep):
         check_generated_lock(build_dir, load_yaml(copy_dir / ENGINE), rep, label)
         check_nvs(build_dir, rep, label)
         check_font_metrics(build_dir, rep, label)
+        check_lv_conf(build_dir, rep, label)
+        check_lvgl_commit(build_dir, rep, label)
         if label == "adopt":
             run_stale_copies(esphome, copy_dir, work, venv, build_dir, entry, rep)
 
@@ -4271,8 +4818,11 @@ engine_tests/run.sh), the
 release workflow, the waiting-screen words in docs/engine.md (and no line
 of it starting with ">"), the waiting-screen words against the contract's
 screens.json, and the self-tests of the YAML reader, the files rule, the
-restart rule, the docs check, the contract check, the ci.yml rule and the
---compile warning gate. Where PyYAML happens to be installed, the YAML of every file read is
+restart rule, the docs check, the contract check, the contract comparison,
+the ci.yml rule, the --compile warning gate and the line a failed compile
+gives when ESP-IDF is not installed. With --peer-contract the contract
+folder is also compared with the integration's copy, file for file. Where
+PyYAML happens to be installed, the YAML of every file read is
 also compared with PyYAML's.
 
 --host needs a C++17 compiler; --config and --compile need ESPHome; with
@@ -4287,12 +4837,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--contract", default=str(ROOT / "engine_tests" / "contract"), help="contract folder (contract.json, icons.json)")
+    parser.add_argument(
+        "--peer-contract",
+        help="the integration's contract folder, or a TAB-Dashboard checkout (its tests/contract): fail unless it is the same as --contract, file for file",
+    )
     parser.add_argument("--engine-dir", default=str(ROOT / "engine"), help="engine headers to check and build with (default: engine/)")
     parser.add_argument("--host", action="store_true", help="build and run the flash queue host test")
     parser.add_argument("--config", action="store_true", help="run esphome config in a work copy")
     parser.add_argument("--compile", action="store_true", help="also run esphome compile for production, bench and an adoption")
     parser.add_argument("--work", help="work folder outside this repository (default: a new temporary folder)")
     parser.add_argument("--offline", action="store_true", help="block downloads in ESPHome runs and reuse local caches")
+    parser.add_argument("--seed", action="append", default=[], help="another .esphome folder to copy download and build caches from (repeatable)")
     parser.add_argument("--esphome", help="esphome command (default: esphome on PATH)")
     parser.add_argument("--report", help="write the results as JSON to this file")
     parser.add_argument(
@@ -4307,6 +4862,11 @@ def main():
         if problem:
             sys.exit(problem)
         return
+
+    for seed_dir in args.seed:
+        if not Path(seed_dir).is_dir():
+            sys.exit(f"--seed {seed_dir}: no such folder")
+        SEED_DIRS.append(Path(seed_dir).resolve())
 
     contract_dir = Path(args.contract)
     if not (contract_dir / "contract.json").is_file():
@@ -4325,6 +4885,9 @@ def main():
         tab1 = load_yaml(ROOT / TAB1)
         check_package(engine, rep)
         check_display(rep)
+        check_host_tests(rep)
+        check_lvgl_pin(rep)
+        check_proto_high(contract, rep)
         check_actions(engine, contract, rep)
         check_events(engine, contract, rep)
         check_fonts(engine, contract, icons, contract_dir, rep)
@@ -4333,10 +4896,13 @@ def main():
         check_hotspot_name(prod, bench, rep)
         check_docs_waiting(prod, rep)
         check_screens_contract(prod, bench, contract_dir, rep)
+        check_contract_peer(contract_dir, args.peer_contract, rep)
         check_files_version(engine, rep)
         check_release(prod, bench, rep)
         check_files(engine_dir, rep, substitute)
         check_warning_gate_self_test(rep)
+        check_missing_toolchain_self_test(rep)
+        check_lv_conf_self_test(rep)
         yaml_cross_check(rep)
     except YamlError as err:
         sys.exit(f"FAIL  cannot read the YAML: {err}")

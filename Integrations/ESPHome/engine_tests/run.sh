@@ -12,8 +12,15 @@
 # 5. builds the screen flush test (tests/test_flush_cb.cpp, the whole of
 #    fast_display.h against the stand-in headers in host/fast_display_sim)
 #    the same two ways
-# 6. runs all six; the optimised engine run writes the screenshots and the
+# 6. builds the frozen engine 0.1.0 (frozen/0.1.0, tests/test_frozen.cpp)
+#    the same two ways; it draws every page of the version 1 fixtures before
+#    the engine runs, and the engine's v1_pixels_unchanged compares its own
+#    frames with those byte for byte
+# 7. runs all eight; the optimised engine run writes the screenshots and the
 #    cut-text report
+#
+# Everything is built with -ffp-contract=off: no fused multiply-add, so the
+# host works out a double as the tablet does (its doubles are software).
 #
 # Folders (all git-ignored defaults, override to keep the repo clean):
 #   TAB_LVGL_DIR   LVGL copy        default engine_tests/.lvgl
@@ -36,7 +43,7 @@ CC="${CC:-cc}"
 CXX="${CXX:-c++}"
 TEXT_TTF="$FW/fonts/Montserrat-Medium.ttf"
 ICON_TTF="$FW/fonts/materialdesignicons-webfont.ttf"
-COMMON="-DLV_CONF_INCLUDE_SIMPLE -DLV_KCONFIG_IGNORE -I$T/host -I$LV -I$LV/src"
+COMMON="-DLV_CONF_INCLUDE_SIMPLE -DLV_KCONFIG_IGNORE -ffp-contract=off -I$T/host -I$LV -I$LV/src"
 O2_FLAGS="-O2 -g"
 # LVGL itself is built with AddressSanitizer only: its tiny_ttf glyph cache does
 # misaligned reads that UBSan reports and that are not the engine's.
@@ -62,6 +69,9 @@ for f in "$TEXT_TTF" "$ICON_TTF"; do
   [ -f "$f" ] || { echo "missing font $f"; exit 1; }
 done
 mkdir -p "$WORK" "$OUT" "$SHOTS"
+# The compilers, for a CI log (CC and CXX choose them; -Werror meets each one's warnings).
+echo "C compiler: $($CC --version 2>&1 | head -n 1)"
+echo "C++ compiler: $($CXX --version 2>&1 | head -n 1)"
 
 # One static LVGL per flag set. It is built again when any of these change: the
 # flags, lv_conf.h, the list of LVGL files built, the contents of any LVGL
@@ -101,12 +111,26 @@ build_lib() {
   echo "$want" > "$stamp"
 }
 
+# The engine is built as shipped: no -D of its own (it answers proto [1, 2]
+# from tab_state.h, as on the tablet).
 build_test() {
   name="$1"; flags="$2"
   echo "compiling test_engine_$name"
   # shellcheck disable=SC2086
   $CXX -std=c++17 $flags -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers \
     $COMMON -I"$FW/engine" "$T/tests/test_engine.cpp" "$WORK/liblvgl_$name.a" -lz -o "$WORK/test_engine_$name"
+}
+
+# The frozen engine 0.1.0: its engine/ and host/ come before host/, so
+# harness.h, fake_platform.h and the engine are those of 0.1.0 (lv_conf.h,
+# tj.h and LVGL are shared).
+build_frozen() {
+  name="$1"; flags="$2"
+  echo "compiling test_frozen_$name"
+  # shellcheck disable=SC2086
+  $CXX -std=c++17 $flags -Wall -Wextra -Werror -Wno-unused-function -Wno-missing-field-initializers \
+    -I"$T/frozen/0.1.0/host" -I"$T/frozen/0.1.0/engine" $COMMON "$T/tests/test_frozen.cpp" "$WORK/liblvgl_$name.a" -lz \
+    -o "$WORK/test_frozen_$name"
 }
 
 # The rotation in fast_display.h is plain C++: no LVGL, no ESPHome.
@@ -132,6 +156,8 @@ build_lib o2 "$O2_FLAGS" || { echo "LVGL build failed (o2)"; exit 1; }
 build_lib asan "$ASAN_LIB_FLAGS" || { echo "LVGL build failed (asan)"; exit 1; }
 build_test o2 "$O2_FLAGS" || { echo "test build failed (o2)"; exit 1; }
 build_test asan "$ASAN_FLAGS" || { echo "test build failed (asan)"; exit 1; }
+build_frozen o2 "$O2_FLAGS" || { echo "frozen engine build failed (o2)"; exit 1; }
+build_frozen asan "$ASAN_FLAGS" || { echo "frozen engine build failed (asan)"; exit 1; }
 build_display_test o2 "$O2_FLAGS" || { echo "screen rotation test build failed (o2)"; exit 1; }
 build_display_test asan "$ASAN_FLAGS" || { echo "screen rotation test build failed (asan)"; exit 1; }
 build_flush_test o2 "$O2_FLAGS" || { echo "screen flush test build failed (o2)"; exit 1; }
@@ -139,13 +165,20 @@ build_flush_test asan "$ASAN_FLAGS" || { echo "screen flush test build failed (a
 
 status=0
 echo
+echo "== frozen engine 0.1.0, optimised build"
+"$WORK/test_frozen_o2" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/frozen_frames_o2" || status=1
+echo
+echo "== frozen engine 0.1.0, AddressSanitizer and UBSan build"
+ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=0:halt_on_error=1}" UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}" \
+  "$WORK/test_frozen_asan" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/frozen_frames_asan" || status=1
+echo
 echo "== optimised build"
-TAB_SHOTS_DIR="$SHOTS" "$WORK/test_engine_o2" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$OUT" "$@" || status=1
+TAB_FROZEN_FRAMES="$WORK/frozen_frames_o2" TAB_SHOTS_DIR="$SHOTS" "$WORK/test_engine_o2" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$OUT" "$@" || status=1
 echo
 echo "== AddressSanitizer and UBSan build"
 mkdir -p "$WORK/asan_out"
 ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=0:halt_on_error=1}" UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1}" \
-  TAB_SHOTS_DIR="$WORK/asan_out/shots" \
+  TAB_FROZEN_FRAMES="$WORK/frozen_frames_asan" TAB_SHOTS_DIR="$WORK/asan_out/shots" \
   "$WORK/test_engine_asan" "$T/contract" "$TEXT_TTF" "$ICON_TTF" "$WORK/asan_out" --quick "$@" || status=1
 echo
 echo "== screen rotation, optimised build"

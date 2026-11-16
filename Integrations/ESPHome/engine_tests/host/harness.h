@@ -173,15 +173,18 @@ static uint8_t *load_file(const char *path, size_t *size) {
 // The tablet's fonts as ESPHome's font component makes them: no kerning,
 // line_height = the font's height and base_line = height - ascender, both in
 // whole pixels (generated main.cpp, Font(glyphs, count, ascender, height, ...)).
-// tools/check_engine_package.py --compile compares this table with a build.
+// In the order of the fonts in Engine.yaml. tools/check_engine_package.py
+// --compile compares this table with a build, and its static mode checks that
+// no digits font's line is higher than contract.json fonts.row_px.
 struct DeviceMetric {
   const char *family;  // "text", "digits" or "icons"
   int px, line_height, base_line;
 };
 static const DeviceMetric DEVICE_METRICS[] = {
-    {"text", 14, 17, 3},   {"text", 15, 18, 3},  {"text", 16, 20, 4},  {"text", 18, 22, 4},
-    {"text", 20, 24, 4},   {"text", 34, 41, 8},  {"digits", 48, 59, 12}, {"icons", 24, 24, 3},
-    {"icons", 28, 28, 3},  {"icons", 48, 48, 6}, {"icons", 72, 72, 9},
+    {"text", 14, 17, 3},       {"text", 15, 18, 3},         {"text", 16, 20, 4},   {"text", 18, 22, 4},
+    {"text", 20, 24, 4},       {"text", 28, 34, 6},         {"text", 34, 41, 8},   {"digits", 48, 59, 12},
+    {"digits", 96, 117, 24},   {"digits", 192, 234, 48},    {"icons", 24, 24, 3},  {"icons", 28, 28, 3},
+    {"icons", 48, 48, 6},      {"icons", 72, 72, 9},
 };
 
 static const DeviceMetric *device_metric(const char *family, int px) {

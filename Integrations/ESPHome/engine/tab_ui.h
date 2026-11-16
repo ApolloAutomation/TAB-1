@@ -21,7 +21,17 @@ inline const lv_font_t *text_font(int px) {
     case 16: return g.fonts.text[2];
     case 18: return g.fonts.text[3];
     case 20: return g.fonts.text[4];
-    default: return g.fonts.text[5];
+    case 28: return g.fonts.text[5];
+    default: return g.fonts.text[6];
+  }
+}
+
+// The digits fonts hold only contract.json fonts.digits_glyphs.
+inline const lv_font_t *digits_font(int px) {
+  switch (px) {
+    case 96: return g.fonts.digits[1];
+    case 192: return g.fonts.digits[2];
+    default: return g.fonts.digits[0];
   }
 }
 
@@ -126,15 +136,104 @@ inline void place(lv_obj_t *o, int x, int y, int w, int h) {
   lv_obj_set_size(o, w, h);
 }
 
-inline void set_bg(lv_obj_t *o, uint32_t c) {
+// Every style the engine sets after the build goes through these, and each
+// compares first (cards spec B.4, rules 2 and 3): LVGL sets a style again
+// even when it holds that value, invalidates the object twice for it, and
+// for a position, size, padding, border width or font walks every object of
+// the screen before the next frame. All of them set the main part's local
+// style, the only one the engine uses (plain() removes the theme's).
+inline void style_num(lv_obj_t *o, lv_style_prop_t prop, int32_t v) {
   if (!o) return;
-  lv_obj_set_style_bg_color(o, lv_color_hex(c), 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == v) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.num = v;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
 }
 
-inline void set_radius(lv_obj_t *o, int r) {
-  if (o) lv_obj_set_style_radius(o, r, 0);
+inline void style_colour(lv_obj_t *o, lv_style_prop_t prop, uint32_t c) {
+  if (!o) return;
+  const lv_color_t want = lv_color_hex(c);
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && lv_color_eq(cur.color, want)) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.color = want;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
 }
+
+inline void style_ptr(lv_obj_t *o, lv_style_prop_t prop, const void *p) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, prop, &cur, 0) == LV_STYLE_RES_FOUND && cur.ptr == p) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.ptr = p;
+  lv_obj_set_local_style_prop(o, prop, nv, 0);
+}
+
+// lv_obj_set_pos and lv_obj_set_width compare too; these count what changes.
+inline void move(lv_obj_t *o, int32_t x, int32_t y) {
+  if (!o) return;
+  lv_style_value_t cx, cy;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_X, &cx, 0) == LV_STYLE_RES_FOUND && cx.num == x &&
+      lv_obj_get_local_style_prop(o, LV_STYLE_Y, &cy, 0) == LV_STYLE_RES_FOUND && cy.num == y)
+    return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_pos(o, x, y);
+}
+
+inline void set_width(lv_obj_t *o, int32_t w) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_WIDTH, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == w) return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_width(o, w);
+}
+
+inline void set_height(lv_obj_t *o, int32_t h) {
+  if (!o) return;
+  lv_style_value_t cur;
+  if (lv_obj_get_local_style_prop(o, LV_STYLE_HEIGHT, &cur, 0) == LV_STYLE_RES_FOUND && cur.num == h) return;
+  TAB_COUNT(style_sets);
+  lv_obj_set_height(o, h);
+}
+
+inline void set_hidden(lv_obj_t *o, bool hide) {
+  if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hide) return;
+  TAB_COUNT(style_sets);
+  if (hide)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+inline void set_opa(lv_obj_t *o, lv_opa_t opa) { style_num(o, LV_STYLE_OPA, opa); }
+
+// 40% or full opacity (contract 4.7, "No value" and (2) "Card, not
+// available"). Full is LVGL's default, so an object that was never faded
+// gets no style for it.
+inline void fade(lv_obj_t *o, bool faded) {
+  if (!o) return;
+  const int32_t want = faded ? LV_OPA_40 : LV_OPA_COVER;
+  lv_style_value_t cur;
+  const int32_t now_opa = lv_obj_get_local_style_prop(o, LV_STYLE_OPA, &cur, 0) == LV_STYLE_RES_FOUND
+                              ? cur.num
+                              : (int32_t) LV_OPA_COVER;
+  if (now_opa == want) return;
+  TAB_COUNT(style_sets);
+  lv_style_value_t nv;
+  nv.num = want;
+  lv_obj_set_local_style_prop(o, LV_STYLE_OPA, nv, 0);
+}
+
+inline void set_bg(lv_obj_t *o, uint32_t c) {
+  style_colour(o, LV_STYLE_BG_COLOR, c);
+  style_num(o, LV_STYLE_BG_OPA, LV_OPA_COVER);
+}
+
+inline void set_radius(lv_obj_t *o, int r) { style_num(o, LV_STYLE_RADIUS, r); }
 
 inline void set_clickable(lv_obj_t *o, bool on) {
   if (!o) return;
@@ -146,11 +245,11 @@ inline void set_clickable(lv_obj_t *o, bool on) {
 
 inline void set_outline(lv_obj_t *o, bool on, uint32_t c) {
   if (!o) return;
-  lv_obj_set_style_outline_width(o, on ? 2 : 0, 0);
+  style_num(o, LV_STYLE_OUTLINE_WIDTH, on ? 2 : 0);
   if (on) {
-    lv_obj_set_style_outline_color(o, lv_color_hex(c), 0);
-    lv_obj_set_style_outline_opa(o, LV_OPA_COVER, 0);
-    lv_obj_set_style_outline_pad(o, 0, 0);
+    style_colour(o, LV_STYLE_OUTLINE_COLOR, c);
+    style_num(o, LV_STYLE_OUTLINE_OPA, LV_OPA_COVER);
+    style_num(o, LV_STYLE_OUTLINE_PAD, 0);
   }
 }
 
@@ -183,11 +282,49 @@ inline void set_icon(lv_obj_t *l, int px, uint32_t cp) {
   if (!l) return;
   char buf[5];
   icon_utf8(icon_or_fallback(icon_font(px), cp), buf);
-  if (strcmp(lv_label_get_text(l), buf) != 0) lv_label_set_text(l, buf);
+  if (strcmp(lv_label_get_text(l), buf) == 0) return;
+  TAB_COUNT(style_sets);
+  lv_label_set_text(l, buf);
 }
 
-inline void set_text_colour(lv_obj_t *o, uint32_t c) {
-  if (o) lv_obj_set_style_text_color(o, lv_color_hex(c), 0);
+inline void set_text_colour(lv_obj_t *o, uint32_t c) { style_colour(o, LV_STYLE_TEXT_COLOR, c); }
+
+inline void set_font(lv_obj_t *o, const lv_font_t *f) { style_ptr(o, LV_STYLE_TEXT_FONT, f); }
+
+// The ellipsis a cut text ends with in this font.
+inline const char *ellipsis_of(const lv_font_t *font) { return has_glyph(font, 0x2026) ? "\xE2\x80\xA6" : "..."; }
+
+// A text as drawn: at most cap - 1 bytes, control characters as spaces.
+// Returns its length.
+inline size_t shown_text(const char *text, char *buf, size_t cap) {
+  size_t n = 0;
+  for (; text && text[n] && n < cap - 1; n++) buf[n] = (uint8_t) text[n] < 0x20 ? ' ' : text[n];
+  buf[n] = 0;
+  return n;
+}
+
+// The bytes of buf (n long, at most TEXT_CAP) kept before the ellipsis when
+// the line is wider than width: the longest prefix that fits with the
+// ellipsis, without the spaces it ends with. n when the line fits, or when
+// width is 0 or less.
+inline size_t cut_keep(const lv_font_t *font, const char *buf, size_t n, int width) {
+  if (width <= 0 || text_width(font, buf, n) <= width) return n;
+  const char *ell = ellipsis_of(font);
+  const size_t ell_n = strlen(ell);
+  size_t keep = 0;
+  size_t i = 0;
+  while (i < n) {
+    uint32_t cp;
+    const size_t j = utf8_next(buf, n, i, &cp);
+    char trial[TEXT_CAP + 8];
+    memcpy(trial, buf, j);
+    memcpy(trial + j, ell, ell_n);
+    if (text_width(font, trial, j + ell_n) > width) break;
+    keep = j;
+    i = j;
+  }
+  while (keep > 0 && buf[keep - 1] == ' ') keep--;
+  return keep;
 }
 
 // Sets one line of text, cut with an ellipsis when wider than width. Control
@@ -196,33 +333,21 @@ inline bool set_text(lv_obj_t *l, const char *text, int width) {
   if (!l) return false;
   const lv_font_t *font = lv_obj_get_style_text_font(l, LV_PART_MAIN);
   char buf[TEXT_CAP + 8];
-  size_t n = 0;
-  for (; text && text[n] && n < (size_t) TEXT_CAP - 1; n++) buf[n] = (uint8_t) text[n] < 0x20 ? ' ' : text[n];
-  buf[n] = 0;
+  size_t n = shown_text(text, buf, TEXT_CAP);
   bool cut = false;
-  if (width > 0 && text_width(font, buf, n) > width) {
+  const size_t keep = cut_keep(font, buf, n, width);
+  if (keep < n) {
     cut = true;
-    const char *ell = has_glyph(font, 0x2026) ? "\xE2\x80\xA6" : "...";
+    const char *ell = ellipsis_of(font);
     const size_t ell_n = strlen(ell);
-    // Longest prefix that fits with the ellipsis.
-    size_t keep = 0;
-    size_t i = 0;
-    while (i < n) {
-      uint32_t cp;
-      const size_t j = utf8_next(buf, n, i, &cp);
-      char trial[TEXT_CAP + 8];
-      memcpy(trial, buf, j);
-      memcpy(trial + j, ell, ell_n);
-      if (text_width(font, trial, j + ell_n) > width) break;
-      keep = j;
-      i = j;
-    }
-    while (keep > 0 && buf[keep - 1] == ' ') keep--;
     memcpy(buf + keep, ell, ell_n);
     n = keep + ell_n;
     buf[n] = 0;
   }
-  if (strcmp(lv_label_get_text(l), buf) != 0) lv_label_set_text(l, buf);
+  if (strcmp(lv_label_get_text(l), buf) != 0) {
+    TAB_COUNT(style_sets);
+    lv_label_set_text(l, buf);
+  }
   return cut;
 }
 
@@ -290,7 +415,7 @@ inline const lv_font_t *thermostat_fit_font(const char *text, int s) {
     if (!((cp >= '0' && cp <= '9') || cp == '.' || cp == ',' || cp == '-')) digits = false;
   }
   const double fit = fmin(s / 5.0, em > 0 ? max_w / em : s / 5.0);
-  if (digits && g.fonts.digits && fit >= 48) return g.fonts.digits;
+  if (digits && digits_font(48) && fit >= 48) return digits_font(48);
   static const int SIZES[4] = {34, 20, 18, 14};
   for (int px : SIZES)
     if (fit >= px) return text_font(px);
@@ -298,7 +423,8 @@ inline const lv_font_t *thermostat_fit_font(const char *text, int s) {
 }
 
 // The thermostat value font (contract 4.7): the largest size not above
-// thermostatFit; 48 only for text the digits font holds (0123456789.,-).
+// thermostatFit; 48 only for text of 0123456789.,- (its own list: the
+// digits font holds a few more characters).
 // Anything else, such as the no-value "–" (U+2013), takes the largest text
 // size that fits: 34 at most. Every text size holds U+2013. thermostatFit
 // counts 0.62 em a digit, but Montserrat's digits are up to 0.67 em, so the
@@ -310,7 +436,7 @@ inline const lv_font_t *thermostat_font(const char *text, int s) {
   const int room = thermostat_text_width(s);
   const size_t n = strlen(text);
   int next = 0;
-  if (font != g.fonts.digits) {
+  if (font != digits_font(48)) {
     while (next < 4 && text_font(SIZES[next]) != font) next++;
     next++;  // the size after the one picked
   }
@@ -351,6 +477,240 @@ inline int image_icon_px(int w, int h) {
   return 24;
 }
 
+// (2) The largest of 72, 48, 28, 24 that is not above limit; 24 when none
+// is (contract 4.7, the fifth rule for formulas).
+inline int largest_icon(double limit) {
+  static const int SIZES[4] = {72, 48, 28, 24};
+  for (int px : SIZES)
+    if (px <= limit) return px;
+  return 24;
+}
+
+// (2) The square of side min(w, h) centred in a rectangle: a round button
+// and a badge (contract 4.7). x and y are from the rectangle's corner.
+inline void centred_square(int w, int h, int *x, int *y, int *side) {
+  const int s = w < h ? w : h;
+  *side = s > 0 ? s : 0;
+  *x = (int) px_round((w - *side) / 2.0);
+  *y = (int) px_round((h - *side) / 2.0);
+}
+
+// (2) The drawn box of an image (contract 4.7, "Image, badge and bare"): the
+// rectangle for look 0, the centred circle for a badge. The bare look has no
+// box; its object is the rectangle, for the press and its pressed look.
+inline void image_box(const Widget &w, int *x, int *y, int *bw, int *bh) {
+  *x = *y = 0;
+  *bw = w.r[2];
+  *bh = w.r[3];
+  if (w.look == 1) {
+    centred_square(w.r[2], w.r[3], x, y, bw);
+    *bh = *bw;
+  }
+}
+
+// (2) The icon size of an image by its look: min(w, h) / 2 for the box,
+// 0.6 of the circle for a badge, min(w, h) bare.
+inline int image_icon_size(int look, int w, int h) {
+  const int s = w < h ? w : h;
+  if (look == 1) return largest_icon(0.6 * s);
+  if (look == 2) return largest_icon(s);
+  return image_icon_px(w, h);
+}
+
+// (2) The drawn box of a button: the centred circle for `shape` 1, else
+// the rectangle. And its icon size: 24, or with `isz` 1 the largest of 72,
+// 48, 28, 24 that is not above min(w, h) / 2.
+inline void button_box(const Widget &w, int *x, int *y, int *bw, int *bh) {
+  *x = *y = 0;
+  *bw = w.r[2];
+  *bh = w.r[3];
+  if (w.shape == 1) {
+    centred_square(w.r[2], w.r[3], x, y, bw);
+    *bh = *bw;
+  }
+}
+
+inline int button_icon_px(const Widget &w) { return w.isz == 1 ? image_icon_px(w.r[2], w.r[3]) : 24; }
+
+// ---------------------------------------------------------------- (2) slider geometry
+
+// A slider along its axis (contract 4.7, "Slider" and the (2) rows after
+// it), as distances from the start edge: L the length along the axis, S the
+// other side, R the radius of a track (7 for the knob look, min(r2, S div 2)
+// for a bar), x0 and x1 where a track's mark can be, run the length a
+// finger moves over. colours is the track's count, 0 without a track.
+struct SliderGeom {
+  int L, S, R, x0, x1, run;
+  uint8_t look, dir, colours;
+};
+
+inline SliderGeom slider_geom(int w, int h, uint8_t look, uint8_t dir, uint8_t colours, int r2) {
+  SliderGeom g{};
+  if (w < 0) w = 0;
+  if (h < 0) h = 0;
+  if (r2 < 0) r2 = 0;
+  g.look = look;
+  g.dir = dir;
+  g.colours = colours >= 2 ? colours : 0;
+  g.L = dir == 0 ? w : h;
+  g.S = dir == 0 ? h : w;
+  g.R = look == 0 ? 7 : (r2 < g.S / 2 ? r2 : g.S / 2);
+  g.x0 = g.R;
+  g.x1 = g.L - g.R;
+  g.run = g.colours ? g.x1 - g.x0 : g.L;
+  return g;
+}
+
+// A point's distance from the start edge along the axis, in a rectangle at
+// (x, y) of the size of g: the left edge, the bottom edge or the top edge.
+inline double slider_along(const SliderGeom &g, int x, int y, double px, double py) {
+  if (g.dir == 0) return px - x;
+  if (g.dir == 1) return (double) y + g.L - py;
+  return py - y;
+}
+
+// The amount under a finger, 0 to 1: along the whole length, or with a
+// track from x0 to x1. 0 for a slider with no length to move over.
+inline double slider_amount_at(const SliderGeom &g, double along) {
+  if (g.run <= 0) return 0;
+  const double a = (along - (g.colours ? g.x0 : 0)) / g.run;
+  return !(a > 0) ? 0 : a > 1 ? 1 : a;
+}
+
+// Whether a release sends: the slider has a length to move over and its
+// max is above its min (contract 4.7, the fourth rule for formulas).
+inline bool slider_sends(const SliderGeom &g, double lo, double hi) { return g.run > 0 && hi > lo; }
+
+// Where an amount is drawn, from the start edge: the knob's centre or the
+// end of a bar's fill, round(amount * L); with a track the mark's centre,
+// round(x0 + amount * (x1 - x0)).
+inline int slider_pos_of(const SliderGeom &g, double amount) {
+  if (g.colours) return (int) px_round(g.x0 + amount * (g.x1 - g.x0));
+  return (int) px_round(amount * g.L);
+}
+
+// Where a slider's value is drawn: the knob's centre, the end of a bar's
+// fill or a track's mark; -1 without a value, and for a track also when it
+// has no run or the max is not above the min (no mark, contract 4.7).
+inline int slider_shown(const SliderGeom &g, bool has, double v, double lo, double hi) {
+  if (!has || (g.colours && (g.x1 <= g.x0 || !(hi > lo)))) return -1;
+  return slider_pos_of(g, fraction(v, lo, hi));
+}
+
+// Piece k (from 0) of a track of n colours: from x0 + floor(k * (x1 - x0) /
+// (n - 1)) to the same for k + 1. Only for x1 above x0.
+inline void track_piece(int n, int x0, int x1, int k, int *from, int *to) {
+  const int span = x1 - x0;
+  *from = x0 + k * span / (n - 1);
+  *to = x0 + (k + 1) * span / (n - 1);
+}
+
+// The two caps of a track: [0, min(x0, L)] in the first colour and from x1
+// (x0 when x1 is not above it) to L in the last.
+inline void track_caps(const SliderGeom &g, int *a1, int *b0) {
+  *a1 = g.x0 < g.L ? g.x0 : g.L;
+  const int e = g.x1 > g.x0 ? g.x1 : g.x0;
+  *b0 = e > 0 ? e : 0;
+}
+
+// The fill of a bar as drawn: none at 0, else at least 2R long.
+inline int bar_drawn(const SliderGeom &g, int fill) { return fill <= 0 ? 0 : fill > 2 * g.R ? fill : 2 * g.R; }
+
+// The handle of a bar with `change`: from fill - 12 to fill - 8, shown from
+// a fill of 28. The icon: centred 24 from the start edge when S >= 32, in
+// the colour on the fill from a fill of 48.
+inline bool bar_handle(int fill) { return fill >= 28; }
+inline bool bar_icon_room(const SliderGeom &g) { return g.S >= 32; }
+inline bool bar_icon_on_fill(const SliderGeom &g, int fill) { return g.S >= 32 && fill >= 48; }
+
+// ---------------------------------------------------------------- (2) label sizes
+
+// contract.json fonts.digits_glyphs, as UTF-8: what the digit sizes hold.
+static const char *const DIGITS_GLYPHS = "0123456789.,-:\xC2\xB0%+ ";
+
+inline bool digits_only(const char *text) {
+  const size_t gn = strlen(DIGITS_GLYPHS), n = text ? strlen(text) : 0;
+  for (size_t i = 0; i < n;) {
+    uint32_t cp;
+    i = utf8_next(text, n, i, &cp);
+    bool found = false;
+    for (size_t j = 0; j < gn && !found;) {
+      uint32_t g2;
+      j = utf8_next(DIGITS_GLYPHS, gn, j, &g2);
+      found = g2 == cp;
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+// The size a label is drawn at, before its width is checked (contract 4.7,
+// "Label with px"): without `px` (0) its `size` gives 14, 18 or 34. With
+// `px`: a digit size (48, 96, 192) when every character of the text is a
+// digit glyph and `px` reaches it, else the largest text size not above
+// `px`, at least 14. *small: drawn at 14 or 15, in the small colour.
+inline int label_size(int size, int px, const char *text, bool *small) {
+  int chosen;
+  if (px <= 0) {
+    chosen = size == 0 ? 14 : size == 2 ? 34 : 18;
+  } else if (px >= 48 && digits_only(text)) {
+    chosen = px >= 192 ? 192 : px >= 96 ? 96 : 48;
+  } else {
+    static const int TEXT[7] = {14, 15, 16, 18, 20, 28, 34};
+    chosen = 14;
+    for (int t : TEXT)
+      if (t <= px) chosen = t;
+  }
+  if (small) *small = chosen == 14 || chosen == 15;
+  return chosen;
+}
+
+// The size tried next while the text at a digit size is wider than the
+// rectangle: 192, 96, 48, 34. 0: none, the text is cut.
+inline int label_smaller(int px) { return px == 192 ? 96 : px == 96 ? 48 : px == 48 ? 34 : 0; }
+
+inline const lv_font_t *label_font_of(int px) { return px >= 48 ? digits_font(px) : text_font(px); }
+
+// The size rule with the width checked against the fonts the tablet has.
+inline int label_px(const Widget &w, const char *text, bool *small) {
+  int px = label_size(w.size, w.px, text, small);
+  const size_t n = text ? strlen(text) : 0;
+  while (label_smaller(px) && text_width(label_font_of(px), text, n) > w.r[2]) px = label_smaller(px);
+  return px;
+}
+
+// (2) The minute a clock shows (contract 4.7): m = floor(v + age / 60)
+// mod 1440, with v the minutes after local midnight and age in seconds. -1:
+// no value.
+inline int clock_minute(bool has, double v, double age_s) {
+  if (!has) return -1;
+  double m = fmod(floor(v + age_s / 60), 1440);
+  if (m < 0) m += 1440;
+  return m >= 0 && m < 1440 ? (int) m : -1;  // also a value that is not a number
+}
+
+// Its text: HH:MM (`clk` 1), or the hour as 12, 1 to 11 without a leading
+// zero (`clk` 2). No am or pm. No value: --:--.
+static const size_t CLOCK_CAP = 16;
+inline void clock_text(int minute, int form, char *out) {
+  if (minute < 0 || minute >= 1440) {
+    snprintf(out, CLOCK_CAP, "--:--");
+    return;
+  }
+  const int h = minute / 60, mm = minute % 60;
+  if (form == 2)
+    snprintf(out, CLOCK_CAP, "%d:%02d", h % 12 ? h % 12 : 12, mm);
+  else
+    snprintf(out, CLOCK_CAP, "%02d:%02d", h, mm);
+}
+
+// The minute a clock label shows now.
+inline int clock_now(Model &m, const Widget &w) {
+  double v = 0;
+  const bool has = bound_num(m, w.value, &v);
+  return clock_minute(has, v, has ? value_age_s(m, w.value) : 0);
+}
+
 // ---------------------------------------------------------------- events
 
 inline Layout *layout_of_ptr(const void *p) {
@@ -369,15 +729,30 @@ inline void after_press() {
   if (lv_display_get_default()) lv_refr_now(nullptr);
 }
 
+// (2) A slider's geometry, with the r2 of its card's colours.
+inline SliderGeom slider_geom_of(Model &m, const Widget &w) {
+  const CardLook *k = card_look(m, card_of(m, w));
+  return slider_geom(w.r[2], w.r[3], w.look, w.dir, w.track_n, k ? k->t.r2 : 0);
+}
+
+// (2) Whether the slider's release sends (contract 4.7): a slider whose
+// track has no length, or whose max is not above its min, sends nothing.
+inline bool slider_can_send(Model &m, Widget &w) {
+  double lo, hi, step;
+  limits_of(m, w, &lo, &hi, &step);
+  return slider_sends(slider_geom_of(m, w), lo, hi);
+}
+
+// The value under the finger: the amount along the axis for every look and
+// direction, from x0 to x1 with a track (contract 4.7).
 inline void slider_value_at(Layout &l, Widget &w, lv_indev_t *indev) {
   if (!indev) return;
   lv_point_t p;
   lv_indev_get_point(indev, &p);
   lv_area_t a;
   lv_obj_get_coords(w.obj, &a);
-  const int width = lv_area_get_width(&a);
-  double amount = width > 0 ? (double) (p.x - a.x1) / width : 0;
-  amount = amount < 0 ? 0 : amount > 1 ? 1 : amount;
+  const SliderGeom g = slider_geom_of(*l.model, w);
+  const double amount = slider_amount_at(g, slider_along(g, a.x1, a.y1, p.x, p.y));
   double lo, hi, step;
   limits_of(*l.model, w, &lo, &hi, &step);
   w.drag_value = clamp_step(lo + amount * (hi - lo), lo, hi, step);
@@ -391,12 +766,77 @@ inline void on_knob_margin(lv_event_t *e) { lv_event_set_ext_draw_size(e, 14); }
 // and a knock without a session), as on any other control. A tap that only
 // switches pages (tap 2) needs no value and always works. Both tests read
 // one flag and, only on a faded control, what can_send() reads anyway.
-inline bool faded_and_quiet(const Widget &w) { return w.faded && w.tap != 2 && can_send(); }
+// (2) The same holds for every widget of a card that is not available, and
+// for that card itself (`un` 1, contract 4.3); a `back` works as a `go`.
+inline bool quiet_now(Model &m, const Widget &w) { return w.faded || card_unavailable(m, w); }
 
-inline bool faded_tap(const Widget &w) {
-  if (!w.faded || w.tap == 2) return false;
+inline bool faded_and_quiet(Model &m, const Widget &w) {
+  return w.tap != 2 && w.tap != 3 && quiet_now(m, w) && can_send();
+}
+
+inline bool faded_tap(Model &m, const Widget &w) {
+  if (w.tap == 2 || w.tap == 3 || !quiet_now(m, w)) return false;
   if (!can_send()) refuse_touch();
   return true;
+}
+
+// ---------------------------------------------------------------- (2) the press now
+
+// The press now (cards spec B.5). It begins at the first sight of the finger,
+// in a card's PRESSED or in the timer, whichever comes first, at that point.
+inline void press_begin(lv_point_t p) {
+  g.tracking = true;
+  g.swallowed = false;
+  g.start = p;
+  g.press_at = now();
+  g.moved = false;
+  g.held = false;
+  g.press_in_watch = g.erase_timer != nullptr;
+}
+
+// The 12 px test, one for the card tap, the pressed look and the hold: once
+// passed it stays passed until the next press (contract 4.3).
+inline void press_track(lv_point_t p) {
+  if (!g.tracking || g.moved) return;
+  const int32_t dx = p.x - g.start.x, dy = p.y - g.start.y;
+  if (dx * dx + dy * dy >= MOVED_PX2) g.moved = true;
+}
+
+// The card that has the press, or nullptr.
+inline Widget *pressed_card(Layout **out = nullptr) {
+  Layout *l = layout_at(g.cp_layout);
+  if (!l || l->state != L_ACTIVE || l->gen != g.cp_gen || !l->model || g.cp_widget >= l->model->nw) return nullptr;
+  if (out) *out = l;
+  return &l->model->w[g.cp_widget];
+}
+
+// A widget that has the press: the card that has it, a pressed widget, a
+// dragged slider, a pressed thermostat button.
+inline bool press_held(Widget &w) {
+  if (w.kind == W_CARD) return pressed_card() == &w;
+  if (w.kind == W_CHOICE) return w.ch_down >= 0;  // also while the finger is outside its cell
+  return w.pressed || w.dragging || w.pressed_part;
+}
+
+// The press is lost (contract 7.4): LVGL sends PRESS_LOST at the release and
+// no CLICKED, also when the widget shows again before the finger lifts. The
+// press opens no hold page any more either.
+inline void lose_press(Widget &w) {
+  if (w.kind == W_CARD) g.cp_layout = -1;
+  if (w.kind == W_CHOICE) w.ch_down = -1;
+  w.pressed = 0;
+  w.dragging = 0;
+  w.pressed_part = 0;
+  g.held = true;
+  if (g.indev) lv_indev_wait_release(g.indev);
+}
+
+// (2) `vis` (contract 4.3): a widget of a card is drawn while its value is
+// not 0; no value hides it, and without the key it always shows.
+inline bool vis_shows(Model &m, const Widget &w) {
+  if (w.card < 0 || w.vis.how == B_ABSENT) return true;
+  double v;
+  return bound_num(m, w.vis, &v) && v != 0;
 }
 
 inline void on_widget_event(lv_event_t *e) {
@@ -407,7 +847,7 @@ inline void on_widget_event(lv_event_t *e) {
   lv_indev_t *indev = lv_indev_active();
   switch (code) {
     case LV_EVENT_PRESSED:
-      if (faded_and_quiet(*w)) break;
+      if (faded_and_quiet(*l->model, *w)) break;
       w->pressed = 1;
       if (w->kind == W_SLIDER && w->change && !w->faded) {
         g.press_on_slider = true;  // this press is the slider's, not a page swipe
@@ -429,7 +869,8 @@ inline void on_widget_event(lv_event_t *e) {
       if (w->dragging) {
         slider_value_at(*l, *w, indev);
         w->dragging = 0;
-        slider_released(*l, *w, w->drag_value);
+        // A lost press never gets here; the state is read once more anyway.
+        if (vis_shows(*l->model, *w) && !faded_and_quiet(*l->model, *w)) slider_released(*l, *w, w->drag_value);
       }
       paint_widget(*l, *w);
       break;
@@ -439,7 +880,7 @@ inline void on_widget_event(lv_event_t *e) {
       paint_widget(*l, *w);
       break;
     case LV_EVENT_CLICKED:
-      if (faded_tap(*w)) break;
+      if (!vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
       if (w->kind != W_SLIDER) widget_tapped(*l, *w);
       break;
     default:
@@ -455,7 +896,7 @@ inline void on_thermo_button(lv_event_t *e) {
   const int dir = target == w->o2 ? -1 : 1;
   switch (lv_event_get_code(e)) {
     case LV_EVENT_PRESSED:
-      if (faded_and_quiet(*w)) break;
+      if (faded_and_quiet(*l->model, *w)) break;
       w->pressed_part = (int8_t) dir;
       paint_widget(*l, *w);
       after_press();
@@ -466,7 +907,7 @@ inline void on_thermo_button(lv_event_t *e) {
       paint_widget(*l, *w);
       break;
     case LV_EVENT_CLICKED:
-      if (faded_tap(*w)) break;
+      if (!vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
       thermostat_step(*l, *w, dir);
       break;
     default:
@@ -492,7 +933,53 @@ inline void on_nav_event(lv_event_t *e) {
       paint_nav(*l);
       break;
     case LV_EVENT_CLICKED:
-      if (n->page < l->model->npages) show_page(*l, n->page);
+      if (n->page == BACK_ENTRY)
+        page_back(*l);
+      else if (n->page < l->model->npages)
+        show_page(*l, n->page);
+      break;
+    default:
+      break;
+  }
+}
+
+// (2) A card with `tap` or `hold` (contract 4.3, cards spec B.5). The press
+// is the card's when it begins on the card outside its widgets, or on a
+// widget that is not clickable (one that only shows, also while faded). The
+// card taps on release when the press moved less than 12 px; the pressed look
+// (after 80 ms) and the hold come from the timer.
+inline void card_press_end(Layout &l, Widget &w) {
+  if (pressed_card() == &w) g.cp_layout = -1;
+  if (!w.pressed) return;
+  w.pressed = 0;
+  paint_widget(l, w);
+}
+
+inline void on_card_event(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || l->state != L_ACTIVE) return;
+  lv_indev_t *indev = lv_indev_active();
+  lv_point_t p = {0, 0};
+  if (indev) lv_indev_get_point(indev, &p);
+  switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+      if (!g.tracking) press_begin(p);
+      g.cp_layout = (int8_t) layout_index(l);
+      g.cp_gen = l->gen;
+      g.cp_widget = (uint16_t) (w - l->model->w);
+      break;
+    case LV_EVENT_PRESSING:
+      press_track(p);
+      break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+      card_press_end(*l, *w);
+      break;
+    case LV_EVENT_CLICKED:
+      press_track(p);
+      if (g.moved || g.swallowed || faded_tap(*l->model, *w)) break;
+      widget_tapped(*l, *w);
       break;
     default:
       break;
@@ -508,9 +995,102 @@ inline void add_events(lv_obj_t *o, lv_event_cb_t cb, void *user) {
   lv_obj_add_event_cb(o, cb, LV_EVENT_CLICKED, user);
 }
 
+// ---------------------------------------------------------------- colours of the parts
+
+// The colours a widget is painted with: its card's record (cards spec B.3),
+// worked out at the build. A widget outside a card has none: the record of
+// no card, all zero, which nothing paints with.
+inline const CardLook &look_for(Model &m, Widget *card) {
+  static const CardLook none{};
+  if (!card) return none;
+  if (const CardLook *k = card_look(m, card)) return *k;
+  card_look_update(m, *card);  // not reached: the card's shell works it out first
+  const CardLook *k = card_look(m, card);
+  return k ? *k : none;
+}
+
+// ---------------------------------------------------------------- chart and thermostat shapes
+
+// logic.js linePoints: a line chart of n values has n points, one value two
+// (at the left and the right), none no point.
+inline int chart_points(int n) { return n <= 0 ? 0 : n == 1 ? 2 : n; }
+
+// Point i of linePoints(values, W, H, 4), from the rectangle's corner. low
+// and high are the smallest and the largest value.
+inline void chart_point(const double *v, int n, double low, double high, int W, int H, int i, double *x, double *y) {
+  const double pad = 4;
+  if (n == 1) {
+    *x = i == 0 ? pad : W - pad;
+    *y = H / 2.0;
+    return;
+  }
+  *x = pad + (double) i / (n - 1) * (W - pad * 2);
+  *y = high == low ? H / 2.0 : H - pad - (v[i] - low) / (high - low) * (H - pad * 2);
+}
+
+// (2) The steps of a line chart with `st` 1 (contract 4.7), from point a to
+// point b: a flat run from a to b at a's height, then an upright run at b
+// from a's height to b's, none when the two are equal. Each run is a filled
+// rectangle 3 thick, centred on its line and 1 longer at both ends, each
+// edge rounded on its own. Gives the number of rectangles, as [x, y, w, h]
+// from the chart's corner.
+inline int chart_step(double xa, double ya, double xb, double yb, int32_t out[2][4]) {
+  const int32_t left = px_round(fmin(xa, xb) - 1), right = px_round(fmax(xa, xb) + 1);
+  out[0][0] = left;
+  out[0][1] = px_round(ya - 1.5);
+  out[0][2] = right - left;
+  out[0][3] = 3;
+  if (ya == yb) return 1;
+  const int32_t top = px_round(fmin(ya, yb) - 1), bottom = px_round(fmax(ya, yb) + 1);
+  out[1][0] = px_round(xb - 1.5);
+  out[1][1] = top;
+  out[1][2] = 3;
+  out[1][3] = bottom - top;
+  return 2;
+}
+
+// (2) The bar of a bar chart that `mark` k names (contract 4.7): round(k),
+// or -1 for no mark: k has no value, or round(k) is below 0 or past the
+// last of n bars.
+inline int chart_mark(int n, bool has, double k) {
+  if (!has || !(k >= -1 && k <= n)) return -1;
+  const int i = (int) floor(k + 0.5);
+  return i >= 0 && i < n ? i : -1;
+}
+
+// (2) The colour of bar i with the mark at bar `mark` (-1: none): the bars
+// before it as usual, the one at it `now` (acc), later ones `later` (card2).
+inline uint32_t chart_bar_colour(int i, int mark, uint32_t usual, uint32_t now, uint32_t later) {
+  return mark < 0 || i < mark ? usual : i == mark ? now : later;
+}
+
+// (2) The mark of a thermostat in a W x H rectangle (contract 4.7): a circle
+// of diameter max(6, arc width - 4), centred on the middle line of the arc
+// (radius 0.36 * s) at 135° + 270° * (m - min) / (max - min). Gives the
+// circle's square [x, y, d, d] from the rectangle's corner, or false for no
+// mark: m has no value or lies outside min to max, or the rectangle has no
+// size.
+inline bool thermo_mark(int W, int H, bool has, double m, double lo, double hi, int32_t out[4]) {
+  if (!has || !(m >= lo && m <= hi)) return false;
+  int s = W < H ? W : H;
+  if (s <= 0) return false;
+  if (s > THERMO_MAX_SIDE) s = THERMO_MAX_SIDE;
+  int32_t width, radius;
+  thermo_arc(s, &width, &radius);
+  const int32_t d = width - 4 > 6 ? width - 4 : 6;
+  const double angle = (135 + 270 * fraction(m, lo, hi)) * (3.14159265358979323846 / 180);
+  const double r = 0.36 * s;
+  out[0] = px_round(W / 2 + r * cos(angle) - d / 2.0);
+  out[1] = px_round(H / 2 + r * sin(angle) - d / 2.0);
+  out[2] = out[3] = d;
+  return true;
+}
+
 // ---------------------------------------------------------------- custom drawing
 
-// logic.js linePoints and barRects, drawn with the LVGL draw API.
+// logic.js linePoints and barRects, drawn with the LVGL draw API. (2) `c`
+// colours the line or the bars, `st` 1 draws the line as steps, `mark` gives
+// a bar chart's "now" bar.
 inline void on_chart_draw(lv_event_t *e) {
   Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
   Layout *l = layout_of(w);
@@ -521,7 +1101,9 @@ inline void on_chart_draw(lv_event_t *e) {
   lv_area_t a;
   lv_obj_get_coords(obj, &a);
   const int W = lv_area_get_width(&a), H = lv_area_get_height(&a);
-  const Tok t = card_tokens(m, card_of(m, *w));
+  const CardLook &look = look_for(m, card_of(m, *w));
+  const Tok &t = look.t;
+  const uint32_t colour = w->c_has ? w->c_now : t.acc2;
   const lv_opa_t opa = lv_obj_get_style_opa_recursive(obj, LV_PART_MAIN);
   lv_draw_rect_dsc_t base;
   lv_draw_rect_dsc_init(&base);
@@ -544,36 +1126,59 @@ inline void on_chart_draw(lv_event_t *e) {
     const double bw = fmax(0.0, (W - gap * (n - 1)) / n);
     lv_draw_rect_dsc_t bar;
     lv_draw_rect_dsc_init(&bar);
-    bar.bg_color = lv_color_hex(t.acc2);
+    bar.bg_color = lv_color_hex(colour);
     bar.bg_opa = opa;
     bar.radius = (int32_t) fmin(4.0, bw / 2);
+    // (2) The bars before the mark as usual, the one at it in acc, later
+    // ones in card2.
+    double k = 0;
+    // bound_num first: the order of a call's arguments is unspecified, and
+    // GCC on x86 reads k before bound_num writes it.
+    const bool has_mark = bound_num(m, w->mark, &k);
+    const int mark = chart_mark(n, has_mark, k);
     for (int i = 0; i < n; i++) {
       const double scaled = (v[i] - lo) / span * h2;
       const double bh = fmin(h2, fmax(2.0, scaled));
       const double x = i * (bw + gap), y = h2 - bh;
       lv_area_t r = {a.x1 + px_round(x), a.y1 + px_round(y), a.x1 + px_round(x + bw) - 1, a.y1 + px_round(y + bh) - 1};
+      bar.bg_color = lv_color_hex(chart_bar_colour(i, mark, colour, look.k.A, t.card2));
       if (r.x2 >= r.x1 && r.y2 >= r.y1) lv_draw_rect(layer, &bar, &r);
     }
     return;
   }
-  const double pad = 4;
+  const int count = chart_points(n);
+  if (w->st == 1) {
+    // (2) Steps: filled rectangles, no lines, each held to the rectangle.
+    lv_draw_rect_dsc_t run;
+    lv_draw_rect_dsc_init(&run);
+    run.bg_color = lv_color_hex(colour);
+    run.bg_opa = opa;
+    double xa, ya;
+    chart_point(v, n, low, high, W, H, 0, &xa, &ya);
+    for (int i = 1; i < count; i++) {
+      double xb, yb;
+      chart_point(v, n, low, high, W, H, i, &xb, &yb);
+      int32_t rs[2][4];
+      const int nr = chart_step(xa, ya, xb, yb, rs);
+      for (int j = 0; j < nr; j++) {
+        if (rs[j][2] <= 0 || rs[j][3] <= 0) continue;
+        const lv_area_t r = {LV_MAX(a.x1, a.x1 + rs[j][0]), LV_MAX(a.y1, a.y1 + rs[j][1]),
+                             LV_MIN(a.x2, a.x1 + rs[j][0] + rs[j][2] - 1), LV_MIN(a.y2, a.y1 + rs[j][1] + rs[j][3] - 1)};
+        if (r.x2 >= r.x1 && r.y2 >= r.y1) lv_draw_rect(layer, &run, &r);
+      }
+      xa = xb;
+      ya = yb;
+    }
+    return;
+  }
   lv_draw_line_dsc_t ld;
   lv_draw_line_dsc_init(&ld);
-  ld.color = lv_color_hex(t.acc2);
+  ld.color = lv_color_hex(colour);
   ld.width = 3;
   ld.opa = opa;
   ld.round_start = 1;
   ld.round_end = 1;
-  auto point = [&](int i, double *x, double *y) {
-    if (n == 1) {
-      *x = i == 0 ? pad : W - pad;
-      *y = H / 2.0;
-      return;
-    }
-    *x = pad + (double) i / (n - 1) * (W - pad * 2);
-    *y = high == low ? H / 2.0 : H - pad - (v[i] - low) / (high - low) * (H - pad * 2);
-  };
-  const int count = n == 1 ? 2 : n;
+  auto point = [&](int i, double *x, double *y) { chart_point(v, n, low, high, W, H, i, x, y); };
   double px, py;
   point(0, &px, &py);
   for (int i = 1; i < count; i++) {
@@ -602,9 +1207,7 @@ inline void on_thermo_draw(lv_event_t *e) {
   Layout *l = layout_of(w);
   if (!l || !l->model) return;
   Model &m = *l->model;
-  Widget *card = card_of(m, *w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, *w));
   lv_layer_t *layer = lv_event_get_layer(e);
   lv_area_t a;
   lv_obj_get_coords(w->obj, &a);
@@ -623,47 +1226,593 @@ inline void on_thermo_draw(lv_event_t *e) {
   arc.opa = opa;
   arc.start_angle = 135;
   arc.end_angle = 45;
-  arc.color = lv_color_hex(on ? t.onbg_pr : t.card2);
+  arc.color = lv_color_hex(k.k.filled ? k.k.FP : k.t.card2);
   lv_draw_arc(layer, &arc);
-  double v;
-  if (!thermostat_value(m, *w, &v)) return;
   double lo, hi, step;
   limits_of(m, *w, &lo, &hi, &step);
-  const double amount = fraction(v, lo, hi);
-  int end = (int) px_round(135 + 270 * amount);
-  if (end <= 135) return;
-  if (end >= 360) end -= 360;
-  arc.end_angle = end;
-  arc.color = lv_color_hex(t.acc2);
-  lv_draw_arc(layer, &arc);
+  double v;
+  if (thermostat_value(m, *w, &v)) {
+    int end = (int) px_round(135 + 270 * fraction(v, lo, hi));
+    if (end > 135) {
+      if (end >= 360) end -= 360;
+      arc.end_angle = end;
+      arc.color = lv_color_hex(w->c_has ? w->c_now : k.t.acc2);
+      lv_draw_arc(layer, &arc);
+    }
+  }
+  // (2) The mark, from its own value: also while the thermostat's value has
+  // none, and then faded with the widget.
+  double mv = 0;
+  int32_t d[4];
+  const bool has_mark = bound_num(m, w->mark, &mv);  // before mv is read (see on_chart_draw)
+  if (!thermo_mark(W, H, has_mark, mv, lo, hi, d)) return;
+  lv_draw_rect_dsc_t dot;
+  lv_draw_rect_dsc_init(&dot);
+  dot.bg_color = lv_color_hex(k.k.text);
+  dot.bg_opa = opa;
+  dot.radius = LV_RADIUS_CIRCLE;
+  const lv_area_t r = {a.x1 + d[0], a.y1 + d[1], a.x1 + d[0] + d[2] - 1, a.y1 + d[1] + d[3] - 1};
+  lv_draw_rect(layer, &dot, &r);
+}
+
+// (2) The screen area of a slider's part: from d0 to d1 along the axis and
+// from c0 to c1 across it, in the slider's coordinates a.
+inline lv_area_t slider_area(const lv_area_t &a, const SliderGeom &g, int d0, int d1, int c0, int c1) {
+  lv_area_t r;
+  if (g.dir == 0) {
+    r.x1 = a.x1 + d0;
+    r.x2 = a.x1 + d1 - 1;
+    r.y1 = a.y1 + c0;
+    r.y2 = a.y1 + c1 - 1;
+    return r;
+  }
+  r.x1 = a.x1 + c0;
+  r.x2 = a.x1 + c1 - 1;
+  if (g.dir == 2) {
+    r.y1 = a.y1 + d0;
+    r.y2 = a.y1 + d1 - 1;
+  } else {
+    r.y1 = a.y1 + g.L - d1;
+    r.y2 = a.y1 + g.L - d0 - 1;
+  }
+  return r;
+}
+
+// Draws d on [d0, d1) along by [c0, c1) across, with only the part from k0
+// to k1 along kept (a cap is the rounded track kept to its own length).
+inline void slider_rect(lv_layer_t *layer, const lv_area_t &a, const SliderGeom &g, const lv_draw_rect_dsc_t &d, int d0,
+                        int d1, int c0, int c1, int k0, int k1) {
+  if (d1 <= d0 || c1 <= c0 || k1 <= k0) return;
+  const lv_area_t r = slider_area(a, g, d0, d1, c0, c1);
+  const lv_area_t keep = slider_area(a, g, k0, k1, c0 - 2, c1 + 2);
+  const lv_area_t clip = layer->_clip_area;
+  lv_area_t now;
+  now.x1 = clip.x1 > keep.x1 ? clip.x1 : keep.x1;
+  now.y1 = clip.y1 > keep.y1 ? clip.y1 : keep.y1;
+  now.x2 = clip.x2 < keep.x2 ? clip.x2 : keep.x2;
+  now.y2 = clip.y2 < keep.y2 ? clip.y2 : keep.y2;
+  if (now.x1 > now.x2 || now.y1 > now.y2) return;
+  layer->_clip_area = now;
+  lv_draw_rect(layer, &d, &r);
+  layer->_clip_area = clip;
+}
+
+// The same, leaving out the run from s0 to s1 along: while the slider is
+// faded the track is not drawn under the fill or the mark, so no part shows
+// through another and 40% is one picture (contract 4.7).
+inline void slider_rect_but(lv_layer_t *layer, const lv_area_t &a, const SliderGeom &g, const lv_draw_rect_dsc_t &d,
+                            int d0, int d1, int c0, int c1, int k0, int k1, int s0, int s1) {
+  if (s1 <= s0) {
+    slider_rect(layer, a, g, d, d0, d1, c0, c1, k0, k1);
+    return;
+  }
+  slider_rect(layer, a, g, d, d0, d1, c0, c1, k0, k1 < s0 ? k1 : s0);
+  slider_rect(layer, a, g, d, d0, d1, c0, c1, k0 > s1 ? k0 : s1, k1);
+}
+
+inline uint32_t track_colour(const Widget &w, int i) { return (uint32_t) w.track[i]; }
+
+// (2) A bar (look 1), or any slider with a track (contract 4.7): one object
+// whose picture this draws from the state paint_slider kept (sl_pos) and the
+// colours of the records: the track, the fill, the handle, the icon and the
+// mark. A track is its two caps (the rounded track kept to each cap) and
+// n - 1 pieces with a two-stop fade along the axis; none of them overlaps
+// another (cards spec B.4).
+inline void on_slider_draw(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model) return;
+  Model &m = *l->model;
+  const CardLook &k = look_for(m, card_of(m, *w));
+  lv_layer_t *layer = lv_event_get_layer(e);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  const SliderGeom g = slider_geom(lv_area_get_width(&a), lv_area_get_height(&a), w->look, w->dir, w->track_n, k.t.r2);
+  if (g.L <= 0 || g.S <= 0) return;
+  const lv_opa_t opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  const bool faded = opa < LV_OPA_MAX;
+  const int pos = w->sl_pos;
+  // Across: 14 thick and centred for the knob look, the whole side for a bar.
+  const int c0 = w->look == 0 ? (g.S - 14) / 2 : 0, c1 = w->look == 0 ? c0 + 14 : g.S;
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = opa;
+  d.border_opa = opa;
+  if (g.colours && w->track) {
+    const int n = g.colours;
+    const int half = w->look == 0 ? 11 : 6;
+    const int s0 = pos >= 0 && faded ? pos - half : 0, s1 = pos >= 0 && faded ? pos + half : 0;
+    int a1, b0;
+    track_caps(g, &a1, &b0);
+    d.radius = g.R;
+    d.bg_color = lv_color_hex(track_colour(*w, 0));
+    slider_rect_but(layer, a, g, d, 0, g.L, c0, c1, 0, a1, s0, s1);
+    d.bg_color = lv_color_hex(track_colour(*w, n - 1));
+    slider_rect_but(layer, a, g, d, 0, g.L, c0, c1, b0, g.L, s0, s1);
+    if (g.x1 > g.x0) {
+      d.radius = 0;
+      d.bg_grad.dir = g.dir == 0 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER;
+      d.bg_grad.stops_count = 2;
+      for (int i = 0; i + 1 < n; i++) {
+        int from, to;
+        track_piece(n, g.x0, g.x1, i, &from, &to);
+        // The fade runs from the start: upwards for a slider from the bottom.
+        const uint32_t first = track_colour(*w, g.dir == 1 ? i + 1 : i);
+        const uint32_t second = track_colour(*w, g.dir == 1 ? i : i + 1);
+        d.bg_color = lv_color_hex(first);
+        d.bg_grad.stops[0].color = lv_color_hex(first);
+        d.bg_grad.stops[0].opa = LV_OPA_COVER;
+        d.bg_grad.stops[0].frac = 0;
+        d.bg_grad.stops[1].color = lv_color_hex(second);
+        d.bg_grad.stops[1].opa = LV_OPA_COVER;
+        d.bg_grad.stops[1].frac = 255;
+        slider_rect_but(layer, a, g, d, from, to, c0, c1, from, to, s0, s1);
+      }
+      d.bg_grad.dir = LV_GRAD_DIR_NONE;
+      d.bg_grad.stops_count = 0;
+    }
+    if (pos < 0) return;
+    // The mark: white with a 2 px border in 0x15181D inside; a circle of 22
+    // on the knob look, 12 along by S + 4 across with radius 6 on a bar.
+    d.bg_color = lv_color_hex(0xFFFFFF);
+    d.border_color = lv_color_hex(0x15181D);
+    d.border_width = 2;
+    if (w->look == 0) {
+      const int cc = c0 + 7;
+      d.radius = LV_RADIUS_CIRCLE;
+      slider_rect(layer, a, g, d, pos - 11, pos + 11, cc - 11, cc + 11, pos - 11, pos + 11);
+    } else {
+      d.radius = 6;
+      slider_rect(layer, a, g, d, pos - 6, pos + 6, -2, g.S + 2, pos - 6, pos + 6);
+    }
+    return;
+  }
+  // A bar: the track, then the fill from the start, its handle and the icon.
+  const int fill = pos > 0 ? pos : 0;
+  const int drawn = bar_drawn(g, fill);
+  const int end = drawn < g.L ? drawn : g.L;
+  d.radius = g.R;
+  d.bg_color = lv_color_hex(w->sl_track);
+  slider_rect_but(layer, a, g, d, 0, g.L, 0, g.S, 0, g.L, 0, faded ? end : 0);
+  if (drawn > 0) {
+    d.bg_color = lv_color_hex(w->sl_fill);
+    slider_rect(layer, a, g, d, 0, drawn, 0, g.S, 0, end);
+  }
+  if (w->change && bar_handle(fill)) {
+    d.radius = 2;
+    d.bg_color = lv_color_hex(w->c_on);
+    slider_rect(layer, a, g, d, fill - 12, fill - 8, 8, g.S - 8, 0, g.L);
+  }
+  if (w->icon && bar_icon_room(g)) {
+    const lv_font_t *font = icon_font(24);
+    char buf[5];
+    icon_utf8(icon_or_fallback(font, w->icon), buf);
+    lv_draw_label_dsc_t t;
+    lv_draw_label_dsc_init(&t);
+    t.font = font;
+    t.color = lv_color_hex(w->sl_icon);
+    t.opa = opa;
+    t.align = LV_TEXT_ALIGN_CENTER;
+    t.text = buf;
+    t.text_local = 1;
+    const int lh = line_height(font);
+    lv_area_t box = slider_area(a, g, 0, 48, 0, g.S);
+    if (g.dir == 0) {
+      box.y1 = a.y1 + (g.S - lh) / 2;
+      box.y2 = box.y1 + lh - 1;
+    } else {
+      const int32_t cy = (box.y1 + box.y2 + 1) / 2;
+      box.y1 = cy - lh / 2;
+      box.y2 = box.y1 + lh - 1;
+    }
+    lv_draw_label(layer, &t, &box);
+  }
+}
+
+// ---------------------------------------------------------------- (2) choice
+
+// The icon of option i, 0 for none (contract 4.3: here 0 is no icon).
+inline uint32_t choice_icon(const Widget &w, int i) {
+  if (!w.icons || i >= w.icons_n || !(w.icons[i] > 0)) return 0;
+  return (uint32_t) w.icons[i];
+}
+
+// Where the content of option i goes in a box of W by H (the cell, or the
+// dot of `look` 1), by the button's rules (contract 4.7, layout_button):
+// icon 24 and text 15 centred with a gap of 6 and padding 6; stacked when
+// both exist and H is 64 or more, else side by side; an option without one
+// shows the other alone. tw is the room for the text, at most 0: none.
+// shown is the text as drawn (side by side, its width centres the pair).
+struct ChoicePlace {
+  uint32_t cp;  // the glyph drawn, 0: no icon
+  int ix, iy, iw, ih;
+  int tx, ty, tw, th;
+  bool text, centre;
+};
+
+inline ChoicePlace choice_place(const Widget &w, int i, int W, int H, const char *shown, size_t shown_n) {
+  const lv_font_t *ifont = icon_font(24), *tf = text_font(15);
+  ChoicePlace p{};
+  const uint32_t icon = choice_icon(w, i);
+  p.cp = icon ? icon_or_fallback(ifont, icon) : 0;
+  p.text = choice_text(w, (uint32_t) i)[0] != 0;
+  p.ih = line_height(ifont);
+  p.th = line_height(tf);
+  p.iw = p.cp ? lv_font_get_glyph_width(ifont, p.cp, 0) : 0;
+  if (p.cp && p.text && H >= 64) {
+    const int y0 = (H - (p.ih + 6 + p.th)) / 2;
+    p.ix = (W - p.iw) / 2;
+    p.iy = y0;
+    p.tx = 6;
+    p.ty = y0 + p.ih + 6;
+    p.tw = W - 12;
+    p.centre = true;
+  } else if (p.cp && p.text) {
+    const int avail = W - 12 - p.iw - 6;
+    const int sw = shown ? text_width(tf, shown, shown_n) : avail;
+    const int x0 = (W - (p.iw + 6 + (sw < avail ? sw : avail))) / 2;
+    p.ix = x0;
+    p.iy = (H - p.ih) / 2;
+    p.tx = x0 + p.iw + 6;
+    p.ty = (H - p.th) / 2 > 0 ? (H - p.th) / 2 : 0;
+    p.tw = avail;
+  } else if (p.cp) {
+    p.ix = (W - p.iw) / 2;
+    p.iy = (H - p.ih) / 2;
+  } else if (p.text) {
+    p.tx = 6;
+    p.ty = (H - p.th) / 2 > 0 ? (H - p.th) / 2 : 0;
+    p.tw = W - 12;
+    p.centre = true;
+  }
+  return p;
+}
+
+// The box option i is drawn in, from the rectangle's corner: its cell, or
+// with `look` 1 the dot in it. All cells have one size.
+inline void choice_box(const Widget &w, const ChoiceGrid &g, int i, int out[4]) {
+  if (w.look == 1)
+    choice_dot(g, i, out);
+  else
+    choice_cell(g, i, out);
+}
+
+// Worked out once at the build (cards spec B.4): the bytes of each text that
+// fit its room, which were cut with an ellipsis, and on which swatches
+// readable() is the dark colour (the swatches are constants).
+inline void choice_build(Widget &w) {
+  w.ch_down = w.ch_pulse = w.ch_sel_d = w.ch_press_d = w.ch_pulse_d = -1;
+  w.ch_key = 0;
+  w.ch_cut = w.ch_dark = 0;
+  w.cut = 0;
+  memset(w.ch_fit, 0, sizeof w.ch_fit);
+  ChoiceGrid g;
+  if (!choice_grid_of(w, &g)) return;
+  int b[4];
+  choice_box(w, g, 0, b);
+  const lv_font_t *tf = text_font(15);
+  for (int i = 0; i < g.n; i++) {
+    char buf[OPTION_TEXT_BYTES + 8];
+    const size_t n = shown_text(choice_text(w, (uint32_t) i), buf, sizeof buf);
+    const ChoicePlace p = choice_place(w, i, b[2], b[3], nullptr, 0);
+    const size_t keep = p.tw > 0 ? cut_keep(tf, buf, n, p.tw) : n;
+    w.ch_fit[i] = (uint8_t) keep;
+    if (keep < n) w.ch_cut |= (uint16_t) (1u << i);
+    if (w.cols && i < w.cols_n && readable((uint32_t) w.cols[i]) == COLOUR_INK) w.ch_dark |= (uint16_t) (1u << i);
+  }
+  w.cut = w.ch_cut ? 1 : 0;
+}
+
+// The selected option: the optimistic one of a tap with policy 0, else the
+// value when it is a whole number that is an index (contract 4.3); -1 none.
+inline int choice_selected(Model &m, const Widget &w) {
+  double v;
+  if (w.ovr)
+    v = w.ovr_value;
+  else if (!bound_num(m, w.value, &v))
+    return -1;
+  if (!(v >= 0) || v != floor(v) || v >= w.options) return -1;
+  return (int) v;
+}
+
+// The colours every cell is drawn from, as one number: a change of the card
+// that moves any of them draws the whole control again.
+inline uint32_t choice_key(const CardLook &k) {
+  const uint32_t parts[] = {k.k.filled, k.k.text, k.k.AF, k.k.AT, k.k.AP, k.k.FP, k.t.card2, k.t.card2_pr,
+                            (uint32_t) k.t.r2};
+  uint32_t h = 2166136261u;
+  for (uint32_t x : parts) h = (h ^ x) * 16777619u;
+  return h | 1u;
+}
+
+// Draws option i's icon and text in box b (screen coordinates), cut to it:
+// a line higher than its box starts at its top and is cut at its bottom.
+inline void choice_content(lv_layer_t *layer, const Widget &w, int i, const lv_area_t &b, uint32_t colour, lv_opa_t opa) {
+  const lv_area_t clip = layer->_clip_area;
+  const lv_area_t now = {LV_MAX(clip.x1, b.x1), LV_MAX(clip.y1, b.y1), LV_MIN(clip.x2, b.x2), LV_MIN(clip.y2, b.y2)};
+  if (now.x1 > now.x2 || now.y1 > now.y2) return;
+  const lv_font_t *tf = text_font(15);
+  // The text as drawn: the bytes that fit, and the ellipsis when it was cut.
+  char text[48];
+  size_t n = shown_text(choice_text(w, (uint32_t) i), text, OPTION_TEXT_BYTES + 1);
+  if (w.ch_fit[i] < n) n = w.ch_fit[i];
+  if (w.ch_cut >> i & 1) {
+    const char *ell = ellipsis_of(tf);
+    const size_t en = strlen(ell);
+    memcpy(text + n, ell, en);
+    n += en;
+  }
+  text[n] = 0;
+  const ChoicePlace p = choice_place(w, i, lv_area_get_width(&b), lv_area_get_height(&b), text, n);
+  layer->_clip_area = now;
+  lv_draw_label_dsc_t d;
+  if (p.cp) {
+    char glyph_buf[5];
+    icon_utf8(p.cp, glyph_buf);
+    lv_draw_label_dsc_init(&d);
+    d.font = icon_font(24);
+    d.color = lv_color_hex(colour);
+    d.opa = opa;
+    d.text = glyph_buf;
+    d.text_local = 1;
+    const lv_area_t ia = {b.x1 + p.ix, b.y1 + p.iy, b.x1 + p.ix + (p.iw > 0 ? p.iw : 1) - 1, b.y1 + p.iy + p.ih - 1};
+    lv_draw_label(layer, &d, &ia);
+  }
+  if (p.text && p.tw > 0) {
+    lv_draw_label_dsc_init(&d);
+    d.font = tf;
+    d.color = lv_color_hex(colour);
+    d.opa = opa;
+    d.align = p.centre ? LV_TEXT_ALIGN_CENTER : LV_TEXT_ALIGN_LEFT;
+    d.text = text;
+    d.text_local = 1;
+    const lv_area_t ta = {b.x1 + p.tx, b.y1 + p.ty, b.x1 + p.tx + p.tw - 1, b.y1 + p.ty + p.th - 1};
+    lv_draw_label(layer, &d, &ta);
+  }
+  layer->_clip_area = clip;
+}
+
+// (2) A choice (contract 4.7): one object whose cells this draws from the
+// state paint_choice kept. LVGL calls it once for every band of a refresh,
+// so it skips the cells outside the band (cards spec B.4).
+inline void on_choice_draw(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model) return;
+  Model &m = *l->model;
+  ChoiceGrid g;
+  if (!choice_grid_of(*w, &g)) return;
+  const CardLook &k = look_for(m, card_of(m, *w));
+  lv_layer_t *layer = lv_event_get_layer(e);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  const lv_area_t clip = layer->_clip_area;
+  const lv_opa_t opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  const bool filled = k.k.filled;
+  for (int i = 0; i < g.n; i++) {
+    int c[4];
+    choice_cell(g, i, c);
+    const lv_area_t cell = {a.x1 + c[0], a.y1 + c[1], a.x1 + c[0] + c[2] - 1, a.y1 + c[1] + c[3] - 1};
+    if (cell.x2 < clip.x1 || cell.x1 > clip.x2 || cell.y2 < clip.y1 || cell.y1 > clip.y2) continue;
+    TAB_COUNT(choice_cells);
+    int b[4];
+    choice_box(*w, g, i, b);
+    const lv_area_t box = {a.x1 + b[0], a.y1 + b[1], a.x1 + b[0] + b[2] - 1, a.y1 + b[1] + b[3] - 1};
+    const bool swatch = w->cols && i < w->cols_n;
+    const bool selected = i == w->ch_sel_d, pressed = i == w->ch_press_d;
+    uint32_t bg, fg;
+    if (i == w->ch_pulse_d) {
+      bg = k.k.AF;
+      fg = k.k.AT;
+    } else if (swatch) {
+      const uint32_t col = (uint32_t) w->cols[i];
+      fg = (w->ch_dark >> i & 1) ? COLOUR_INK : COLOUR_WHITE;
+      bg = pressed ? mix(fg, col, 85) : col;
+    } else if (selected) {
+      bg = pressed ? k.k.AP : k.k.AF;
+      fg = k.k.AT;
+    } else {
+      bg = filled ? k.k.FP : pressed ? k.t.card2_pr : k.t.card2;
+      fg = k.k.text;
+    }
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = lv_color_hex(bg);
+    d.bg_opa = opa;
+    d.radius = w->look == 1 ? LV_RADIUS_CIRCLE : k.t.r2;
+    if (swatch && selected) {
+      // A selected swatch: 3 px in the card's text colour now, inside.
+      d.border_width = 3;
+      d.border_color = lv_color_hex(k.k.text);
+      d.border_opa = opa;
+    }
+    lv_draw_rect(layer, &d, &box);
+    choice_content(layer, *w, i, box, fg, opa);
+  }
+}
+
+// Marks cell i to be drawn again (screen coordinates); -1: none.
+inline void choice_invalidate(Widget &w, const ChoiceGrid &g, int i) {
+  if (i < 0 || i >= g.n) return;
+  lv_area_t a;
+  lv_obj_get_coords(w.obj, &a);
+  int c[4];
+  choice_cell(g, i, c);
+  const lv_area_t cell = {a.x1 + c[0], a.y1 + c[1], a.x1 + c[0] + c[2] - 1, a.y1 + c[1] + c[3] - 1};
+  lv_obj_invalidate_area(w.obj, &cell);
+}
+
+// Keeps what the cells show and invalidates only the cells that change: a
+// new value, a press or a pulse is one or two cells (cards spec B.4, rule
+// 4). A choice never fades for want of a value; it fades with its card.
+inline void paint_choice(Layout &l, Widget &w) {
+  Model &m = *l.model;
+  const CardLook &k = look_for(m, card_of(m, w));
+  fade(w.obj, k.unavailable);
+  w.faded = 0;
+  set_outline(w.obj, w.fb == 1, k.k.filled ? k.k.FI : k.k.A);
+  ChoiceGrid g;
+  if (!choice_grid_of(w, &g)) return;
+  const int sel = choice_selected(m, w);
+  const int press = w.pressed && w.ch_down >= 0 ? w.ch_down : -1;
+  const int pulse = w.fb == 2 ? w.ch_pulse : -1;
+  const uint32_t key = choice_key(k);
+  const int was[3] = {w.ch_sel_d, w.ch_press_d, w.ch_pulse_d}, is[3] = {sel, press, pulse};
+  const bool whole = w.ch_key != key;
+  w.ch_key = key;
+  w.ch_sel_d = (int8_t) sel;
+  w.ch_press_d = (int8_t) press;
+  w.ch_pulse_d = (int8_t) pulse;
+  if (whole) {
+    lv_obj_invalidate(w.obj);
+    return;
+  }
+  for (int j = 0; j < 3; j++) {
+    if (was[j] == is[j]) continue;
+    choice_invalidate(w, g, was[j]);
+    choice_invalidate(w, g, is[j]);
+  }
+}
+
+// (2) A press on a choice with `change` (contract 4.3, 7.4, cards spec B.5):
+// PRESSED keeps the cell under the point (a gap is none); the cell shows
+// pressed while the finger is in it; CLICKED sends the option when the
+// release is in the cell the press went down in. A swipe may take the
+// press: LVGL then sends PRESS_LOST and no CLICKED.
+inline void on_choice_event(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || l->state != L_ACTIVE) return;
+  lv_indev_t *indev = lv_indev_active();
+  lv_point_t p = {0, 0};
+  if (indev) lv_indev_get_point(indev, &p);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  ChoiceGrid g;
+  const int at = choice_grid_of(*w, &g) ? choice_cell_at(g, p.x - a.x1, p.y - a.y1) : -1;
+  switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+      if (faded_and_quiet(*l->model, *w)) break;
+      w->ch_down = (int8_t) at;
+      w->pressed = at >= 0 ? 1 : 0;
+      paint_widget(*l, *w);
+      if (at >= 0) after_press();
+      break;
+    case LV_EVENT_PRESSING: {
+      const uint8_t in = w->ch_down >= 0 && at == w->ch_down ? 1 : 0;
+      if (in != w->pressed) {
+        w->pressed = in;
+        paint_widget(*l, *w);
+      }
+      break;
+    }
+    case LV_EVENT_RELEASED:
+      if (!w->pressed) break;
+      w->pressed = 0;
+      paint_widget(*l, *w);
+      break;
+    case LV_EVENT_PRESS_LOST:
+      w->ch_down = -1;
+      if (!w->pressed) break;
+      w->pressed = 0;
+      paint_widget(*l, *w);
+      break;
+    case LV_EVENT_CLICKED: {
+      const int down = w->ch_down;
+      w->ch_down = -1;
+      // A lost press never gets here; the state is read once more anyway.
+      if (down < 0 || at != down || !vis_shows(*l->model, *w) || faded_tap(*l->model, *w)) break;
+      choice_picked(*l, *w, down);
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 // ---------------------------------------------------------------- painting
 
+// (2) The card of a widget pulses (contract 4.7, "Card, pulse").
+inline bool card_pulses(Model &m, const Widget &w) {
+  const Widget *card = card_of(m, w);
+  return card && card->fb == 2;
+}
+
 inline void paint_label(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
-  set_text_colour(w.obj, w.size == 0 ? (on ? t.ontx : t.tx2) : (on ? t.ontx : t.tx));
+  const CardLook &k = look_for(m, card_of(m, w));
   const char *text = "";
-  bound_text(m, w.text, &text);
+  char clock[CLOCK_CAP];
+  if (w.clk) {
+    // (2) A clock shows its `value` as a time and ignores `text`; the minute
+    // drawn is kept for the once-a-second pass (count_page).
+    const int minute = clock_now(m, w);
+    clock_text(minute, w.clk, clock);
+    text = clock;
+    w.sl_pos = (int16_t) minute;
+  } else {
+    bound_text(m, w.text, &text);
+  }
+  // (2) The font is picked here, as `px` with a digit size depends on the
+  // text. It is set only when it differs: a font change lays the screen out
+  // (cards spec B.4). A line higher than the box starts at its top.
+  bool small = false;
+  const lv_font_t *font = label_font_of(label_px(w, text, &small));
+  if (font && font != lv_obj_get_style_text_font(w.obj, LV_PART_MAIN)) {
+    set_font(w.obj, font);
+    const int pad = (w.r[3] - line_height(font)) / 2;
+    style_num(w.obj, LV_STYLE_PAD_TOP, pad > 0 ? pad : 0);
+  }
+  uint32_t colour = small ? (k.k.filled ? k.k.FS : k.t.tx2) : k.k.text;
+  if (w.c_has) colour = w.c_now;
+  if (card_pulses(m, w)) colour = k.k.AT;
+  set_text_colour(w.obj, colour);
+  fade(w.obj, k.unavailable);
   w.cut = set_text(w.obj, text, w.r[2]);
 }
 
-inline void layout_button(Layout &l, Widget &w, const char *text) {
+// (2) The icon a button or a card header shows: `ic` while it has a value
+// above 0, else `icon` (contract 4.3).
+inline uint32_t shown_icon(Model &m, const Widget &w) {
+  double v;
+  if (w.ic.how != B_ABSENT && bound_num(m, w.ic, &v) && v > 0 && v <= 0x10FFFF) return (uint32_t) v;
+  return w.icon;
+}
+
+inline void layout_button(Layout &l, Widget &w, const char *text, uint32_t icon) {
   (void) l;
-  const int W = w.r[2], H = w.r[3];
+  int bx, by, W, H;
+  button_box(w, &bx, &by, &W, &H);
   const lv_font_t *tf = text_font(15);
-  const lv_font_t *ifont = icon_font(24);
+  const lv_font_t *ifont = icon_font(button_icon_px(w));
   const int ih = line_height(ifont), th = line_height(tf);
   const bool has_icon = w.o1 != nullptr, has_text = w.o2 != nullptr;
-  const int iw = has_icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, w.icon), 0) : 0;
+  const int iw = has_icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, icon), 0) : 0;
   if (has_icon && has_text && H >= 64) {
     const int group = ih + 6 + th;
     const int y0 = (H - group) / 2;
-    lv_obj_set_pos(w.o1, (W - iw) / 2, y0);
-    lv_obj_set_pos(w.o2, 6, y0 + ih + 6);
+    move(w.o1, (W - iw) / 2, y0);
+    move(w.o2, 6, y0 + ih + 6);
     w.cut = set_text(w.o2, text, W - 12);
   } else if (has_icon && has_text) {
     const int avail = W - 12 - iw - 6;
@@ -672,64 +1821,118 @@ inline void layout_button(Layout &l, Widget &w, const char *text) {
     const int tw = text_width(tf, shown, strlen(shown));
     const int group = iw + 6 + (tw < avail ? tw : avail);
     const int x0 = (W - group) / 2;
-    lv_obj_set_pos(w.o1, x0, (H - ih) / 2);
-    lv_obj_set_pos(w.o2, x0 + iw + 6, 0);
+    move(w.o1, x0, (H - ih) / 2);
+    move(w.o2, x0 + iw + 6, 0);
   } else if (has_icon) {
-    lv_obj_set_pos(w.o1, (W - iw) / 2, (H - ih) / 2);
+    move(w.o1, (W - iw) / 2, (H - ih) / 2);
   } else if (has_text) {
     w.cut = set_text(w.o2, text, W - 12);
   }
 }
 
-inline void paint_button(Layout &l, Widget &w) {
-  Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
-  const bool pulse = w.fb == 2;
-  uint32_t bg = t.card2;
-  if (pulse)
-    bg = t.accf;
-  else if (w.pressed)
-    bg = on ? t.onbg_pr : t.card2_pr;
-  set_bg(w.obj, bg);
-  const uint32_t fg = pulse ? t.acct : t.tx;
-  set_text_colour(w.o1, fg);
-  set_text_colour(w.o2, fg);
-  set_outline(w.obj, w.fb == 1, on ? t.ion : t.acc);
-  const char *text = "";
-  bound_text(m, w.text, &text);
-  layout_button(l, w, text);
+inline bool button_selected(Model &m, Widget &w);
+
+// (2) The border inside a selected button (contract 4.7): 2 px in `acct`
+// when `accf` does not stand out on the card, 3 px in the card's text colour
+// on a swatch. Drawn over the button, so its border width and the place of
+// its icon and text never change.
+inline void on_button_ring(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  if (!w || !w->ring) return;
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = LV_OPA_TRANSP;
+  d.border_width = w->ring;
+  d.border_color = lv_color_hex(w->ring_c);
+  d.border_opa = lv_obj_get_style_opa_recursive(w->obj, LV_PART_MAIN);
+  d.radius = lv_obj_get_style_radius(w->obj, LV_PART_MAIN);
+  lv_draw_rect(lv_event_get_layer(e), &d, &a);
 }
 
-inline bool switch_value(Model &m, Widget &w, bool *v) {
-  if (w.ovr) {
-    *v = w.ovr_value != 0;
-    return true;
+inline void paint_button(Layout &l, Widget &w) {
+  Model &m = *l.model;
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
+  const bool pulse = w.fb == 2;
+  // (2) Selected (`value` 1), a swatch (`c`), bare (`shape` 2).
+  const bool selected = button_selected(m, w);
+  const bool swatch = w.c_has != 0;
+  bool has_bg = true;
+  uint32_t bg = k.t.card2, fg = k.t.tx;
+  if (pulse) {
+    bg = k.k.AF;
+    fg = k.k.AT;
+  } else if (swatch) {
+    bg = w.pressed ? mix(w.c_on, w.c_now, 85) : w.c_now;
+    fg = w.c_on;
+  } else if (selected) {
+    bg = w.pressed ? k.k.AP : k.k.AF;
+    fg = k.k.AT;
+  } else if (w.pressed) {
+    bg = filled ? k.k.FP : k.t.card2_pr;
+  } else if (w.shape == 2) {
+    has_bg = false;
   }
+  if (has_bg)
+    set_bg(w.obj, bg);
+  else
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
+  fade(w.obj, k.unavailable);
+  set_text_colour(w.o1, fg);
+  set_text_colour(w.o2, fg);
+  set_outline(w.obj, w.fb == 1, filled ? k.k.FI : k.k.A);
+  const uint8_t ring = !selected ? 0 : swatch ? 3 : k.k.sel_border ? 2 : 0;
+  const uint32_t ring_c = ring == 3 ? k.k.text : ring == 2 ? k.k.AT : 0;
+  if (ring != w.ring || ring_c != w.ring_c) {
+    w.ring = ring;
+    w.ring_c = ring_c;
+    lv_obj_invalidate(w.obj);  // drawn by on_button_ring
+  }
+  const uint32_t icon = shown_icon(m, w);
+  if (w.o1) set_icon(w.o1, button_icon_px(w), icon);
+  const char *text = "";
+  bound_text(m, w.text, &text);
+  layout_button(l, w, text, icon);
+}
+
+// A bool of a switch or a button now: the value the widget's own tap shows,
+// else the one its card shows for the same slot (contract 7.4), else its own.
+inline bool bool_value(Model &m, Widget &w, const Bound &b, bool *v) {
   double x;
-  if (!bound_num(m, w.value, &x)) return false;
+  if (w.ovr)
+    x = w.ovr_value;
+  else if (!slot_override(m, card_of(m, w), b, &x) && !bound_num(m, b, &x))
+    return false;
   *v = x != 0;
   return true;
 }
 
+inline bool switch_value(Model &m, Widget &w, bool *v) { return bool_value(m, w, w.value, v); }
+
+// (2) A button with `value` is selected while it is 1; no value is 0 (4.4).
+inline bool button_selected(Model &m, Widget &w) {
+  bool v = false;
+  return w.value.how != B_ABSENT && bool_value(m, w, w.value, &v) && v;
+}
+
 inline void paint_switch(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   bool v = false;
   const bool has = switch_value(m, w, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
-  uint32_t track = v ? (on ? t.ion : t.acc) : t.card2;
-  if (w.pressed) track = v ? t.accf_pr : t.card2_pr;
+  uint32_t track = v ? (w.c_has ? w.c_now : filled ? k.k.FI : k.k.A) : k.t.card2;
+  if (w.pressed) track = v ? k.k.AP : k.t.card2_pr;
   set_bg(w.o1, track);
-  set_bg(w.o2, v ? (on ? t.onbg : t.acct) : t.tx2);
+  set_bg(w.o2, v ? (w.c_has ? w.c_on : filled ? k.k.F : k.k.AT) : k.t.tx2);
   const int tw = w.r[2] < 64 ? w.r[2] : 64;
   const int th = w.r[3] < 36 ? w.r[3] : 36;
-  lv_obj_set_pos(w.o2, v ? tw - 32 : 4, (th - 28) / 2);
-  set_outline(w.o1, w.fb == 1, on ? t.ion : t.acc);
+  move(w.o2, v ? tw - 32 : 4, (th - 28) / 2);
+  set_outline(w.o1, w.fb == 1, filled ? k.k.FI : k.k.A);
 }
 
 inline bool slider_value(Model &m, Widget &w, double *v) {
@@ -741,47 +1944,137 @@ inline bool slider_value(Model &m, Widget &w, double *v) {
     *v = w.ovr_value;
     return true;
   }
-  return bound_num(m, w.value, v);
+  if (!bound_num(m, w.value, v)) return false;
+  // (2) `rate`, only without `change` (contract 4.7): the value shown is
+  // clamp(value + rate * age, min, max). A `rate` without a value counts as
+  // 0. The age is that of `value`, never that of `rate` (4.4).
+  if (w.kind == W_SLIDER && !w.change && w.mark.how != B_ABSENT) {
+    double rate = 0, lo, hi, step;
+    if (!bound_num(m, w.mark, &rate)) rate = 0;
+    limits_of(m, w, &lo, &hi, &step);
+    double s = rate != 0 ? *v + rate * value_age_s(m, w.value) : *v;
+    if (s < lo) s = lo;
+    if (s > hi) s = hi;
+    *v = s;
+  }
+  return true;
+}
+
+// (2) Where a slider is drawn now, along its axis, as paint_slider keeps it
+// in sl_pos: the end of the fill or the mark of a drawn one (-1: no mark),
+// the end of the fill of a knob slider.
+inline int slider_pos_now(Model &m, Widget &w) {
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool drawn = w.look == 1 || w.track_n >= 2;
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, drawn ? w.track_n : 0, k.t.r2);
+  double v = 0, lo, hi, step;
+  const bool has = slider_value(m, w, &v);
+  limits_of(m, w, &lo, &hi, &step);
+  int pos = slider_shown(g, has, v, lo, hi);
+  if (drawn && !g.colours && pos < 0) pos = 0;
+  return pos;
+}
+
+// (2) A bar or a slider with a track (one drawn object): keeps where the
+// fill ends or the mark is and the colours, and invalidates only what
+// changed, the strip between the old and the new position when only the
+// position moved (cards spec B.4, rule 4). Nothing here lays anything out.
+inline void paint_drawn_slider(Widget &w, const CardLook &k, bool has, double v, double lo, double hi) {
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, w.track_n, k.t.r2);
+  const bool filled = k.k.filled;
+  int pos = slider_shown(g, has, v, lo, hi);
+  if (!g.colours && pos < 0) pos = 0;  // a bar without a value: no fill
+  const uint32_t track = filled ? k.k.FP : k.t.card2;
+  const uint32_t icon = bar_icon_on_fill(g, pos) ? w.c_on : filled ? k.k.FT : k.t.tx2;
+  set_outline(w.obj, w.fb == 1, filled ? k.k.FI : k.k.A);
+  if (!w.sl_drawn || w.sl_track != track || w.sl_fill != w.c_now || w.sl_icon != icon) {
+    w.sl_drawn = 1;
+    w.sl_track = track;
+    w.sl_fill = w.c_now;
+    w.sl_icon = icon;
+    w.sl_pos = (int16_t) pos;
+    lv_obj_invalidate(w.obj);
+    return;
+  }
+  if (w.sl_pos == pos) return;
+  // The strip that changes, along the axis: a mark at either place, or the
+  // end of the fill with its rounded corners and its handle.
+  const int was = w.sl_pos;
+  w.sl_pos = (int16_t) pos;
+  int from = 1 << 20, to = -(1 << 20);
+  auto take = [&](int a0, int a1) {
+    if (a0 < from) from = a0;
+    if (a1 > to) to = a1;
+  };
+  if (g.colours) {
+    const int half = (w.look == 0 ? 11 : 6) + 1;
+    if (was >= 0) take(was - half, was + half);
+    if (pos >= 0) take(pos - half, pos + half);
+  } else {
+    const int d0 = bar_drawn(g, was), d1 = bar_drawn(g, pos);
+    take((d0 < d1 ? d0 : d1) - g.R - 1, (d0 > d1 ? d0 : d1) + 1);
+    if (w.change && bar_handle(was)) take(was - 13, was - 7);
+    if (w.change && bar_handle(pos)) take(pos - 13, pos - 7);
+  }
+  lv_area_t a;
+  lv_obj_get_coords(w.obj, &a);
+  const lv_area_t strip = slider_area(a, g, from, to, -14, g.S + 14);
+  lv_obj_invalidate_area(w.obj, &strip);
 }
 
 inline void paint_slider(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   double v = 0, lo, hi, step;
   const bool has = slider_value(m, w, &v);
   limits_of(m, w, &lo, &hi, &step);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
-  w.faded = has ? 0 : 1;
-  const double amount = has ? fraction(v, lo, hi) : 0;
-  const int W = w.r[2], H = w.r[3];
-  const int fill = (int) js_round(amount * W);
-  set_bg(w.o1, on ? t.onbg_pr : t.card2);
-  set_bg(w.o2, on ? t.ion : t.acc);
-  lv_obj_set_width(w.o2, fill);
-  if (fill <= 0)
-    lv_obj_add_flag(w.o2, LV_OBJ_FLAG_HIDDEN);
-  else
-    lv_obj_remove_flag(w.o2, LV_OBJ_FLAG_HIDDEN);
-  set_bg(w.o3, on ? t.ontx : t.tx);
-  lv_obj_set_style_outline_width(w.o3, on ? 2 : 0, 0);
-  if (on) {
-    lv_obj_set_style_outline_color(w.o3, lv_color_hex(t.onbg), 0);
-    lv_obj_set_style_outline_opa(w.o3, LV_OPA_COVER, 0);
+  // Faded when the value went away, also under a dragging finger: the press
+  // is then lost (paint_widget). (2) With `nv` 1 a slider without a value is
+  // not faded, shows its track only and takes input (contract 4.7).
+  double real;
+  w.faded = w.nv || w.ovr || bound_num(m, w.value, &real) ? 0 : 1;
+  fade(w.obj, (!has && !w.nv) || w.faded || k.unavailable);
+  if (w.look == 1 || w.track_n >= 2) {
+    paint_drawn_slider(w, k, has, v, lo, hi);
+    return;
   }
-  lv_obj_set_pos(w.o3, fill - 11, (H - 22) / 2);
-  set_outline(w.o1, w.fb == 1, on ? t.ion : t.acc);
+  // The knob of version 1, along its axis (2): the track 14 across, the fill
+  // from the start, the knob centred on the end of the fill.
+  const SliderGeom g = slider_geom(w.r[2], w.r[3], w.look, w.dir, 0, k.t.r2);
+  const int shown = slider_shown(g, has, v, lo, hi);
+  w.sl_pos = (int16_t) shown;  // (2) for the once-a-second pass of `rate`
+  const int fill = shown > 0 ? shown : 0;
+  set_bg(w.o1, filled ? k.k.FP : k.t.card2);
+  set_bg(w.o2, w.c_has ? w.c_now : filled ? k.k.FI : k.k.A);
+  if (w.dir == 0) {
+    set_width(w.o2, fill);
+  } else {
+    set_height(w.o2, fill);
+    move(w.o2, 0, w.dir == 1 ? g.L - fill : 0);
+  }
+  set_hidden(w.o2, fill <= 0);
+  set_bg(w.o3, filled ? k.k.FT : k.t.tx);
+  style_num(w.o3, LV_STYLE_OUTLINE_WIDTH, filled ? 2 : 0);
+  if (filled) {
+    style_colour(w.o3, LV_STYLE_OUTLINE_COLOR, k.k.F);
+    style_num(w.o3, LV_STYLE_OUTLINE_OPA, LV_OPA_COVER);
+  }
+  if (w.dir == 0)
+    move(w.o3, fill - 11, (w.r[3] - 22) / 2);
+  else
+    move(w.o3, (w.r[2] - 22) / 2, w.dir == 1 ? g.L - fill - 11 : fill - 11);
+  set_hidden(w.o3, !has && w.nv);
+  set_outline(w.o1, w.fb == 1, filled ? k.k.FI : k.k.A);
 }
 
 inline void paint_thermostat(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
-  const bool on = card_is_on(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
+  const bool filled = k.k.filled;
   double v;
   const bool has = thermostat_value(m, w, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
   char text[24];
   if (has)
@@ -790,19 +2083,19 @@ inline void paint_thermostat(Layout &l, Widget &w) {
     snprintf(text, sizeof text, "\xE2\x80\x93");  // en dash
   const int s = w.r[2] < w.r[3] ? w.r[2] : w.r[3];
   const lv_font_t *font = thermostat_font(text, s);
-  if (lv_obj_get_style_text_font(w.o1, LV_PART_MAIN) != font) lv_obj_set_style_text_font(w.o1, font, 0);
+  set_font(w.o1, font);
   const int pad = (s - line_height(font)) / 2;
-  lv_obj_set_style_pad_top(w.o1, pad > 0 ? pad : 0, 0);
-  set_text_colour(w.o1, on ? t.ontx : t.tx);
+  style_num(w.o1, LV_STYLE_PAD_TOP, pad > 0 ? pad : 0);  // only when the font changed (rule 3)
+  set_text_colour(w.o1, k.k.text);
   w.cut = set_text(w.o1, text, thermostat_text_width(s));
-  for (int k = 0; k < 2; k++) {
-    lv_obj_t *b = k == 0 ? w.o2 : w.o3;
+  for (int b_i = 0; b_i < 2; b_i++) {
+    lv_obj_t *b = b_i == 0 ? w.o2 : w.o3;
     if (!b) continue;
-    const int dir = k == 0 ? -1 : 1;
-    set_bg(b, w.pressed_part == dir ? t.card2_pr : t.card2);
-    set_outline(b, w.fb == 1, on ? t.ion : t.acc);
+    const int dir = b_i == 0 ? -1 : 1;
+    set_bg(b, w.pressed_part == dir ? k.t.card2_pr : k.t.card2);
+    set_outline(b, w.fb == 1, filled ? k.k.FI : k.k.A);
     lv_obj_t *icon = lv_obj_get_child(b, 0);
-    set_text_colour(icon, t.tx);
+    set_text_colour(icon, k.t.tx);
   }
   lv_obj_invalidate(w.obj);
 }
@@ -811,54 +2104,105 @@ inline void paint_chart(Layout &l, Widget &w) {
   Model &m = *l.model;
   const double *v;
   const bool has = bound_list(m, w.value, &v) >= 0;
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  fade(w.obj, !has || card_unavailable(m, w));
   lv_obj_invalidate(w.obj);
 }
 
 inline void paint_image(Layout &l, Widget &w) {
   Model &m = *l.model;
-  Widget *card = card_of(m, w);
-  const Tok t = card_tokens(m, card);
+  const CardLook &k = look_for(m, card_of(m, w));
   double v = 0;
   const bool has = bound_num(m, w.value, &v);
-  lv_obj_set_style_opa(w.obj, has ? LV_OPA_COVER : LV_OPA_40, 0);
+  fade(w.obj, !has || k.unavailable);
   w.faded = has ? 0 : 1;
-  set_bg(w.obj, w.pressed ? t.card2_pr : t.card2);
-  const int px = image_icon_px(w.r[2], w.r[3]);
-  set_text_colour(w.o1, t.acc2);
-  set_icon(w.o1, px, has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
-  set_outline(w.obj, w.fb == 1, t.acc);
+  // (2) While its card pulses an image has no box or badge and its icon is
+  // acct. Its colours by look (box, badge, bare) are kept in the widget
+  // (widget_colour_update): c_now the box or circle, c_on the icon.
+  const bool pulse = card_pulses(m, w);
+  const bool boxed = w.look != 2;
+  if (pulse) {
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
+  } else if (w.pressed) {
+    // Pressed (only with `tap`): card2_pr, on: onbg_pr, radius r2. Version
+    // 1's box keeps card2_pr.
+    set_bg(w.obj, w.look != 0 && k.k.filled ? k.k.FP : k.t.card2_pr);
+  } else if (boxed) {
+    set_bg(w.obj, w.c_has ? w.c_now : k.t.card2);
+  } else {
+    style_num(w.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
+  }
+  if (w.look == 1) set_radius(w.obj, w.pressed ? k.t.r2 : LV_RADIUS_CIRCLE);
+  set_text_colour(w.o1, pulse ? k.k.AT : w.c_has ? w.c_on : k.t.acc2);
+  set_icon(w.o1, image_icon_size(w.look, w.r[2], w.r[3]), has && v > 0 ? (uint32_t) v : ICON_PLACEHOLDER);
+  set_outline(w.obj, w.fb == 1, k.k.A);
 }
 
 inline void paint_heading(Layout &l, Widget &w) {
   Model &m = *l.model;
-  const Tok t = theme_tokens(m);
-  set_text_colour(w.o1, t.tx);
-  set_text_colour(w.o2, t.tx);
+  const uint32_t colour = w.c_has ? w.c_now : page_theme(m, w.page).c[C_TX];
+  set_text_colour(w.o1, colour);
+  set_text_colour(w.o2, colour);
   const char *text = "";
   bound_text(m, w.text, &text);
   w.cut = set_text(w.o2, text, w.r[2] - (w.o1 ? 32 : 0));
 }
 
+// (2) The border of `lit` 2 (contract 4.7): at least 2 wide in `acc`, drawn
+// over the card's own border. The object's border width stays: LVGL places
+// the card's children inside it, so a new width would move every widget of
+// the card and lay the screen out again (cards spec B.4).
+inline void on_card_ring(lv_event_t *e) {
+  Widget *w = static_cast<Widget *>(lv_event_get_user_data(e));
+  Layout *l = layout_of(w);
+  if (!l || !l->model || !w->ring) return;
+  const CardLook &k = look_for(*l->model, w);
+  lv_area_t a;
+  lv_obj_get_coords(w->obj, &a);
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = LV_OPA_TRANSP;
+  d.border_width = w->ring;
+  d.border_color = lv_color_hex(k.k.border);
+  d.border_opa = LV_OPA_COVER;
+  d.radius = k.t.r;
+  lv_draw_rect(lv_event_get_layer(e), &d, &a);
+}
+
 inline void paint_card(Layout &l, Widget &w) {
   Model &m = *l.model;
-  const Tok t = card_tokens(m, &w);
-  const bool on = card_is_on(m, &w);
-  if (on) {
-    set_bg(w.obj, t.onbg);
-    lv_obj_set_style_bg_grad_dir(w.obj, LV_GRAD_DIR_NONE, 0);
+  const CardLook &k = look_for(m, &w);
+  const Tok &t = k.t;
+  // (2) Pulse, then pressed (contract 4.7): one colour, no gradient.
+  const bool pulse = w.fb == 2;
+  if (pulse || w.pressed) {
+    set_bg(w.obj, pulse ? k.k.AF : k.k.filled ? k.k.FP : k.pr);
+    style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
+  } else if (k.k.filled) {
+    set_bg(w.obj, k.k.F);
+    style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
   } else {
     set_bg(w.obj, t.bg);
     if (t.has_bg2 && t.gd >= 0) {
-      lv_obj_set_style_bg_grad_color(w.obj, lv_color_hex(t.bg2), 0);
-      lv_obj_set_style_bg_grad_dir(w.obj, t.gd == 1 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER, 0);
+      style_colour(w.obj, LV_STYLE_BG_GRAD_COLOR, t.bg2);
+      style_num(w.obj, LV_STYLE_BG_GRAD_DIR, t.gd == 1 ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER);
     } else {
-      lv_obj_set_style_bg_grad_dir(w.obj, LV_GRAD_DIR_NONE, 0);
+      style_num(w.obj, LV_STYLE_BG_GRAD_DIR, LV_GRAD_DIR_NONE);
     }
   }
-  lv_obj_set_style_border_color(w.obj, lv_color_hex(on ? t.acc : t.line), 0);
-  set_text_colour(w.o1, on ? t.ion : t.tx2);
-  set_text_colour(w.o2, on ? t.ontx : t.tx);
+  style_colour(w.obj, LV_STYLE_BORDER_COLOR, k.k.border);
+  const uint8_t ring = k.k.border_width > t.bw ? (uint8_t) k.k.border_width : 0;
+  if (ring != w.ring) {
+    w.ring = ring;
+    lv_obj_invalidate(w.obj);  // drawn by on_card_ring
+  }
+  // The waiting outline: 2 px in acc (on: ion).
+  if (w.tap || w.fb) set_outline(w.obj, w.fb == 1, k.k.filled ? k.k.FI : k.k.A);
+  set_text_colour(w.o1, pulse ? k.k.AT : k.k.header_icon);
+  set_text_colour(w.o2, pulse ? k.k.AT : k.k.text);
+  // (2) `ic` replaces the header icon while it has a value above 0.
+  if (w.o1) set_icon(w.o1, 24, shown_icon(m, w));
+  fade(w.o1, k.unavailable);
+  fade(w.o2, k.unavailable);
   if (w.o2) {
     const char *text = "";
     bound_text(m, w.text, &text);
@@ -866,8 +2210,7 @@ inline void paint_card(Layout &l, Widget &w) {
   }
 }
 
-inline void paint_widget(Layout &l, Widget &w) {
-  if (!w.obj || !l.model) return;
+inline void paint_kind(Layout &l, Widget &w) {
   switch (w.kind) {
     case W_HEADING: paint_heading(l, w); break;
     case W_CARD: paint_card(l, w); break;
@@ -878,30 +2221,127 @@ inline void paint_widget(Layout &l, Widget &w) {
     case W_THERMO: paint_thermostat(l, w); break;
     case W_CHART: paint_chart(l, w); break;
     case W_IMAGE: paint_image(l, w); break;
+    case W_CHOICE: paint_choice(l, w); break;
     default: break;
   }
 }
 
-inline bool widget_dirty(const Widget &w) {
-  return bound_dirty(w.text) || bound_dirty(w.value) || bound_dirty(w.vmin) || bound_dirty(w.vmax) ||
-         bound_dirty(w.step) || bound_dirty(w.on) || bound_dirty(w.confirm);
+inline void paint_widget(Layout &l, Widget &w) {
+  if (!w.obj || !l.model) return;
+  Model &m = *l.model;
+  if (w.stale) {
+    w.stale = 0;
+    Page &p = m.pages[w.page];
+    if (p.stale) p.stale--;
+    if (l.stale) l.stale--;
+  }
+  // (2) `vis`: LVGL's search for the object under a new press skips it.
+  const bool shows = vis_shows(m, w);
+  if (w.card >= 0) set_hidden(w.obj, !shows);
+  paint_kind(l, w);
+  // (2) A widget that has the press and becomes hidden, faded or unavailable
+  // loses it; a card loses it when it turns unavailable (contract 7.4). Not
+  // a widget that already was: a faded control keeps saying why it cannot
+  // send while the tablet cannot (faded_tap).
+  const uint8_t quiet = !shows || w.faded || card_unavailable(m, w) ? 1 : 0;
+  if (quiet && !w.quiet && press_held(w)) {
+    lose_press(w);
+    paint_kind(l, w);
+  }
+  w.quiet = quiet;
 }
 
-// Repaints the widgets whose values changed (g.dirty), and every widget of a
-// card whose "on" state changed.
+inline bool widget_dirty(const Widget &w) {
+  return bound_dirty(w.text) || bound_dirty(w.value) || bound_dirty(w.vmin) || bound_dirty(w.vmax) ||
+         bound_dirty(w.step) || bound_dirty(w.on) || bound_dirty(w.confirm) || bound_dirty(w.vis) ||
+         bound_dirty(w.c) || bound_dirty(w.ic) || bound_dirty(w.mark);
+}
+
+// Rule 1 of "What a repaint may cost" (cards spec B.4): a widget of the page
+// on screen is painted now. One of another page of the shown layout gets a
+// stale mark instead; the timer's slices paint it (paint_stale), and
+// show_page paints what is still stale on a page before it shows. A layout
+// being built is painted as before: at its build, with the values it holds.
+inline void repaint(Layout &l, Widget &w) {
+  if (!w.obj || !l.model) return;
+  if (l.state != L_ACTIVE || w.page == g.page) {
+    paint_widget(l, w);
+    return;
+  }
+  if (w.stale) return;
+  w.stale = 1;
+  l.model->pages[w.page].stale++;
+  l.stale++;
+}
+
+// Repaints the widgets whose values changed (g.dirty). A card whose `on`,
+// `tint` or `un` changed gets its colours worked out again, and then it and
+// every widget in it are repainted; a widget whose `c` changed gets its own.
 inline void paint_dirty(Layout &l) {
   if (!l.model || !g.dirty_any) return;
   Model &m = *l.model;
   for (uint32_t i = 0; i < m.nw; i++) {
     Widget &w = m.w[i];
     if (!w.obj) continue;
-    if (w.kind == W_CARD && bound_dirty(w.on)) {
-      paint_widget(l, w);
-      for (uint32_t k = 1; k <= w.children && i + k < m.nw; k++) paint_widget(l, m.w[i + k]);
+    if (w.kind == W_CARD && (bound_dirty(w.on) || bound_dirty(w.c) || bound_dirty(w.vis)) && card_look_update(m, w)) {
+      repaint(l, w);
+      for (uint32_t k = 1; k <= w.children && i + k < m.nw; k++) {
+        Widget &c = m.w[i + k];
+        widget_colour_update(m, c);
+        repaint(l, c);
+      }
       i += w.children;
       continue;
     }
-    if (widget_dirty(w)) paint_widget(l, w);
+    if (!widget_dirty(w)) continue;
+    if (w.kind != W_CARD && bound_dirty(w.c)) widget_colour_update(m, w);
+    repaint(l, w);
+  }
+}
+
+// Paints the stale widgets of one page now (before it shows).
+inline void paint_stale_page(Layout &l, int page) {
+  if (!l.model || !l.stale || page < 0 || page >= l.model->npages) return;
+  Model &m = *l.model;
+  Page &p = m.pages[page];
+  for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw && p.stale; i++)
+    if (m.w[i].stale) paint_widget(l, m.w[i]);
+}
+
+// One slice of stale painting: page by page from where the last slice
+// stopped, at most STALE_WIDGETS widgets and while the slice's time lasts.
+inline void paint_stale(Layout &l, uint32_t start) {
+  if (!l.model || !l.stale) return;
+  Model &m = *l.model;
+  uint32_t painted = 0;
+  for (uint32_t n = 0; n <= m.npages && l.stale; n++) {
+    if (l.s_page >= m.npages) l.s_page = 0;
+    Page &p = m.pages[l.s_page];
+    for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw && p.stale; i++) {
+      if (!m.w[i].stale) continue;
+      if (painted >= STALE_WIDGETS || now() - start >= SLICE_MS) return;
+      paint_widget(l, m.w[i]);
+      painted++;
+    }
+    l.s_page++;
+  }
+}
+
+// (2) The once-a-second pass over one page (cards spec B.7): a clock whose
+// minute changed and a slider with `rate` whose drawn position moved by a
+// pixel are repainted; nothing else is touched. The repaints follow the
+// rules of B.4: a bar invalidates the strip that moved, a clock sets a new
+// text and a new font only when the size rule gives another, so the pass
+// lays nothing out in the common case.
+inline void count_page(Layout &l, int page) {
+  if (!l.model || page < 0 || page >= l.model->npages) return;
+  Model &m = *l.model;
+  const Page &p = m.pages[page];
+  for (uint32_t i = p.first; i < (uint32_t) p.first + p.count && i < m.nw; i++) {
+    Widget &w = m.w[i];
+    if (!w.obj || !counts_age(w)) continue;
+    const int now_at = w.kind == W_LABEL ? clock_now(m, w) : slider_pos_now(m, w);
+    if (now_at != w.sl_pos) paint_widget(l, w);
   }
 }
 
@@ -911,30 +2351,78 @@ inline lv_obj_t *page_obj(Layout &l, int page) {
   return (l.model && page >= 0 && page < l.model->npages) ? l.model->pages[page].obj : nullptr;
 }
 
+// The side bar's entries (contract 4.7) in the theme of the page on screen
+// (4.8). (2) On a detail page only the back entry shows, in the look of the
+// entry on screen; on a normal page every entry but it.
 inline void paint_nav(Layout &l) {
   if (!l.model) return;
   Model &m = *l.model;
-  const Tok t = theme_tokens(m);
   const int page = l.state == L_ACTIVE ? g.page : -1;
+  const Tok t = theme_tokens(page_theme(m, page));
+  const bool detail = is_detail(m, page);
   for (int i = 0; i < m.nnav; i++) {
     Nav &n = m.nav[i];
     if (!n.obj) continue;
+    set_hidden(n.obj, detail);
+    if (detail) continue;
     const bool act = n.page == page;
     if (n.pressed) {
       set_bg(n.obj, t.card_pr);
     } else if (act) {
       set_bg(n.obj, t.onbg);
     } else {
-      lv_obj_set_style_bg_opa(n.obj, LV_OPA_TRANSP, 0);
+      style_num(n.obj, LV_STYLE_BG_OPA, LV_OPA_TRANSP);
     }
+    set_radius(n.obj, t.r2);
     set_text_colour(n.icon_obj, act ? t.acc : t.tx2);
+  }
+  if (m.back.obj) {
+    set_hidden(m.back.obj, !detail);
+    if (detail) {
+      set_bg(m.back.obj, m.back.pressed ? t.card_pr : t.onbg);
+      set_radius(m.back.obj, t.r2);
+      set_text_colour(m.back.icon_obj, t.acc);
+    }
   }
 }
 
+// (2) Whether a layout has a detail page; only then is the back entry made.
+inline bool has_detail(const Model &m) {
+  for (int p = 1; p < (int) m.npages; p++)
+    if (is_detail(m, p)) return true;
+  return false;
+}
+
+// The objects build_root makes: the root, the side bar, two for each entry
+// that is drawn, and two for the back entry.
+inline uint32_t root_objects(const Model &m) {
+  uint32_t n = 2 + (has_detail(m) ? 2 : 0);
+  for (int i = 0; i < m.nnav; i++) n += is_detail(m, m.nav[i].page) ? 0 : 2;
+  return n;
+}
+
+// One side bar entry at place i: a button with an icon 28 (contract 4.7).
+inline bool build_entry(lv_obj_t *bar, Nav &n, int i, int r2, uint32_t icon) {
+  n.obj = plain(bar);
+  if (!n.obj) return false;
+  place(n.obj, 16, 16 + 72 * i, 64, 64);
+  set_radius(n.obj, r2);
+  set_clickable(n.obj, true);
+  add_events(n.obj, on_nav_event, &n);
+  n.icon_obj = icon_box(n.obj, 0, 0, 64, 64, 28);
+  set_icon(n.icon_obj, 28, icon);
+  return n.icon_obj != nullptr;
+}
+
+// The root and the side bar, made under g.park: a layout being built hangs
+// under the screen that is never shown (cards spec B.6). The page objects
+// come in the build's slices (build_page).
 inline void build_root(Layout &l) {
   Model &m = *l.model;
   const Tok t = theme_tokens(m);
-  l.root = plain(g.base);
+  l.shown = -1;
+  l.theme_shown = 0;
+  l.root = plain(g.park);
   if (!l.root) return;
   place(l.root, 0, 0, SCREEN_W, SCREEN_H);
   set_bg(l.root, m.theme.c[C_WALL]);
@@ -944,54 +2432,65 @@ inline void build_root(Layout &l) {
   if (!l.bar) return;
   place(l.bar, 0, 0, 96, SCREEN_H);
   set_bg(l.bar, m.theme.c[C_CARD]);
+  // (2) An entry that names a detail page is not drawn; the others keep
+  // their places (contract 4.2).
   for (int i = 0; i < m.nnav; i++) {
     Nav &n = m.nav[i];
-    n.obj = plain(l.bar);
-    if (!n.obj) return;
-    place(n.obj, 16, 16 + 72 * i, 64, 64);
-    set_radius(n.obj, t.r2);
-    set_clickable(n.obj, true);
-    add_events(n.obj, on_nav_event, &n);
-    n.icon_obj = icon_box(n.obj, 0, 0, 64, 64, 28);
-    set_icon(n.icon_obj, 28, n.icon ? n.icon : ICON_VIEW_DASHBOARD);
+    if (is_detail(m, n.page)) continue;
+    if (!build_entry(l.bar, n, i, t.r2, n.icon ? n.icon : ICON_VIEW_DASHBOARD)) return;
   }
-  const int target = g.page < m.npages ? g.page : 0;
-  for (int p = 0; p < m.npages; p++) {
-    lv_obj_t *po = plain(l.root);
-    if (!po) return;
-    place(po, 0, 0, SCREEN_W, SCREEN_H);
-    if (p != target) lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
-    m.pages[p].obj = po;
+  if (has_detail(m)) {
+    m.back.page = BACK_ENTRY;
+    if (!build_entry(l.bar, m.back, 0, t.r2, ICON_ARROW_LEFT)) return;
+    lv_obj_add_flag(m.back.obj, LV_OBJ_FLAG_HIDDEN);
   }
+}
+
+// One page object, under g.park and hidden until show_page moves it under
+// the root. Made in the build's slices, one object each (cards spec B.6).
+inline void build_page(Layout &l, int page) {
+  lv_obj_t *po = plain(g.park);
+  if (!po) return;
+  place(po, 0, 0, SCREEN_W, SCREEN_H);
+  lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
+  l.model->pages[page].obj = po;
 }
 
 inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy) {
   const int x = w.r[0] - ox, y = w.r[1] - oy, W = w.r[2], H = w.r[3];
   switch (w.kind) {
     case W_LABEL: {
+      // The size of `size`; with `px` paint_label picks the font by the text.
       const int px = w.size == 0 ? 14 : w.size == 2 ? 34 : 18;
-      w.obj = text_box(parent, x, y, W, H, text_font(px), false);
+      w.obj = text_box(parent, x, y, W, H, text_font(px), w.al == 1);
+      if (w.obj && w.al == 2) lv_obj_set_style_text_align(w.obj, LV_TEXT_ALIGN_RIGHT, 0);
       break;
     }
     case W_BUTTON: {
       w.obj = plain(parent);
       if (!w.obj) return;
-      place(w.obj, x, y, W, H);
-      set_radius(w.obj, card_tokens(*l.model, card_of(*l.model, w)).r2);
-      const lv_font_t *ifont = icon_font(24);
+      // (2) Round: the box is the centred circle, and it shows no text.
+      int bx, by, BW, BH;
+      button_box(w, &bx, &by, &BW, &BH);
+      place(w.obj, x + bx, y + by, BW, BH);
+      set_radius(w.obj, w.shape == 1 ? LV_RADIUS_CIRCLE : look_for(*l.model, card_of(*l.model, w)).t.r2);
+      const int ipx = button_icon_px(w);
+      const lv_font_t *ifont = icon_font(ipx);
       // The glyph that is drawn: the fallback when the font lacks w.icon. The
       // text room beside it uses the same width, as layout_button does.
       const int iw = w.icon ? lv_font_get_glyph_width(ifont, icon_or_fallback(ifont, w.icon), 0) : 0;
       if (w.icon) {
-        w.o1 = icon_box(w.obj, 0, 0, iw > 0 ? iw : 24, line_height(ifont), 24);
-        set_icon(w.o1, 24, w.icon);
+        w.o1 = icon_box(w.obj, 0, 0, iw > 0 ? iw : ipx, line_height(ifont), ipx);
+        set_icon(w.o1, ipx, w.icon);
       }
-      if (w.text.how != B_ABSENT) {
-        const bool stacked = w.icon && H >= 64;
-        const int tw = W - 12 - (w.icon && !stacked ? iw + 6 : 0);
-        w.o2 = text_box(w.obj, 6, 0, tw > 0 ? tw : 1, stacked ? line_height(text_font(15)) : H, text_font(15),
+      if (w.text.how != B_ABSENT && w.shape != 1) {
+        const bool stacked = w.icon && BH >= 64;
+        const int tw = BW - 12 - (w.icon && !stacked ? iw + 6 : 0);
+        w.o2 = text_box(w.obj, 6, 0, tw > 0 ? tw : 1, stacked ? line_height(text_font(15)) : BH, text_font(15),
                         !w.icon || stacked);
       }
+      // Only a button that can be selected draws the border inside.
+      if (w.value.how != B_ABSENT) lv_obj_add_event_cb(w.obj, on_button_ring, LV_EVENT_DRAW_MAIN_END, &w);
       break;
     }
     case W_SWITCH: {
@@ -1013,18 +2512,40 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       place(w.obj, x, y, W, H);
       lv_obj_add_flag(w.obj, (lv_obj_flag_t) (LV_OBJ_FLAG_OVERFLOW_VISIBLE | LV_OBJ_FLAG_USER_1));
       lv_obj_remove_flag(w.obj, LV_OBJ_FLAG_GESTURE_BUBBLE);
-      // The knob reaches 11 px (and a 2 px ring) past the ends. At 40% opacity
-      // LVGL draws the slider through a layer of its own area plus this margin.
-      lv_obj_add_event_cb(w.obj, on_knob_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, nullptr);
-      lv_obj_refresh_ext_draw_size(w.obj);
+      const bool drawn = w.look == 1 || w.track_n >= 2;
+      // The knob reaches 11 px (and a 2 px ring) past the ends, and a track's
+      // mark past its sides: LVGL draws the slider with this margin.
+      if (w.look == 0 || w.track_n >= 2) {
+        lv_obj_add_event_cb(w.obj, on_knob_margin, LV_EVENT_REFR_EXT_DRAW_SIZE, nullptr);
+        lv_obj_refresh_ext_draw_size(w.obj);
+      }
+      if (drawn) {
+        // (2) A bar or a slider with a track: one object, drawn by a callback
+        // (cards spec B.4). A fill that is a child with a size would lay the
+        // screen out at every move.
+        w.sl_pos = -1;
+        lv_obj_add_event_cb(w.obj, on_slider_draw, LV_EVENT_DRAW_MAIN, &w);
+        break;
+      }
+      // (2) Along the axis of `dir`: the track 14 across, centred.
+      const bool up = w.dir != 0;
       w.o1 = plain(w.obj);
-      place(w.o1, 0, (H - 14) / 2, W, 14);
+      if (up)
+        place(w.o1, (W - 14) / 2, 0, 14, H);
+      else
+        place(w.o1, 0, (H - 14) / 2, W, 14);
       set_radius(w.o1, 7);
       w.o2 = plain(w.o1);
-      place(w.o2, 0, 0, 0, 14);
+      if (up)
+        place(w.o2, 0, w.dir == 1 ? H : 0, 14, 0);
+      else
+        place(w.o2, 0, 0, 0, 14);
       set_radius(w.o2, 7);
       w.o3 = plain(w.obj);
-      place(w.o3, -11, (H - 22) / 2, 22, 22);
+      if (up)
+        place(w.o3, (W - 22) / 2, w.dir == 1 ? H - 11 : -11, 22, 22);
+      else
+        place(w.o3, -11, (H - 22) / 2, 22, 22);
       set_radius(w.o3, LV_RADIUS_CIRCLE);
       break;
     }
@@ -1037,12 +2558,14 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
       const int tw = thermostat_text_width(s);
       w.o1 = text_box(w.obj, (W - tw) / 2, (H - s) / 2, tw, s, text_font(34), true);
       if (w.change) {
+        // (2) Buttons of side `bs` (36 to 64), the icons 24 in their middle.
+        const int bs = w.bs ? w.bs : 36;
         for (int k = 0; k < 2; k++) {
           lv_obj_t *b = plain(w.obj);
           if (!b) return;
-          place(b, k == 0 ? 0 : W - 36, H - 36, 36, 36);
+          place(b, k == 0 ? 0 : W - bs, H - bs, bs, bs);
           set_radius(b, LV_RADIUS_CIRCLE);
-          lv_obj_t *icon = icon_box(b, 0, 0, 36, 36, 24);
+          lv_obj_t *icon = icon_box(b, 0, 0, bs, bs, 24);
           set_icon(icon, 24, k == 0 ? ICON_MINUS : ICON_PLUS);
           set_clickable(b, true);  // also while faded (on_thermo_button)
           lv_obj_add_event_cb(b, on_thermo_button, LV_EVENT_PRESSED, &w);
@@ -1067,10 +2590,31 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
     case W_IMAGE: {
       w.obj = plain(parent);
       if (!w.obj) return;
+      // (2) A badge's box is the centred circle; a bare image keeps the
+      // rectangle for its press and draws no box.
+      int bx, by, BW, BH;
+      image_box(w, &bx, &by, &BW, &BH);
+      place(w.obj, x + bx, y + by, BW, BH);
+      set_radius(w.obj, w.look == 1 ? LV_RADIUS_CIRCLE : look_for(*l.model, card_of(*l.model, w)).t.r2);
+      const int px = image_icon_size(w.look, W, H);
+      w.o1 = icon_box(w.obj, 0, 0, BW, BH, px);
+      break;
+    }
+    case W_CHOICE: {
+      // (2) One object drawn by a callback, for any number of options (cards
+      // spec B.4). None without an option or with cells below 1 px: it is
+      // not drawn and not there for a touch (contract 4.3, 4.7).
+      ChoiceGrid cg;
+      if (!choice_grid_of(w, &cg)) return;
+      w.obj = plain(parent);
+      if (!w.obj) return;
       place(w.obj, x, y, W, H);
-      set_radius(w.obj, card_tokens(*l.model, card_of(*l.model, w)).r2);
-      const int px = image_icon_px(W, H);
-      w.o1 = icon_box(w.obj, 0, 0, W, H, px);
+      choice_build(w);
+      lv_obj_add_event_cb(w.obj, on_choice_draw, LV_EVENT_DRAW_MAIN, &w);
+      if (w.change) {
+        set_clickable(w.obj, true);
+        add_events(w.obj, on_choice_event, &w);
+      }
       break;
     }
     default:
@@ -1079,10 +2623,11 @@ inline void build_widget(Layout &l, Widget &w, lv_obj_t *parent, int ox, int oy)
   if (!w.obj || g.obj_fail) return;  // a part is missing: the build fails, nothing is painted
   // Clickable for good, also while faded (on_widget_event).
   const bool acts = w.tap || (w.kind == W_SLIDER && w.change);
-  if (acts && w.kind != W_THERMO) {
+  if (acts && w.kind != W_THERMO && !(w.kind == W_CHOICE && w.change)) {
     set_clickable(w.obj, true);
     add_events(w.obj, on_widget_event, &w);
   }
+  widget_colour_update(*l.model, w);
   paint_widget(l, w);
 }
 
@@ -1101,17 +2646,26 @@ inline void build_shell(Layout &l, Widget &w, lv_obj_t *parent) {
     const int tx = w.o1 ? 32 : 0;
     w.o2 = text_box(w.obj, tx, 0, w.r[2] - tx, w.r[3], text_font(20), false);
     if (g.obj_fail) return;
+    widget_colour_update(m, w);
     paint_widget(l, w);
     return;
   }
   if (w.kind != W_CARD) return;
-  const Tok t = card_tokens(m, &w);
+  // The card's colours, once at its build (cards spec B.3).
+  card_look_update(m, w);
+  const Tok &t = look_for(m, &w).t;
   w.obj = plain(parent);
   if (!w.obj) return;
   place(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]);
   set_radius(w.obj, t.r);
   lv_obj_set_style_border_width(w.obj, t.bw, 0);
   lv_obj_set_style_border_opa(w.obj, LV_OPA_COVER, 0);
+  // (2) A card with `tap` or `hold` is a button (cards spec B.4, B.5).
+  if (w.tap || w.hold) {
+    set_clickable(w.obj, true);
+    add_events(w.obj, on_card_event, &w);
+  }
+  if (w.lit == 2) lv_obj_add_event_cb(w.obj, on_card_ring, LV_EVENT_DRAW_MAIN_END, &w);
   if (w.has_hr) {
     const lv_font_t *ifont = icon_font(24);
     const int hx = w.hr[0] - w.r[0] - t.bw, hy = w.hr[1] - w.r[1] - t.bw;
@@ -1141,22 +2695,37 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
   if (l.b_stage == 0) {
     build_root(l);
     if (g.obj_fail) return false;
-    objects += 2 + m.npages + 2u * m.nnav;
+    objects += root_objects(m);
     l.b_stage = 1;
     l.b_item = 0;
     l.b_child = 0;
+    l.b_page = 0;
   }
+  // (2) Page objects are made under the slice rule too, each before the
+  // first item of its page (cards spec B.6): 64 pages are not one step.
+  auto pages_up_to = [&](uint32_t last) {
+    while (l.b_page <= last && l.b_page < m.npages) {
+      if (spent(1)) return false;
+      build_page(l, l.b_page);
+      if (g.obj_fail) return false;
+      objects++;
+      l.b_page++;
+    }
+    return true;
+  };
   while (l.b_stage == 1) {
     if (l.b_item >= m.nw) {
+      if (!pages_up_to(m.npages)) return false;  // pages without items
       l.b_stage = 2;
       break;
     }
     Widget &w = m.w[l.b_item];
     const uint32_t left = m.nw - 1u - l.b_item;
     const uint32_t kids = w.kind == W_CARD ? (w.children < left ? w.children : left) : 0;
+    if (l.b_child == 0 && !pages_up_to(w.page)) return false;
     lv_obj_t *parent = page_obj(l, w.page);
     if (l.b_child == 0) {
-      const uint32_t cost = parent ? Loader::objects_of(w.kind) : 0;
+      const uint32_t cost = parent ? Loader::objects_of(w) : 0;
       if (spent(cost)) return false;
       if (parent) build_shell(l, w, parent);
       if (g.obj_fail) return false;
@@ -1169,11 +2738,11 @@ inline bool build_step(Layout &l, uint32_t budget_ms) {
     }
     // Widget rectangles are absolute (contract 4.3); LVGL places children
     // inside the card's border, so that is taken off.
-    const int bw = card_tokens(m, &w).bw;
+    const int bw = look_for(m, &w).t.bw;
     const int ox = w.r[0] + bw, oy = w.r[1] + bw;
     while (l.b_child <= kids) {
       Widget &c = m.w[l.b_item + l.b_child];
-      const uint32_t cost = Loader::objects_of(c.kind);
+      const uint32_t cost = Loader::objects_of(c);
       if (spent(cost)) return false;
       build_widget(l, c, w.obj, ox, oy);
       if (g.obj_fail) return false;
@@ -1229,25 +2798,73 @@ inline bool delete_step(Layout &l, Budget &b) {
   return true;
 }
 
+// (2) The root, the side bar and the engine's own pieces in the theme of the
+// page on screen (contract 4.8), set only when that theme differs from the
+// one they show.
+inline void paint_page_theme(Layout &l, int page) {
+  Model &m = *l.model;
+  const uint8_t th = m.pages[page].theme;
+  if (th == l.theme_shown) return;
+  TAB_COUNT(page_themes);
+  l.theme_shown = th;
+  const Theme &t = page_theme(m, page);
+  set_bg(l.root, t.c[C_WALL]);
+  set_bg(l.bar, t.c[C_CARD]);
+  restyle_overlay();
+}
+
+// Shows a page of the layout on screen: its object moves under the root, the
+// one shown before back under g.park (cards spec B.6), and what went stale
+// on it while it was away is painted first. (2) Opening a detail page from a
+// normal page keeps that page as the origin; a detail page opened from
+// another keeps the origin it has (contract 4.8).
 inline void show_page(Layout &l, int page) {
   if (!l.model || page < 0 || page >= l.model->npages) return;
-  if (l.state == L_ACTIVE) {
-    for (int p = 0; p < l.model->npages; p++) {
-      lv_obj_t *po = l.model->pages[p].obj;
-      if (!po || p == page) continue;
-      lv_obj_add_flag(po, LV_OBJ_FLAG_HIDDEN);
+  if (l.state != L_ACTIVE) return;
+  Model &m = *l.model;
+  const bool detail = is_detail(m, page);
+  if (detail && !g.on_detail) g.origin = g.page;
+  if (detail) g.idle_ms = 0;
+  paint_stale_page(l, page);  // what changed while it was not on screen
+  count_page(l, page);        // (2) clocks and `rate` counted on meanwhile
+  if (l.shown != page) {
+    lv_obj_t *old = page_obj(l, l.shown);
+    if (old) {
+      lv_obj_add_flag(old, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_parent(old, g.park);
     }
-    if (l.model->pages[page].obj) lv_obj_remove_flag(l.model->pages[page].obj, LV_OBJ_FLAG_HIDDEN);
-    g.page = page;
-    paint_nav(l);
+    lv_obj_t *po = page_obj(l, page);
+    if (po && l.root) {
+      lv_obj_set_parent(po, l.root);
+      lv_obj_remove_flag(po, LV_OBJ_FLAG_HIDDEN);
+    }
+    l.shown = (int16_t) page;
+    // A parked page was never laid out. The pass the next refresh would make
+    // over the shown screen runs now, so a touch right after the switch
+    // finds the page's objects where they are drawn. Never for g.park.
+    if (g.screen && l.root && lv_obj_get_screen(l.root) == g.screen) lv_obj_update_layout(g.screen);
   }
+  g.page = page;
+  g.on_detail = detail;
+  paint_page_theme(l, page);
+  paint_nav(l);
+}
+
+// (2) Back to the page a detail page was opened from: the back entry, a
+// swipe to the right, `tap {"back": 1}`, or `ttl` (contract 4.8). Nothing
+// on a normal page.
+inline void page_back(Layout &l) {
+  if (!l.model || l.state != L_ACTIVE || !g.on_detail) return;
+  const int origin = g.origin;
+  show_page(l, origin >= 0 && origin < l.model->npages && !is_detail(*l.model, origin) ? origin : 0);
 }
 
 // ---------------------------------------------------------------- engine screens
 
+// The engine's own pieces take the theme of the page on screen (contract 4.8).
 inline uint32_t ui_colour(int role) {
   Layout *a = active_layout();
-  if (a && a->model) return a->model->theme.c[role];
+  if (a && a->model) return page_theme(*a->model, g.page).c[role];
   switch (role) {
     case C_WALL: return DEF_WALL;
     case C_CARD: return DEF_CARD;
@@ -1262,7 +2879,10 @@ inline uint32_t ui_colour(int role) {
 
 inline int ui_radius(bool inner) {
   Layout *a = active_layout();
-  if (a && a->model) return inner ? a->model->theme.r2 : a->model->theme.r;
+  if (a && a->model) {
+    const Theme &t = page_theme(*a->model, g.page);
+    return inner ? t.r2 : t.r;
+  }
   return inner ? 10 : 16;
 }
 
@@ -1288,24 +2908,27 @@ inline void restyle_overlay() {
   if (!g.overlay) return;
   set_text_colour(g.mark, ui_colour(C_TX2));
   set_bg(g.strip, ui_colour(C_CARD2));
-  lv_obj_set_style_radius(g.strip, ui_radius(true), 0);
+  set_radius(g.strip, ui_radius(true));
   set_text_colour(g.strip_label, ui_colour(C_TX));
   set_bg(g.q_box, ui_colour(C_CARD));
-  lv_obj_set_style_radius(g.q_box, ui_radius(false), 0);
+  set_radius(g.q_box, ui_radius(false));
   set_text_colour(g.q_text, ui_colour(C_TX));
   set_bg(g.q_no, ui_colour(C_CARD2));
   set_bg(g.q_yes, ui_colour(C_ACCF));
-  lv_obj_set_style_radius(g.q_no, ui_radius(true), 0);
-  lv_obj_set_style_radius(g.q_yes, ui_radius(true), 0);
+  set_radius(g.q_no, ui_radius(true));
+  set_radius(g.q_yes, ui_radius(true));
   set_text_colour(lv_obj_get_child(g.q_no, 0), ui_colour(C_TX));
   set_text_colour(lv_obj_get_child(g.q_yes, 0), ui_colour(C_ACCT));
-  lv_obj_set_style_bg_color(g.question, lv_color_hex(ui_colour(C_WALL)), 0);
-  lv_obj_set_style_bg_opa(g.question, LV_OPA_60, 0);
+  style_colour(g.question, LV_STYLE_BG_COLOR, ui_colour(C_WALL));
+  style_num(g.question, LV_STYLE_BG_OPA, LV_OPA_60);
 }
 
 inline void ui_begin() {
   g.screen = lv_screen_active();
   lv_obj_remove_flag(g.screen, LV_OBJ_FLAG_SCROLLABLE);
+  // (2) The second screen (cards spec B.6): created, never loaded.
+  g.park = lv_obj_create(nullptr);
+  if (g.park) lv_obj_remove_flag(g.park, LV_OBJ_FLAG_SCROLLABLE);
   g.base = plain(g.screen);
   place(g.base, 0, 0, SCREEN_W, SCREEN_H);
 
@@ -1373,6 +2996,8 @@ inline void ui_begin() {
 inline void ui_teardown() {
   if (g.overlay) lv_obj_delete(g.overlay);
   if (g.base) lv_obj_delete(g.base);
+  if (g.park) lv_obj_delete(g.park);
+  g.park = nullptr;
   g.overlay = g.base = g.waiting = g.mark = g.headline = g.hint = g.hint2 = g.strip = g.strip_label = nullptr;
   g.question = g.q_box = g.q_text = g.q_no = g.q_yes = nullptr;
   g.erase_screen = g.e_title = g.e_text = g.e_erase = g.e_cancel = nullptr;  // children of the overlay

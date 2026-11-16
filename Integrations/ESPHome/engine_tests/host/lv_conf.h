@@ -1,8 +1,10 @@
 // LVGL configuration for the engine's host tests.
 // RGB565 and the software renderer, as on the tablet. Only the two widget
 // types the engine uses (obj and label) are switched on, so a use of any other
-// widget fails to compile here first. Host-only: tiny_ttf for the fonts, the C
-// library allocator so AddressSanitizer sees every allocation.
+// widget fails to compile here first; the image widget and A8 layers are off
+// as in the tablet's generated lv_conf.h, so no host test can pass with what
+// the tablet lacks. Host-only: tiny_ttf for the fonts, the C library
+// allocator so AddressSanitizer sees every allocation.
 #pragma once
 #define LV_BUILD_DEMOS 0
 #define LV_BUILD_EXAMPLES 0
@@ -12,7 +14,7 @@
 #define LV_DRAW_BUF_STRIDE_ALIGN 1
 #define LV_DRAW_SW_COMPLEX 1
 #define LV_DRAW_SW_DRAW_UNIT_CNT 1
-#define LV_DRAW_SW_SUPPORT_A8 1
+#define LV_DRAW_SW_SUPPORT_A8 0
 #define LV_DRAW_SW_SUPPORT_AL88 0
 #define LV_DRAW_SW_SUPPORT_ARGB8888 1
 #define LV_DRAW_SW_SUPPORT_I1 0
@@ -43,7 +45,7 @@
 #define LV_USE_FLEX 0
 #define LV_USE_FONT_PLACEHOLDER 1
 #define LV_USE_GRID 0
-#define LV_USE_IMAGE 1
+#define LV_USE_IMAGE 0
 #define LV_USE_IMAGEBUTTON 0
 #define LV_USE_KEYBOARD 0
 #define LV_USE_LABEL 1

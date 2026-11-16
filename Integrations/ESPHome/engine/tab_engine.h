@@ -14,10 +14,11 @@
 
 namespace tab {
 
+// The sizes of contract.json `fonts`, in its order.
 struct Fonts {
-  const lv_font_t *text[6];  // 14, 15, 16, 18, 20, 34 px
-  const lv_font_t *digits;   // 48 px, only 0123456789.,-
-  const lv_font_t *icon[4];  // 24, 28, 48, 72 px, the glyphs of icons.json level 1
+  const lv_font_t *text[7];    // 14, 15, 16, 18, 20, 28, 34 px
+  const lv_font_t *digits[3];  // 48, 96, 192 px, only fonts.digits_glyphs (digits, . , - : % + space, U+00B0)
+  const lv_font_t *icon[4];    // 24, 28, 48, 72 px, the glyphs of icons.json up to level 2
 };
 
 struct Platform {

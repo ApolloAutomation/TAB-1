@@ -102,9 +102,14 @@ struct Out {
   }
 };
 
+// While a layout is being built, `block` is the value read when it was
+// staged: the heap is not walked during a build (contract 3.1).
 inline void write_mem(Out &o) {
   o.raw("\"mem\":{\"block\":");
-  o.num(g.pf.largest_block ? (unsigned long long) g.pf.largest_block() : 0);
+  if (staged_layout())
+    o.num((unsigned long long) g.staged_block);
+  else
+    o.num(g.pf.largest_block ? (unsigned long long) g.pf.largest_block() : 0);
   o.raw(",\"int\":");
   o.num(g.pf.free_internal ? g.pf.free_internal() : 0);
   o.raw(",\"psram\":");
@@ -224,7 +229,7 @@ inline void poll_connection() {
 inline void knock_tick() {
   if (!g.knocking || !g.connected || !due(g.knock_next)) return;
   char d[48];
-  snprintf(d, sizeof d, "1|%s|%u", mac(), (unsigned) g.pf.boot);
+  snprintf(d, sizeof d, "%d|%s|%u", INPUT_VERSION, mac(), (unsigned) g.pf.boot);
   if (g.pf.send_event) g.pf.send_event("tab1_hello", d, nullptr);
   if (g.knock_count < 255) g.knock_count++;
   if (g.knock_count >= KNOCK_REPEATS) {
@@ -246,7 +251,7 @@ inline void knock_for_touch() {
   if (!g.touch_knock_at) g.touch_knock_at = 1;
   say(1, "Touch without a session; asking Home Assistant to greet again");
   char d[48];
-  snprintf(d, sizeof d, "1|%s|%u", mac(), (unsigned) g.pf.boot);
+  snprintf(d, sizeof d, "%d|%s|%u", INPUT_VERSION, mac(), (unsigned) g.pf.boot);
   if (g.pf.send_event) g.pf.send_event("tab1_hello", d, nullptr);
   g.knocking = true;
   g.knock_count = 0;
@@ -276,7 +281,11 @@ inline void retire(int idx) {
   Layout *l = layout_at(idx);
   if (!l || l->state == L_FREE || l->state == L_RETIRING) return;
   if (g.q_open && g.q_layout == idx) question_close();
-  if (l->root) lv_obj_add_flag(l->root, LV_OBJ_FLAG_HIDDEN);
+  if (l->root) {
+    lv_obj_add_flag(l->root, LV_OBJ_FLAG_HIDDEN);
+    // (2) A layout being deleted hangs under g.park (cards spec B.6).
+    if (g.park) lv_obj_set_parent(l->root, g.park);
+  }
   l->state = L_RETIRING;
   l->d_page = 0;
   if (g.active == idx) g.active = -1;
@@ -312,8 +321,18 @@ inline void activate(int idx) {
   if (g.staged == idx) g.staged = -1;
   g.build_code = "";
   if (old >= 0 && old != idx) retire(old);
-  const int page = (g.page >= 0 && g.page < n.model->npages) ? g.page : 0;
+  // (2) A card press or a hold in progress is dropped at the swap (cards spec B.5).
+  g.cp_layout = -1;
+  g.held = true;
+  // (2) Never a detail page after a switch (contract 4.8): from a detail
+  // page the origin, from a normal page the same index; page 0 when that is
+  // no normal page of the new layout. From a normal page g.origin is not read.
+  int page = g.on_detail ? g.origin : g.page;
+  if (page < 0 || page >= n.model->npages || is_detail(*n.model, page)) page = 0;
   g.page = page;
+  g.origin = page;
+  g.on_detail = false;
+  if (n.root && g.base) lv_obj_set_parent(n.root, g.base);
   show_page(n, page);
   show_layout(n);
   g.save_at = strcmp(g.stored, n.hash) != 0 ? later(CACHE_DELAY_MS) : 0;
@@ -336,9 +355,11 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
   const char *code = model_check(reinterpret_cast<const char *>(bytes), size, ld);
   if (*code) return code;
   const size_t msize = model_size(ld.c);
-  const size_t objects = ld.c.objects + ld.c.pages + 2;
+  const size_t objects = ld.c.objects + ld.c.pages + 2 + (ld.c.normal < ld.c.pages ? 2 : 0);
   const size_t need = msize + objects * OBJECT_BYTES + MEMORY_MARGIN;
-  if (!g.pf.largest_block || g.pf.largest_block() < need) return "memory";
+  // The one look at the largest block for this layout (it walks the heap).
+  const size_t block_now = g.pf.largest_block ? g.pf.largest_block() : 0;
+  if (block_now < need) return "memory";
   const int idx = free_layout();
   if (idx < 0) return "memory";
   void *block = g.pf.alloc ? g.pf.alloc(msize) : nullptr;
@@ -358,10 +379,35 @@ inline const char *stage(uint8_t *bytes, uint32_t size, const char *hash, int *o
   l.size = size;
   l.model = m;
   *out_idx = idx;
+  g.staged_block = block_now;
+  if (ld.c.drop_charts || ld.c.drop_arcs || ld.c.drop_tracks)
+    say(1, "Layout %s: %u charts, %u thermostats and %u tracks over a page's limit are not drawn", l.hash,
+        (unsigned) ld.c.drop_charts, (unsigned) ld.c.drop_arcs, (unsigned) ld.c.drop_tracks);
   return "";
 }
 
 // ---------------------------------------------------------------- touch feedback
+
+// Paints a widget whose feedback changed. (2) A card's feedback, and an
+// optimistic bool its card shows for the same slot (contract 7.4), change
+// the card's colours and every widget in it.
+inline void feedback_paint(Layout &l, Widget &w) {
+  Model &m = *l.model;
+  Widget *card = w.kind == W_CARD ? &w : card_of(m, w);
+  const uint16_t wi = (uint16_t) (&w - m.w);
+  if (!card || (card != &w && !(card->ovr_slot && card->ovr_from == wi))) {
+    paint_widget(l, w);
+    return;
+  }
+  const bool changed = card_look_update(m, *card);
+  paint_widget(l, *card);
+  const uint32_t ci = (uint32_t) (card - m.w);
+  for (uint32_t k = 1; k <= card->children && ci + k < m.nw; k++) {
+    Widget &c = m.w[ci + k];
+    if (changed) widget_colour_update(m, c);
+    paint_widget(l, c);
+  }
+}
 
 inline void fb_track(Layout &l, Widget &w) {
   const int li = layout_index(&l);
@@ -379,7 +425,7 @@ inline void fb_track(Layout &l, Widget &w) {
       Widget &ow = ol->model->w[spare->widget];
       ow.fb = 0;
       ow.ovr = 0;
-      paint_widget(*ol, ow);
+      feedback_paint(*ol, ow);
     }
   }
   spare->layout = (int8_t) li;
@@ -387,22 +433,50 @@ inline void fb_track(Layout &l, Widget &w) {
   spare->widget = wi;
 }
 
+// The bool a tap with policy 0 flips at once (contract 7.4): a switch's
+// value, (2) a card's slot-bound `on` that has a value, a button's
+// slot-bound value. nullptr: the tap shows the waiting outline instead.
+inline const Bound *flipped_by_tap(Model &m, Widget &w) {
+  double v;
+  switch (w.kind) {
+    case W_SWITCH: return &w.value;
+    case W_CARD: return w.on.how == B_SLOT && bound_num(m, w.on, &v) ? &w.on : nullptr;
+    case W_BUTTON: return w.value.how == B_SLOT ? &w.value : nullptr;
+    default: return nullptr;
+  }
+}
+
 inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, bool has_value, double value) {
+  Model &m = *l.model;
   const uint32_t t = now();
   w.fbp = policy;
-  if (event == 'c' && has_value && policy != 3) {
+  // (2) A choice shows the tapped option as selected with policy 0 only;
+  // policy 1 flashes the tapped cell, policy 2 shows the outline (7.4).
+  if (w.kind == W_CHOICE && event == 'c' && has_value) w.ch_pulse = (int8_t) value;
+  if (event == 'c' && has_value && policy != 3 && (w.kind != W_CHOICE || policy == 0)) {
     w.ovr = 1;
     w.ovr_value = value;
     w.ovr_until = t + (policy == 2 ? PROGRESS_TIMEOUT_MS : ACK_TIMEOUT_MS);
   }
+  const Bound *flip = event == 't' && policy == 0 ? flipped_by_tap(m, w) : nullptr;
   switch (policy) {
     case 0:
-      if (event == 't' && w.kind == W_SWITCH) {
+      if (flip) {
         bool cur = false;
-        switch_value(*l.model, w, &cur);
+        if (w.kind == W_CARD)
+          cur = card_is_on(m, &w);
+        else
+          bool_value(m, w, *flip, &cur);
         w.ovr = 1;
         w.ovr_value = cur ? 0 : 1;
         w.ovr_until = t + ACK_TIMEOUT_MS;
+        // The card shows it for that slot, and so does every switch and
+        // button of the card bound to it.
+        Widget *card = w.kind == W_CARD ? &w : card_of(m, w);
+        if (card && flip->how == B_SLOT) {
+          card->ovr_slot = flip->slot;
+          card->ovr_from = (uint16_t) (&w - m.w);
+        }
       } else if (event == 't') {
         w.fb = 1;
         w.fb_until = t + ACK_TIMEOUT_MS;
@@ -422,7 +496,7 @@ inline void start_feedback(Layout &l, Widget &w, uint8_t policy, char event, boo
       break;
   }
   fb_track(l, w);
-  paint_widget(l, w);
+  feedback_paint(l, w);
 }
 
 inline bool can_send() { return g.connected && g.session && signing(); }
@@ -462,8 +536,8 @@ inline bool send_input(Layout &l, Widget &w, char event, bool confirmed, bool ha
   char val[40] = "";
   if (has_value) wire_number(value, val, sizeof val);
   char d[256];
-  const int n = snprintf(d, sizeof d, "1|%s|%s|%u|%s|%u|%c|%c|%s", mac(), g.nonce, (unsigned) g.counter, l.hash,
-                         (unsigned) w.id, event, confirmed ? '1' : '0', val);
+  const int n = snprintf(d, sizeof d, "%d|%s|%s|%u|%s|%u|%c|%c|%s", INPUT_VERSION, mac(), g.nonce,
+                         (unsigned) g.counter, l.hash, (unsigned) w.id, event, confirmed ? '1' : '0', val);
   if (n <= 0 || n > 200) return false;
   uint8_t mac_out[32];
   crypto::hmac_sha256(g.secret, 32, d, (size_t) n, mac_out);
@@ -521,12 +595,17 @@ inline void widget_tapped(Layout &l, Widget &w) {
     show_page(l, w.tap_v);
     return;
   }
+  if (w.tap == 3) {
+    page_back(l);  // (2) on a detail page; elsewhere nothing (contract 4.3)
+    return;
+  }
   if (w.tap != 1) return;
   input(l, w, 't', false, 0, w.tap_v);
 }
 
 inline void slider_released(Layout &l, Widget &w, double value) {
-  if (!w.change) return;
+  // (2) No length to move over, or max not above min: nothing to send.
+  if (!w.change || !slider_can_send(*l.model, w)) return;
   input(l, w, 'c', true, value, w.change_v);
 }
 
@@ -539,6 +618,13 @@ inline void thermostat_step(Layout &l, Widget &w, int direction) {
   const double next = clamp_step(cur + direction * (step > 0 ? step : 1), lo, hi, step);
   if (next == cur) return;
   input(l, w, 'c', true, next, w.change_v);
+}
+
+// (2) A tap on option i of a choice sends it, also when it is the one
+// selected (contract 4.3).
+inline void choice_picked(Layout &l, Widget &w, int option) {
+  if (!w.change || option < 0 || option >= w.options) return;
+  input(l, w, 'c', true, option, w.change_v);
 }
 
 inline void question_answer(bool yes) {
@@ -568,7 +654,7 @@ inline void values_arrived(Layout &l) {
     if (r.layout != li || r.gen != l.gen) continue;
     Widget &w = l.model->w[r.widget];
     bool changed = false;
-    if (w.ovr == 2 && bound_dirty(w.value)) {
+    if (w.ovr == 2 && bound_dirty(w.kind == W_CARD ? w.on : w.value)) {
       w.ovr = 0;
       changed = true;
     }
@@ -577,7 +663,7 @@ inline void values_arrived(Layout &l) {
       w.ovr = 0;
       changed = true;
     }
-    if (changed) paint_widget(l, w);
+    if (changed) feedback_paint(l, w);
   }
 }
 
@@ -599,7 +685,7 @@ inline void feedback_tick() {
       w.ovr = 0;
       changed = true;
     }
-    if (changed) paint_widget(*l, w);
+    if (changed) feedback_paint(*l, w);
     if (!w.fb && !w.ovr) r.layout = -1;
   }
   for (Pending &p : g.pend)
@@ -623,23 +709,35 @@ inline bool finger_down() {
   return i && lv_indev_get_state(i) == LV_INDEV_STATE_PRESSED;
 }
 
-inline void build_tick() {
+// Returns true when it ran a build step.
+inline bool build_tick() {
   Layout *s = staged_layout();
-  if (!s || s->state != L_BUILDING) return;
-  if (g.pf.largest_block && g.pf.largest_block() < MEMORY_MARGIN + SLICE_OBJECTS * OBJECT_BYTES) {
+  if (!s || s->state != L_BUILDING) return false;
+  // Free PSRAM is a number the heap keeps; its largest block would be a walk
+  // of the whole heap on every tick. stage() checked the block once.
+  if (g.pf.free_psram && g.pf.free_psram() < MEMORY_MARGIN + SLICE_OBJECTS * OBJECT_BYTES) {
     fail_build("memory");
-    return;
+    return false;
   }
   g.obj_fail = false;
   const bool done = build_step(*s, SLICE_MS);
   if (g.obj_fail) {
     fail_build("build");
-    return;
+    return true;
   }
   if (done) {
     s->state = L_READY;
     s->ready_at = now();
   }
+  return true;
+}
+
+// Widgets of the shown layout that changed while their page was not on
+// screen are painted here, a few a tick, never in a tick that ran a build
+// step (cards spec B.4, rule 1).
+inline void stale_tick(uint32_t tick_start) {
+  Layout *a = active_layout();
+  if (a && a->state == L_ACTIVE && a->stale) paint_stale(*a, tick_start);
 }
 
 // A slider still held when a forced swap retires its layout would lose the
@@ -902,6 +1000,17 @@ inline void cache_watch() {
   }
 }
 
+// (2) One save back for every CACHE_REFILL_MS of running, never above
+// CACHE_BUCKET (contract 5).
+inline void refill_writes() {
+  if (g.writes_left >= CACHE_BUCKET) return;
+  const uint64_t t = now64();
+  while (g.writes_left < CACHE_BUCKET && t >= g.refill_at) {
+    g.writes_left++;
+    g.refill_at += CACHE_REFILL_MS;
+  }
+}
+
 inline void cache_tick() {
   cache_watch();
   if (!g.save_at || !due(g.save_at)) return;
@@ -922,7 +1031,18 @@ inline void cache_tick() {
     g.save_at = later(1000);
     return;
   }
+  refill_writes();
+  if (g.writes_left == 0) {
+    // The layout is shown and used meanwhile; the save runs when a write is
+    // back (contract 5). A newer layout by then is the one stored.
+    const uint64_t wait = g.refill_at - now64();
+    say(1, "No flash write left; layout %s is stored in %u s", a->hash, (unsigned) (wait / 1000));
+    g.save_at = later((uint32_t) wait);
+    return;
+  }
   if (g.pf.cache_save && g.pf.cache_save(a->bytes, a->size)) {
+    if (g.writes_left == CACHE_BUCKET) g.refill_at = now64() + CACHE_REFILL_MS;
+    g.writes_left--;
     g.flash_copy = true;
     memcpy(g.stored, a->hash, sizeof g.stored);
     g.save_at = 0;
@@ -945,31 +1065,161 @@ inline void swipe_tick() {
   lv_point_t p;
   lv_indev_get_point(in, &p);
   if (!g.tracking) {
-    g.tracking = true;
-    g.swallowed = false;
-    g.start = p;
+    press_begin(p);
     return;
   }
+  press_track(p);
   if (!a || g.swallowed || g.press_on_slider || g.q_open || g.erase_screen) return;
   const int dx = (int) (p.x - g.start.x), dy = (int) (p.y - g.start.y);
   if (abs(dx) < SWIPE_PX || abs(dx) < 2 * abs(dy)) return;
   g.swallowed = true;
-  const int n = a->model->npages;
-  if (n > 1) {
-    int page = g.page + (dx < 0 ? 1 : -1);
-    if (page < 0) page = n - 1;
-    if (page >= n) page = 0;
-    show_page(*a, page);
+  if (g.on_detail) {
+    // (2) On a detail page a swipe to the right goes back; one to the left
+    // does nothing (contract 4.8).
+    if (dx > 0) page_back(*a);
+  } else {
+    // (2) Over the normal pages only, wrapping (contract 4.8).
+    const int n = a->model->npages;
+    int page = g.page;
+    for (int k = 0; k < n; k++) {
+      page += dx < 0 ? 1 : -1;
+      if (page < 0) page = n - 1;
+      if (page >= n) page = 0;
+      if (!is_detail(*a->model, page)) break;
+    }
+    if (page != g.page) show_page(*a, page);
   }
   lv_indev_wait_release(in);
+}
+
+// (2) The pressed look of a card (contract 4.7): 80 ms after the touch, while
+// the finger is down and has not moved 12 px, and no hold or swipe took the
+// press.
+inline void card_press_tick() {
+  Layout *l = nullptr;
+  Widget *c = pressed_card(&l);
+  if (!c) return;
+  const bool want = g.tracking && !g.moved && !g.swallowed && (int32_t) (now() - g.press_at) >= (int32_t) CARD_PRESS_MS;
+  if (want == (c->pressed != 0)) return;
+  c->pressed = want ? 1 : 0;
+  paint_widget(*l, *c);
+}
+
+// (2) Whether a widget is there for a touch (contract 4.3): drawn, not
+// hidden, with a rectangle. A `choice` without an option or with cells below
+// 1 px has no object.
+inline bool widget_there(Model &m, const Widget &w) {
+  if (w.r[2] <= 0 || w.r[3] <= 0 || !vis_shows(m, w)) return false;
+  return w.obj != nullptr;
+}
+
+inline bool point_in(const int16_t r[4], lv_point_t p) {
+  return p.x >= r[0] && p.x < r[0] + r[2] && p.y >= r[1] && p.y < r[1] + r[3];
+}
+
+// (2) A round button and a badge take a press in their centred circle's
+// square, where their object is (cards spec B.4); outside it the press is
+// the card's, for a hold as for a tap.
+inline bool point_in_box(const Widget &w, lv_point_t p) {
+  int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+  if (w.kind == W_BUTTON) button_box(w, &bx, &by, &bw, &bh);
+  if (w.kind == W_IMAGE) image_box(w, &bx, &by, &bw, &bh);
+  const int16_t r[4] = {(int16_t) (w.r[0] + bx), (int16_t) (w.r[1] + by), (int16_t) bw, (int16_t) bh};
+  return point_in(r, p);
+}
+
+inline bool point_on(lv_obj_t *o, lv_point_t p) {
+  if (!o) return false;
+  lv_area_t a;
+  lv_obj_get_coords(o, &a);
+  return p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2;
+}
+
+// (2) The page a hold opens, by the table "Who gets a press" of contract
+// 4.3, from the point where the press began: on the page on screen, the
+// topmost card there; in it the topmost widget there. None on a slider or a
+// `choice` with change, or on a thermostat's buttons; a widget's own `hold`;
+// else the card's. -1: none. A look through the model, so a widget with only
+// `hold` need not be clickable.
+inline int hold_page(Layout &l, lv_point_t p) {
+  Model &m = *l.model;
+  if (g.page < 0 || g.page >= (int) m.npages) return -1;
+  const Page &pg = m.pages[g.page];
+  const int end = (int) pg.first + (int) pg.count;
+  for (int i = end - 1; i >= (int) pg.first; i--) {
+    const Widget &c = m.w[i];
+    if (c.kind != W_CARD || !c.obj || !point_in(c.r, p)) continue;
+    for (int k = c.children; k >= 1; k--) {
+      if (i + k >= end) continue;
+      const Widget &w = m.w[i + k];
+      if (!widget_there(m, w) || !point_in(w.r, p) || !point_in_box(w, p)) continue;
+      if ((w.kind == W_SLIDER || w.kind == W_CHOICE) && w.change) return -1;
+      if (w.kind == W_THERMO && w.change && (point_on(w.o2, p) || point_on(w.o3, p))) return -1;
+      if (w.hold == 2) return w.hold_v;
+      break;
+    }
+    return c.hold == 2 ? c.hold_v : -1;
+  }
+  return -1;
+}
+
+// (2) A press that stays down 500 ms and has not moved 12 px opens its hold
+// page (contract 7.4). Nothing is sent, and LVGL drops the CLICKED of the
+// release. The engine times it; LVGL's long press time is not used. Nothing
+// at all while the erase watch runs, or for a press that began during it:
+// that press stays an ordinary press, and its release is a tap.
+inline void hold_tick() {
+  if (!g.tracking || g.held || g.moved || g.swallowed || g.press_in_watch || g.erase_timer || g.q_open ||
+      g.erase_screen)
+    return;
+  if ((int32_t) (now() - g.press_at) < (int32_t) HOLD_MS) return;
+  g.held = true;  // looked at once
+  Layout *a = active_layout();
+  if (!a || !a->model) return;
+  const int page = hold_page(*a, g.start);
+  if (page < 0 || page >= (int) a->model->npages) return;
+  g.swallowed = true;
+  lv_indev_wait_release(pointer());
+  card_press_tick();  // the pressed look goes
+  show_page(*a, page);
+}
+
+// (2) Back from a detail page after `ttl` seconds without a touch (contract
+// 4.8). A press starts the count again; it stands still while a finger is
+// down or the question box is open. `ttl` 0: never.
+inline void page_tick() {
+  const uint32_t t = now(), dt = t - g.idle_tick;
+  g.idle_tick = t;
+  Layout *a = active_layout();
+  if (!g.on_detail || !a || !a->model || g.page < 0 || g.page >= (int) a->model->npages) return;
+  const uint32_t ttl = a->model->pages[g.page].ttl;
+  if (finger_down()) {
+    g.idle_ms = 0;
+    return;
+  }
+  if (g.q_open || ttl == 0) return;
+  g.idle_ms += dt;
+  if (g.idle_ms >= ttl * 1000u) page_back(*a);
+}
+
+// (2) Clock and `rate` (cards spec B.7): the 64-bit count is read every
+// tick; once a second the page on screen is looked at (count_page).
+inline void count_tick() {
+  now64();
+  const uint32_t t = now();
+  if (t - g.count_at < COUNT_MS) return;
+  g.count_at = t;
+  Layout *a = active_layout();
+  if (a && a->model && a->state == L_ACTIVE) count_page(*a, g.page);
 }
 
 inline void timer_cb(lv_timer_t *) {
   const uint32_t start = now();
   poll_connection();
   knock_tick();
-  build_tick();
+  const bool built = build_tick();
   swap_tick();
+  if (!built) stale_tick(start);
   delete_tick(start);
   feedback_tick();
   strip_tick();
@@ -978,6 +1228,10 @@ inline void timer_cb(lv_timer_t *) {
   update_mark();
   cache_tick();
   swipe_tick();
+  card_press_tick();
+  hold_tick();
+  page_tick();
+  count_tick();
 }
 
 // ---------------------------------------------------------------- hold to erase
@@ -1152,64 +1406,72 @@ inline void teardown() {
 
 // ---------------------------------------------------------------- tab_set
 
-// Applies one value to a slot. Returns true when the slot changed.
-inline bool set_slot(Slot &s, json::Reader r) {
+// Applies one value to a slot (cards spec B.7): S_CHANGED when it changed,
+// S_WRITTEN when the same value came again, S_NONE for a null on a slot
+// without value and for a value that does not fit. A value, also an equal
+// one, moves the slot's `at`; a null does not (contract 4.4).
+enum SetResult : uint8_t { S_NONE = 0, S_WRITTEN, S_CHANGED };
+
+inline SetResult set_slot(Slot &s, json::Reader r) {
   const json::Kind k = r.peek();
   if (k == json::K_NULL) {
-    if (s.null) return false;
+    if (s.null) return S_NONE;
     s.null = 1;
-    return true;
+    return S_CHANGED;
   }
   switch (s.type) {
     case 't': {
       json::Span sp;
-      if (k != json::K_STRING || !r.string(&sp)) return false;
+      if (k != json::K_STRING || !r.string(&sp)) return S_NONE;
       char tmp[TEXT_CAP];
       const size_t n = json::unescape_max(sp, tmp, TEXT_CAP - 1);
       tmp[n] = 0;
-      if (!s.null && strcmp(s.text, tmp) == 0) return false;
+      s.at = now64();
+      if (!s.null && strcmp(s.text, tmp) == 0) return S_WRITTEN;
       memcpy(s.text, tmp, n + 1);
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     case 'b':
     case 'n':
     case 'i': {
       double v;
       if (k == json::K_TRUE || k == json::K_FALSE) {
-        if (s.type != 'b') return false;
+        if (s.type != 'b') return S_NONE;
         v = k == json::K_TRUE ? 1 : 0;
       } else if (k != json::K_NUMBER || !r.number(&v)) {
-        return false;
+        return S_NONE;
       }
       if (s.type == 'b') v = v != 0 ? 1 : 0;
-      if (s.type == 'i' && (v < 0 || v > 0x10FFFF || v != floor(v))) return false;
+      if (s.type == 'i' && (v < 0 || v > 0x10FFFF || v != floor(v))) return S_NONE;
       v = in_range(v);  // finite (the reader refuses others), now within +-1e9
-      if (!s.null && s.num == v) return false;
+      s.at = now64();
+      if (!s.null && s.num == v) return S_WRITTEN;
       s.num = v;
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     case 'l': {
-      if (k != json::K_ARRAY) return false;
+      if (k != json::K_ARRAY) return S_NONE;
       double tmp[MAX_LIST];
       uint16_t cnt = 0;
       r.begin_array();
       bool first = true;
       while (r.next_item(first)) {
         double v;
-        if (r.peek() != json::K_NUMBER || !r.number(&v)) return false;
+        if (r.peek() != json::K_NUMBER || !r.number(&v)) return S_NONE;
         if (cnt < MAX_LIST) tmp[cnt++] = in_range(v);
       }
-      if (r.err) return false;
-      if (!s.null && s.list_n == cnt && memcmp(s.list, tmp, cnt * sizeof(double)) == 0) return false;
+      if (r.err) return S_NONE;
+      s.at = now64();
+      if (!s.null && s.list_n == cnt && memcmp(s.list, tmp, cnt * sizeof(double)) == 0) return S_WRITTEN;
       memcpy(s.list, tmp, cnt * sizeof(double));
       s.list_n = cnt;
       s.null = 0;
-      return true;
+      return S_CHANGED;
     }
     default:
-      return false;
+      return S_NONE;
   }
 }
 
@@ -1236,9 +1498,11 @@ inline void begin(const Fonts &fonts, const Platform &platform) {
   g.pf = platform;
   g.active = g.staged = -1;
   g.q_layout = -1;
+  g.cp_layout = -1;
   g.build_code = "";
   for (FbRef &r : g.fbl) r.layout = -1;
   g.away_since = now();
+  g.writes_left = CACHE_BUCKET;  // full after a restart (contract 5)
   g.erased = g.pf.erased;
   if (has_api_key()) forget_erased();  // a key at start: the erase is over
   if (g.pf.secret_load && g.pf.secret_load(g.secret)) {
@@ -1327,16 +1591,20 @@ inline size_t on_hello(const char *nonce, size_t nonce_len, const char *auth, si
   Out o{out, cap, 0, true};
   o.raw("{\"boot\":");
   o.num(g.pf.boot);
-  o.raw(",\"caps\":{\"icons\":1,\"max_chunk\":");
+  o.raw(",\"caps\":{\"icons\":2,\"max_chunk\":");
   o.num(MAX_CHUNK);
   o.raw(",\"max_layout\":");
   o.num(MAX_LAYOUT);
+  o.raw(",\"max_pages\":");
+  o.num(MAX_PAGES);
   o.raw(",\"max_slots\":");
   o.num(MAX_SLOTS);
+  o.raw(",\"max_stored\":");
+  o.num(CACHE_LIMIT);
   o.raw(",\"max_widgets\":");
   o.num(MAX_WIDGETS);
   o.raw(",\"screen\":[1280,800],\"w\":[\"heading\",\"card\",\"label\",\"button\",\"switch\",\"slider\","
-        "\"thermostat\",\"chart\",\"image\"]},\"enc\":");
+        "\"thermostat\",\"chart\",\"image\",\"choice\"]},\"enc\":");
   o.num(enc ? 1 : 0);
   o.raw(",\"engine\":");
   o.str(ENGINE_VERSION);
@@ -1533,10 +1801,11 @@ inline const char *on_set(const char *data, size_t data_len, const char *auth, s
     json::Reader whole(data, data_len);
     if (whole.peek() != json::K_OBJECT || !whole.skip() || !whole.at_end()) return "parse";
   }
-  static const char *const KEYS[3] = {"h", "f", "v"};
+  static constexpr const char *KEYS[3] = {"h", "f", "v"};
+  static constexpr KeyIndex SET_INDEX(KEYS, 3);
   const char *at[3];
   json::Reader r(data, data_len);
-  if (!scan_object(r, KEYS, 3, at) || !at[0]) return "parse";
+  if (!scan_object(r, SET_INDEX, at) || !at[0]) return "parse";
   auto reader_at = [&](const char *p) { return json::Reader(p, (size_t) (data + data_len - p)); };
   json::Span h;
   {
@@ -1586,7 +1855,11 @@ inline const char *on_set(const char *data, size_t data_len, const char *auth, s
       if (pr.next_item(pfirst)) continue;  // more than two items: skipped
       if (sv != floor(sv) || sv < 1 || sv > m.nslots) continue;
       const int slot = (int) sv;
-      if (set_slot(m.slots[slot - 1], value)) mark_dirty(slot);
+      // A changed slot repaints what shows it; an equal value again only
+      // what counts on from its write, a clock or a moving slider (B.7).
+      Slot &st = m.slots[slot - 1];
+      const SetResult res = set_slot(st, value);
+      if (res == S_CHANGED || (res == S_WRITTEN && st.counted)) mark_dirty(slot);
     }
   }
   if (g.dirty_any) {
@@ -1629,7 +1902,7 @@ inline void on_ack(int n, bool ok, const char *code, size_t code_len, const char
       w->ovr = 0;
       if (w->fb == 1) w->fb = 0;
     }
-    paint_widget(*l, *w);
+    feedback_paint(*l, *w);
   }
   if (denied) show_strip("Not allowed on this tablet");
   if (confirm && w) question_open(*l, *w, p->event, p->has_value != 0, p->value);

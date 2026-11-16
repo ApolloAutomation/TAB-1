@@ -10,9 +10,14 @@ sizes and glyphs the contract asks for:
   tab_text_<px>     Montserrat Medium, one per size in fonts.text_px, with
                     the characters of fonts.text_glyphs (Latin, Latin-1,
                     Latin Extended-A, common punctuation)
-  tab_digits_<px>   Montserrat Medium, fonts.digits_px, only fonts.digits_glyphs
+  tab_digits_<px>   Montserrat Medium, fonts.digits_px, only fonts.digits_glyphs;
+                    the sizes from BIG_DIGITS_PX up at 8 bits a pixel
   tab_icon_<px>     Material Design Icons, one per size in fonts.icon_px,
                     every icon of icons.json up to ICON_LEVEL
+
+Every other font is 4 bits a pixel. ESPHome unpacks a 4-bit glyph nibble by
+nibble on every draw and copies an 8-bit one whole, so the large digits
+(96 and 192 px) draw at about half the cost for more flash.
 
 Usage:
   python3 tools/gen_engine_fonts.py [--contract DIR] [--check]
@@ -36,8 +41,11 @@ DEFAULT_CONTRACT = os.path.join(ROOT, "engine_tests", "contract")
 TEXT_FILE = "fonts/Montserrat-Medium.ttf"
 ICON_FILE = "fonts/materialdesignicons-webfont.ttf"
 BPP = 4
-# The icon set level this firmware embeds and reports as caps.icons.
-ICON_LEVEL = 1
+BIG_BPP = 8
+BIG_DIGITS_PX = 96
+# The icon set level this firmware embeds. The engine reports it as
+# caps.icons (from package E2 of the cards work; until then it says 1).
+ICON_LEVEL = 2
 
 BEGIN = "# BEGIN tab fonts"
 END = "# END tab fonts"
@@ -86,6 +94,13 @@ def font_ids(contract):
     return out
 
 
+def bpp_of(font_id):
+    """Bits a pixel of one font id: 8 for the large digits, else 4."""
+    if font_id.startswith("tab_digits_") and int(font_id.rsplit("_", 1)[1]) >= BIG_DIGITS_PX:
+        return BIG_BPP
+    return BPP
+
+
 def _quote(text):
     """A YAML double-quoted string; everything outside printable ASCII escaped."""
     out = []
@@ -107,7 +122,7 @@ def _font_entry(font_id, file, size, glyph_lines, anchor=None, alias=None):
         f'{INDENT}- file: "{file}"',
         f"{INDENT}  id: {font_id}",
         f"{INDENT}  size: {size}",
-        f"{INDENT}  bpp: {BPP}",
+        f"{INDENT}  bpp: {bpp_of(font_id)}",
     ]
     if alias:
         lines.append(f"{INDENT}  glyphs: *{alias}")

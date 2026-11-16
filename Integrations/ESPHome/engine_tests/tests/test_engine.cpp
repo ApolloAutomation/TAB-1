@@ -6,10 +6,15 @@
 // Screenshots go to <out dir>/shots, the report of cut texts to
 // <out dir>/cut_texts.txt. Exit code 0 only when every check passed.
 #define TAB_TEST_OBJECT_LIMIT 1  // tab_ui.h: lets a test make object creation fail
+#define TAB_TEST_COUNTERS 1      // tab_model.h: counts what the engine does
 #include "harness.h"
 #include "fake_platform.h"
 #include "tj.h"
 #include "tab_engine.h"
+#include "frames.h"
+#include "host_fonts.h"
+#include "src/core/lv_obj_private.h"  // repaint_cost reads whether a layout pass is due
+#include "src/display/lv_display_private.h"  // and which areas are drawn again
 
 #include <algorithm>
 #include <array>
@@ -17,6 +22,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -565,7 +571,7 @@ TEST(layout_shapes) {
        "parse"},
       {"{\"v\":1,\"slots\":\"\",\"pages\":[{\"w\":[{\"t\":\"card\",\"id\":1,\"r\":[0,0,1]}]}]}", "parse"},
       {"{\"slots\":\"\",\"pages\":[]}", "parse"},
-      {"{\"v\":2,\"pages\":7}", "version"},
+      {"{\"v\":3,\"pages\":7}", "version"},
       {"{\"v\":1,\"slots\":\"tx\",\"pages\":[]}", "parse"},
       {"[1]", "parse"},
       {"{\"v\":1,\"pages\":[]} x", "parse"}};
@@ -623,8 +629,10 @@ TEST(chunks_fixture) {
       CHECK_STR(build_fails, "memory");
       CHECK(tab::building());
       fake::st.largest = 1000000;
+      fake::st.free = 1000000;
       hh::advance(20);
       fake::st.largest = 16000000;
+      fake::st.free = 28000000;
       CHECK(!tab::building());
       CHECK_STR(status_build(), build_fails);
     }
@@ -678,26 +686,26 @@ TEST(reading_thermostat_dash) {
   // No value yet: the dash, in text fonts only.
   CHECK_STR(label_text(big->o1), DASH);
   CHECK_STR(label_text(small->o1), DASH);
-  CHECK(font_of(big->o1) == g_fonts.text[5]);    // 34: fit is 64, 48 would be digits only
+  CHECK(font_of(big->o1) == g_fonts.text[6]);    // 34: fit is 64, 48 would be digits only
   CHECK(font_of(small->o1) == g_fonts.text[4]);  // 20: fit is 24
-  CHECK(font_of(big->o1) != g_fonts.digits && font_of(small->o1) != g_fonts.digits);
+  CHECK(font_of(big->o1) != g_fonts.digits[0] && font_of(small->o1) != g_fonts.digits[0]);
   // A value: digits at 48 where it fits.
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,21.5],[2,21.5]]}"), "");
   CHECK_STR(label_text(big->o1), "21.5");
-  CHECK(font_of(big->o1) == g_fonts.digits);
+  CHECK(font_of(big->o1) == g_fonts.digits[0]);
   CHECK(font_of(small->o1) == g_fonts.text[4]);
   // A negative value uses the ASCII hyphen, which the digits font holds.
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,-4]]}"), "");
   CHECK_STR(label_text(big->o1), "-4");
-  CHECK(font_of(big->o1) == g_fonts.digits);
+  CHECK(font_of(big->o1) == g_fonts.digits[0]);
   // Back to no value: the dash in 34 again.
   CHECK_STR(ha.set("{\"f\":1,\"h\":\"" + h + "\",\"v\":[]}"), "");
   CHECK_STR(label_text(big->o1), DASH);
-  CHECK(font_of(big->o1) == g_fonts.text[5]);
+  CHECK(font_of(big->o1) == g_fonts.text[6]);
   // The rule itself, at any size.
   for (int s : {60, 100, 120, 200, 320, 800}) {
     const lv_font_t *f = D::thermostat_font(DASH, s);
-    CHECK_MSG(f != g_fonts.digits, std::to_string(s));
+    CHECK_MSG(f != g_fonts.digits[0], std::to_string(s));
     const double fit = s / 5.0;  // the dash is narrow; s / 5 always decides
     const int want = fit >= 34 ? 34 : fit >= 20 ? 20 : fit >= 18 ? 18 : 14;
     CHECK_MSG(f == D::text_font(want), std::to_string(s));
@@ -721,7 +729,7 @@ TEST(thermostat_value_steps_down_when_too_wide) {
       const lv_font_t *fit = D::thermostat_fit_font(t, s);
       // The sizes in order from the one thermostatFit picks: the first that fits.
       std::vector<const lv_font_t *> order{fit};
-      bool after = fit == g_fonts.digits;
+      bool after = fit == g_fonts.digits[0];
       for (int px : SIZES) {
         if (after) order.push_back(D::text_font(px));
         if (D::text_font(px) == fit) after = true;
@@ -754,11 +762,11 @@ TEST(thermostat_value_steps_down_when_too_wide) {
   CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[1,4040],[2,21.5],[3,40000]]}"), "");
   D::Widget *a = widget(2), *b = widget(3), *c = widget(4);
   if (!CHECK(a && b && c && a->o1 && b->o1 && c->o1)) return;
-  CHECK(D::thermostat_fit_font("4040", 248) == g_fonts.digits);
-  CHECK(font_of(a->o1) == g_fonts.text[5]);
+  CHECK(D::thermostat_fit_font("4040", 248) == g_fonts.digits[0]);
+  CHECK(font_of(a->o1) == g_fonts.text[6]);
   CHECK_STR(label_text(a->o1), "4040");
   CHECK(!a->cut);
-  CHECK(font_of(b->o1) == g_fonts.digits);
+  CHECK(font_of(b->o1) == g_fonts.digits[0]);
   CHECK_STR(label_text(b->o1), "21.5");
   CHECK(!b->cut);
   CHECK(font_of(c->o1) == g_fonts.text[0]);
@@ -870,8 +878,10 @@ TEST(reading_repeated_commit) {
   CHECK_STR(ha.send(small), "");
   CHECK_STR(ha.commit(hs), "");
   fake::st.largest = 1000000;
+  fake::st.free = 1000000;
   hh::advance(200);
   fake::st.largest = 16000000;
+  fake::st.free = 28000000;
   char out[768];
   tj::Value v;
   CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v));
@@ -892,9 +902,25 @@ static void same_shape(const tj::Value &got, const tj::Value &want, const std::s
   }
 }
 
+// The answer has the shape and the values of the first case of
+// hello_v2.json (engine 0.2.0, proto [1, 2], as shipped: run.sh sets no
+// TAB_PROTO_HIGH), and its caps are contract.json's engine_caps
+// (contract 3, cards spec A.5).
+static void same_value(const tj::Value &got, const tj::Value &want, const std::string &path) {
+  CHECK_MSG(got.t == want.t && got.n == want.n && got.s == want.s && got.size() == want.size(), path);
+  if (got.t != want.t) return;
+  if (want.t == tj::Value::ARR)
+    for (size_t i = 0; i < want.a.size() && i < got.a.size(); i++)
+      same_value(got.a[i], want.a[i], path + "[" + std::to_string(i) + "]");
+  if (want.t == tj::Value::OBJ)
+    for (size_t i = 0; i < want.o.size() && i < got.o.size(); i++)
+      same_value(got.o[i].second, want.o[i].second, path + "." + want.o[i].first);
+}
+
 TEST(hello_fixture) {
-  const tj::Value f = fixture("hello.json");
-  const tj::Value &want = f["cases"][0]["response"];  // up_to_date
+  const tj::Value f = fixture("hello_v2.json");
+  const tj::Value &want = f["cases"][0]["response"];  // speaks_1_and_2
+  CHECK_STR(f["cases"][0]["name"].s, "speaks_1_and_2");
   Ha ha;
   // Paired with the fixture secret: the fixture's auth starts a session, any other does not.
   ha.boot(true);
@@ -904,23 +930,27 @@ TEST(hello_fixture) {
   tj::Value v;
   CHECK(n > 0 && tj::parse(out, n, &v));
   same_shape(v, want, "hello");
-  CHECK(v["session"].n == 1 && v["enc"].n == 1 && v["boot"].n == 3);
-  CHECK_STR(v["kid"].s, "d9ccb8a994337e34");
-  CHECK_STR(v["engine"].s, "0.1.0");
-  CHECK(v["proto"][0].n == 1 && v["proto"][1].n == 1);
-  CHECK_STR(v["layout"].s, "");
-  // caps are exactly the contract's caps_defaults.
-  const tj::Value caps = tj::load(CDIR + "/contract.json")["caps_defaults"];
-  for (auto &kv : caps.o) {
-    if (kv.second.t == tj::Value::ARR) {
-      CHECK_MSG(v["caps"][kv.first.c_str()].size() == kv.second.size(), kv.first);
-      for (size_t i = 0; i < kv.second.size(); i++)
-        CHECK_MSG(v["caps"][kv.first.c_str()][i].s == kv.second[i].s && v["caps"][kv.first.c_str()][i].n == kv.second[i].n,
-                  kv.first);
-    } else {
-      CHECK_MSG(v["caps"][kv.first.c_str()].n == kv.second.n, kv.first);
-    }
+  CHECK(v["session"].n == want["session"].n && v["enc"].n == want["enc"].n && v["boot"].n == want["boot"].n);
+  CHECK_STR(v["kid"].s, want["kid"].s);
+  CHECK_STR(v["engine"].s, want["engine"].s);
+  same_value(v["proto"], want["proto"], "proto");
+  CHECK_STR(v["layout"].s, "");  // nothing on screen here
+  same_value(v["caps"], want["caps"], "caps");
+  // The caps are those of the newest engine, both ways round: every cap the
+  // engine answers is in engine_caps with the same value, and every one of
+  // engine_caps is answered.
+  const tj::Value contract = tj::load(CDIR + "/contract.json");
+  const tj::Value &caps = contract["engine_caps"];
+  CHECK(v["caps"].t == tj::Value::OBJ && v["caps"].size() == caps.size());
+  for (auto &kv : v["caps"].o) {
+    if (!CHECK_MSG(caps.has(kv.first.c_str()), kv.first + " is not in engine_caps")) continue;
+    same_value(kv.second, caps[kv.first.c_str()], "engine_caps." + kv.first);
   }
+  for (auto &kv : caps.o) CHECK_MSG(v["caps"].has(kv.first.c_str()), kv.first + " is not answered");
+  // What a missing cap means to HA (caps_defaults) never claims more than
+  // the engine has: every name there is answered.
+  for (auto &kv : contract["caps_defaults"].o)
+    CHECK_MSG(v["caps"].has(kv.first.c_str()), kv.first + " of caps_defaults is not answered");
   CHECK(D::g.session);
   // auth.json "hello": the good auth starts a session, once per boot; the
   // same nonce again starts none (contract 3), and the bad auth none either.
@@ -1302,7 +1332,7 @@ static void report_cuts(const char *label) {
     D::bound_text(m, w.text, &full);
     lv_obj_t *o = w.kind == D::W_LABEL ? w.obj : w.kind == D::W_THERMO ? w.o1 : w.o2;
     static const char *const KINDS[] = {"", "heading", "card", "label", "button", "switch", "slider", "thermostat",
-                                        "chart", "image"};
+                                        "chart", "image", "choice"};
     char line[600];
     snprintf(line, sizeof line, "%s: widget %u (%s, box %d px): \"%s\" shows as \"%s\"\n", label, (unsigned) w.id,
              KINDS[w.kind], o ? (int) lv_obj_get_content_width(o) : 0, full, label_text(o).c_str());
@@ -1474,7 +1504,7 @@ TEST(text_measure) {
   // The engine's width measure equals LVGL's own, so "…" cuts exactly at the box.
   const char *texts[] = {"Ceiling light", "Climate \xC2\xB7 W\xC3\xA4rme", "21.5\xC2\xB0 \xC2\xB7 46% \xC2\xB7 2 lights on",
                          "AVAWAy To", "Soft focus \xC2\xB7 Mara Lind", "x"};
-  for (const lv_font_t *f : {g_fonts.text[0], g_fonts.text[3], g_fonts.text[5]}) {
+  for (const lv_font_t *f : {g_fonts.text[0], g_fonts.text[3], g_fonts.text[6]}) {
     for (const char *t : texts) {
       lv_point_t p;
       lv_text_get_size(&p, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -1503,7 +1533,8 @@ TEST(icons_match_contract) {
   const std::pair<const char *, uint32_t> mine[] = {
       {"mdi:view-dashboard", D::ICON_VIEW_DASHBOARD}, {"mdi:lan-disconnect", D::ICON_LAN_DISCONNECT},
       {"mdi:minus", D::ICON_MINUS},                   {"mdi:plus", D::ICON_PLUS},
-      {"mdi:tablet-dashboard", D::ICON_TABLET},       {ic["placeholder"].s.c_str(), D::ICON_PLACEHOLDER},
+      {"mdi:tablet-dashboard", D::ICON_TABLET},       {"mdi:arrow-left", D::ICON_ARROW_LEFT},
+      {ic["placeholder"].s.c_str(), D::ICON_PLACEHOLDER},
       {ic["fallback"].s.c_str(), D::ICON_FALLBACK}};
   for (auto &p : mine) {
     CHECK_MSG(ic["icons"].has(p.first), p.first);
@@ -1606,6 +1637,7 @@ TEST(state_stream_fixture) {
         double lo, hi, st;
         D::limits_of(m, w, &lo, &hi, &st);
         const int fill = v.is_null() ? 0 : (int) std::floor(D::fraction(v.n, lo, hi) * w.r[2] + 0.5);
+        lv_obj_update_layout(w.o2);  // a page not on screen is never laid out by the engine (cards spec B.6)
         CHECK_MSG(lv_obj_get_width(w.o2) == fill || (fill == 0 && hidden(w.o2)), id);
       }
     }
@@ -1755,6 +1787,7 @@ TEST(swap_safety) {
   CHECK_STR(ha.commit("4384f665e4dd9f62"), "");
   CHECK_STR(tab::staged_hash(), "4384f665e4dd9f62");
   fake::st.largest = 1000000;
+  fake::st.free = 1000000;
   hh::advance(200);
   char out[768];
   tj::Value v;
@@ -1770,6 +1803,7 @@ TEST(swap_safety) {
   CHECK_STR(label_text(widget(4)->obj), "40%");
   // A new seq 0 clears the build code.
   fake::st.largest = 16000000;
+  fake::st.free = 28000000;
   CHECK_STR(ha.send(all), "");
   tj::parse(out, tab::on_status(out, sizeof out), &v);
   CHECK_STR(v["build"].s, "");
@@ -2116,6 +2150,154 @@ TEST(cache_failed_write_is_retried) {
   CHECK_STR(ha.clear(), "");
   hh::advance(80000);
   CHECK(fake::st.save_calls == 1 && !fake::st.flash_has);
+}
+
+// Simulated time in jumps the engine sees one by one (each under 2^31 ms),
+// for hours of running without a millisecond loop.
+static void run_for(uint64_t ms) {
+  while (ms > 20) {
+    const uint64_t jump = std::min<uint64_t>(1000000000ull, ms - 10);
+    hh::g_ms += (uint32_t) jump;
+    hh::advance(10);
+    ms -= jump + 10;
+  }
+  hh::advance((uint32_t) ms);
+}
+
+// Contract 5, "(2) Flash writes" (cards spec B.8): a count of 12 saves,
+// full after a restart, one back for every 2 hours of running, never above
+// 12. With none left the layout is shown and used, and stored when a write
+// is back. Erases take none and wait for none. The numbers are contract.json's.
+TEST(write_bucket) {
+  const tj::Value timing = tj::load(CDIR + "/contract.json")["timing"];
+  CHECK(timing["cache_bucket"].n == D::CACHE_BUCKET);
+  CHECK(timing["cache_refill_s"].n * 1000 == D::CACHE_REFILL_MS);
+  const int bucket = (int) timing["cache_bucket"].n;
+  const uint32_t refill = (uint32_t) (timing["cache_refill_s"].n * 1000);
+  if (!CHECK(bucket == 12 && refill == 7200000u)) return;  // the steps below are worked out for these
+  const std::string small = layout_bytes("layout_small.dl.json");
+  auto version = [&](int i) { return small + std::string((size_t) i, '\n'); };  // other bytes, other hash
+  auto hash_of = [](const std::string &b) { return sha_hex(b).substr(0, 16); };
+  auto stored = [](const std::string &b) {
+    return fake::st.flash_has && fake::st.flash.size() == b.size() && memcmp(fake::st.flash.data(), b.data(), b.size()) == 0;
+  };
+  Ha ha;
+  ha.boot(false);
+
+  // 13 layouts in an hour, one every 4.5 minutes: 12 writes.
+  uint32_t first_write = 0;
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(i)))) return;
+    const uint32_t shown = hh::g_ms;
+    CHECK(advance_until([&] { return fake::st.save_calls == std::min(i + 1, bucket); }, 30100));
+    if (i == 0) first_write = hh::g_ms;
+    if (i < bucket) CHECK_MSG(stored(version(i)) && hh::g_ms - shown >= D::CACHE_DELAY_MS - 10, std::to_string(i));
+    run_for(270000 - (hh::g_ms - shown));
+  }
+  CHECK(hh::g_ms - first_write < 3600000u);
+  CHECK(fake::st.save_calls == 12 && fake::st.erase_calls == 0);
+  CHECK(stored(version(11)));
+  // The 13th is on screen and used meanwhile.
+  CHECK_STR(tab::active_hash(), hash_of(version(12)));
+  CHECK(hidden(D::g.waiting));
+  CHECK_STR(ha.set("{\"h\":\"" + hash_of(version(12)) + "\",\"v\":[[1,\"x\"]]}"), "");
+  char text[16];
+  CHECK(tab::slot_text(1, text, sizeof text) && std::string(text) == "x");
+  // It is stored when the first write is back: 2 hours after the first write.
+  run_for(first_write + refill - 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 12 && stored(version(11)));
+  hh::advance(100);
+  CHECK(fake::st.save_calls == 13 && stored(version(12)));
+  // One back for every 2 hours: the next write is 4 hours after the first.
+  if (!CHECK(ha.show(version(13)))) return;
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.save_calls == 13);
+  run_for(first_write + 2 * refill - 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 13 && stored(version(12)));
+  hh::advance(100);
+  CHECK(fake::st.save_calls == 14 && stored(version(13)));
+  // A layout that comes while it waits is the one stored, with one write.
+  CHECK(ha.show(version(14)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(ha.show(version(15)));
+  run_for(first_write + 3 * refill + 50 - hh::g_ms);
+  CHECK(fake::st.save_calls == 15 && stored(version(15)));
+
+  // Never above 12: after 30 hours of running, 12 writes in a row, then a wait.
+  run_for(30ull * 3600 * 1000);
+  const int calls = fake::st.save_calls;
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(20 + i)))) return;
+    hh::advance(D::CACHE_DELAY_MS + 100);
+    CHECK_MSG(fake::st.save_calls == calls + std::min(i + 1, bucket), std::to_string(i));
+  }
+  CHECK(stored(version(31)));
+
+  // Erases at a count of 0. A layout too large to keep erases the older copy
+  // when its save is due, as with writes left, without waiting for one.
+  std::string big = layout_bytes("layout_all_cards.dl.json");
+  big.insert(big.size() - 1, ",\"zz_unknown\":\"" + std::string(140 * 1024, 'x') + "\"");
+  CHECK(big.size() > D::CACHE_LIMIT);
+  CHECK(ha.show(big));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(!fake::st.flash_has && fake::st.erase_calls == 1 && fake::st.save_calls == calls + bucket);
+  // tab_clear erases at once; the waiting save is dropped.
+  CHECK(ha.show(version(40)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.save_calls == calls + bucket);
+  const std::string cleared = ha.clear();  // once: CHECK_STR reads its argument twice
+  CHECK_STR(cleared, "");
+  CHECK(fake::st.erase_calls == 2 && !fake::st.flash_has);
+  run_for(2ull * refill);
+  CHECK(fake::st.save_calls == calls + bucket && !fake::st.flash_has);
+
+  // A restart fills the count: 12 writes, one at each layout. A save the
+  // platform refuses takes none.
+  ha.boot(false, true);
+  for (int i = 0; i < 13; i++) {
+    if (!CHECK(ha.show(version(50 + i)))) return;
+    if (i == 0) fake::st.save_fail_next = 1;
+    hh::advance(D::CACHE_DELAY_MS + 100);
+    if (i == 0) {
+      CHECK(fake::st.save_calls == 1 && D::g.writes_left == bucket);  // refused: nothing taken
+      hh::advance(D::CACHE_DELAY_MS);
+    }
+    CHECK_MSG(fake::st.save_calls == 1 + std::min(i + 1, bucket), std::to_string(i));
+  }
+  CHECK(stored(version(61)) && D::g.writes_left == 0);
+
+  // Erases take none while writes are left either (contract 5): tab_clear
+  // and the erase for a layout too large to keep leave the count as it was.
+  ha.boot(false, true);
+  CHECK(ha.show(version(70)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(stored(version(70)) && D::g.writes_left == bucket - 1);
+  const int erases = fake::st.erase_calls;
+  const std::string cleared2 = ha.clear();
+  CHECK_STR(cleared2, "");
+  CHECK(fake::st.erase_calls == erases + 1 && !fake::st.flash_has && D::g.writes_left == bucket - 1);
+  CHECK(ha.show(version(71)));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(stored(version(71)) && D::g.writes_left == bucket - 2);
+  CHECK(ha.show(big));
+  hh::advance(D::CACHE_DELAY_MS + 100);
+  CHECK(fake::st.erase_calls == erases + 2 && !fake::st.flash_has && D::g.writes_left == bucket - 2);
+}
+
+// The tablet's timing numbers are contract.json's `timing`, not copies that
+// can drift: the hold, the 12 px of movement, the swipe, the pressed look, a
+// detail page's ttl, the ack and progress waits and the flash write count.
+TEST(timing_from_contract) {
+  const tj::Value t = tj::load(CDIR + "/contract.json")["timing"];
+  CHECK(t["hold_ms"].n == D::HOLD_MS);
+  CHECK(t["hold_move_px"].n * t["hold_move_px"].n == D::MOVED_PX2);
+  CHECK(t["swipe_px"].n == D::SWIPE_PX);
+  CHECK(t["card_press_ms"].n == D::CARD_PRESS_MS);
+  CHECK(t["sub_ttl_s"].n == D::TTL_DEFAULT);
+  CHECK(t["ack_timeout_s"].n * 1000 == D::ACK_TIMEOUT_MS);
+  CHECK(t["progress_timeout_s"].n * 1000 == D::PROGRESS_TIMEOUT_MS);
+  CHECK(t["cache_bucket"].n == D::CACHE_BUCKET);
+  CHECK(t["cache_refill_s"].n * 1000 == D::CACHE_REFILL_MS);
 }
 
 // ================================================================ knock
@@ -2476,10 +2658,80 @@ static std::string gen_big_card(int labels) {
   return s;
 }
 
+// Pages of cards that each hold one choice of 16 options in 4 rows, with
+// icons and texts, bound to slot 1 (layout v2).
+static std::string gen_choice_cards(int pages, int cards) {
+  std::string s = "{\"nav\":[", texts, icons;
+  for (int i = 0; i < 16; i++) {
+    texts += std::string(i ? "," : "") + "\"Option " + std::to_string(i) + "\"";
+    icons += std::string(i ? "," : "") + std::to_string(983040 + 100 * i);
+  }
+  for (int p = 0; p < pages; p++)
+    s += std::string(p ? "," : "") + "{\"p\":" + std::to_string(p) + ",\"title\":\"P" + std::to_string(p) + "\"}";
+  s += "],\"pages\":[";
+  int id = 1;
+  for (int p = 0; p < pages; p++) {
+    s += std::string(p ? "," : "") + "{\"title\":\"P" + std::to_string(p) + "\",\"w\":[";
+    for (int c = 0; c < cards; c++) {
+      const int cx = 100 + (c % 4) * 295, cy = (c / 4) % 4 * 200, card = id, choice = id + 1;
+      id += 2;
+      s += std::string(c ? "," : "") + "{\"id\":" + std::to_string(card) + ",\"r\":[" + std::to_string(cx) + "," +
+           std::to_string(cy) + ",290,190],\"t\":\"card\",\"w\":[{\"change\":{\"p\":0},\"icons\":[" + icons +
+           "],\"id\":" + std::to_string(choice) + ",\"r\":[" + std::to_string(cx + 8) + "," + std::to_string(cy + 8) +
+           ",274,174],\"rows\":4,\"t\":\"choice\",\"texts\":[" + texts + "],\"value\":{\"s\":1}}]}";
+    }
+    s += "]}";
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"n\",\"v\":2}";
+  return s;
+}
+
+// 64 pages, 20 normal and 44 detail pages, each with a card of two labels
+// and a button: on a normal page a go to its detail page, on a detail page
+// back. Every third page has a theme of its own. Eight side bar entries.
+static std::string gen_pages64(const char *tag = "") {
+  std::string s = "{\"nav\":[";
+  for (int i = 0; i < 8; i++) s += std::string(i ? "," : "") + "{\"p\":" + std::to_string(i) + ",\"title\":\"N\"}";
+  s += "],\"pages\":[";
+  int id = 1;
+  for (int p = 0; p < 64; p++) {
+    const bool detail = p >= 20;
+    s += std::string(p ? "," : "") + "{";
+    if (detail) s += "\"sub\":1,";
+    if (p % 3 == 0) s += "\"theme\":{\"wall\":" + std::to_string(0x101010 * (p % 8) + 0x203040) + "},";
+    s += "\"title\":\"P" + std::to_string(p) + tag + "\",\"w\":[{\"id\":" + std::to_string(id) +
+         ",\"r\":[100,20,500,300],\"t\":\"card\",\"w\":[";
+    s += "{\"id\":" + std::to_string(id + 1) + ",\"r\":[116,100,300,28],\"size\":1,\"t\":\"label\",\"text\":\"One\"},";
+    s += "{\"id\":" + std::to_string(id + 2) + ",\"r\":[116,140,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Two\"},";
+    s += "{\"id\":" + std::to_string(id + 3) + ",\"r\":[116,40,128,48],\"t\":\"button\",\"tap\":" +
+         (detail ? std::string("{\"back\":1}") : "{\"go\":" + std::to_string(20 + p) + "}") + ",\"text\":\"Go\"}]}]}";
+    id += 4;
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"\",\"v\":2}";
+  return s;
+}
+
 static uint32_t count_objects(lv_obj_t *o) {
   uint32_t n = 1;
   const uint32_t k = lv_obj_get_child_count(o);
   for (uint32_t i = 0; i < k; i++) n += count_objects(lv_obj_get_child(o, (int32_t) i));
+  return n;
+}
+
+// Every object the engine has made: those under its base on the shown
+// screen and those under the screen that is never shown (cards spec B.6:
+// the pages that are not on screen, a layout being built or deleted).
+static uint32_t count_built() { return count_objects(D::g.base) + count_objects(D::g.park); }
+
+// The objects of one layout: its root (the side bar and the page on
+// screen) and every page object that hangs under the parking screen.
+static uint32_t layout_objects(const D::Layout *l) {
+  if (!l || !l->root) return 0;
+  uint32_t n = count_objects(l->root);
+  for (uint32_t p = 0; l->model && p < l->model->npages; p++) {
+    lv_obj_t *po = l->model->pages[p].obj;
+    if (po && lv_obj_get_parent(po) != l->root) n += count_objects(po);
+  }
   return n;
 }
 
@@ -2528,7 +2780,9 @@ TEST(slice_budget) {
   const std::vector<L> ls = {{"40 cards x 4 labels x 3 pages", gen_cards(3, 40, 4)},
                              {"2 cards x 1 label x 20 pages", gen_cards(20, 2, 1)},
                              {"1 card x 200 labels", gen_big_card(201)},
-                             {"1 card x 2047 labels", gen_big_card(2048)}};
+                             {"1 card x 2047 labels", gen_big_card(2048)},
+                             {"16 cards x 16-option choice x 3 pages", gen_choice_cards(3, 16)},
+                             {"64 pages, 44 of them detail pages", gen_pages64()}};
   Ha ha;
   for (const L &l : ls) {
     g_test = l.name;
@@ -2538,10 +2792,10 @@ TEST(slice_budget) {
     const std::string h = hash16(l.bytes);
     CHECK_STR(ha.send(l.bytes, 16000), "");
     CHECK_STR(ha.commit(h), "");
-    uint32_t before = count_objects(D::g.base), most_made = 0, slices = 0;
+    uint32_t before = count_built(), most_made = 0, slices = 0;
     for (int t = 0; t < 60000 && h != tab::active_hash(); t++) {
       hh::advance(1);
-      const uint32_t n = count_objects(D::g.base);
+      const uint32_t n = count_built();
       if (n > before) {
         slices++;
         most_made = std::max(most_made, n - before);
@@ -2555,15 +2809,15 @@ TEST(slice_budget) {
     bool all_built = a != nullptr;
     for (uint32_t i = 0; a && i < a->model->nw; i++) all_built = all_built && a->model->w[i].obj;
     CHECK(all_built);
-    const uint32_t objects = a ? count_objects(a->root) : 0;
+    const uint32_t objects = layout_objects(a);
     // Back to the small layout: the big one is deleted a slice at a time.
     CHECK_STR(ha.send(small, 16000), "");
     CHECK_STR(ha.commit(hash16(small)), "");
-    before = count_objects(D::g.base);
+    before = count_built();
     uint32_t most_gone = 0, delete_slices = 0;
     for (int t = 0; t < 60000 && (hash16(small) != tab::active_hash() || slots_in_use() > 1); t++) {
       hh::advance(1);
-      const uint32_t n = count_objects(D::g.base);
+      const uint32_t n = count_built();
       if (n < before) {
         delete_slices++;
         most_gone = std::max(most_gone, before - n);
@@ -2595,10 +2849,10 @@ TEST(delete_shares_tick_time) {
   CHECK(slots_in_use() == 1);
   fake::st.on_poll = [] { hh::g_ms += D::SLICE_MS; };
   CHECK(ha.show(small));
-  const uint32_t before = count_objects(D::g.base);
+  const uint32_t before = count_built();
   hh::advance(500);
-  CHECK_MSG(slots_in_use() == 2 && count_objects(D::g.base) == before,
-            std::to_string(before - count_objects(D::g.base)) + " objects deleted with no time left");
+  CHECK_MSG(slots_in_use() == 2 && count_built() == before,
+            std::to_string(before - count_built()) + " objects deleted with no time left");
   fake::st.on_poll = nullptr;
   CHECK(advance_until([] { return slots_in_use() == 1; }, 2000));
   CHECK(fake::st.live.size() == 2 && !fake::st.bad_release);
@@ -2701,7 +2955,7 @@ TEST(escaped_slots_are_fast) {
       {"escaped mixed", body("t\\u0062n\\u006cn"), ""},
       {"43000 escaped, bad page", "{\"pages\":[{\"w\":7}],\"slots\":\"" + escaped(43000) + "\",\"v\":1}", "parse"},
       {"43000 escaped, wrong last letter", body(escaped(42999) + "\\u0078"), "parse"},
-      {"43000 escaped, newer version", "{\"pages\":[],\"slots\":\"" + escaped(43000) + "\",\"v\":2}", "version"},
+      {"43000 escaped, newer version", "{\"pages\":[],\"slots\":\"" + escaped(43000) + "\",\"v\":3}", "version"},
       {"2000 escaped, slot 1500 used",
        "{\"pages\":[{\"title\":\"P\",\"w\":[{\"id\":1,\"r\":[100,20,376,56],\"t\":\"card\",\"w\":[{\"id\":2,"
        "\"r\":[116,30,300,28],\"size\":1,\"t\":\"label\",\"text\":{\"s\":1500}}]}]}],\"slots\":\"" +
@@ -2882,9 +3136,9 @@ TEST(boot_builds_in_slices) {
   uint32_t worst = 0, slices = 0;
   const auto t1 = std::chrono::steady_clock::now();
   for (int i = 0; i < 2000 && std::string(tab::active_hash()).empty(); i++) {
-    const uint32_t before = count_objects(D::g.base);
+    const uint32_t before = count_built();
     hh::advance(D::TICK_MS);
-    const uint32_t after = count_objects(D::g.base);
+    const uint32_t after = count_built();
     if (after > before) {
       slices++;
       if (after - before > worst) worst = after - before;
@@ -2896,7 +3150,7 @@ TEST(boot_builds_in_slices) {
   CHECK_MSG(worst <= (uint32_t) D::SLICE_OBJECTS + 8, std::to_string(worst) + " objects in one slice");
   CHECK(slices > 100);
   printf("  %zu bytes, %u objects: begin() %.1f ms, built in %u slices, %.0f ms\n", big.size(),
-         (unsigned) count_objects(D::g.base), begin_ms, (unsigned) slices, build_ms);
+         (unsigned) count_built(), begin_ms, (unsigned) slices, build_ms);
   // Showing the stored copy writes nothing.
   hh::advance(31000);
   CHECK(fake::st.save_calls == 0 && fake::st.erase_calls == 0);
@@ -2923,6 +3177,33 @@ TEST(boot_builds_in_slices) {
   CHECK_STR(tab::active_hash(), "");
   CHECK_STR(status_build(), "build");
   CHECK(!hidden(D::g.waiting) && fake::st.flash_has);
+  // (2) A stored layout of 64 pages (cards spec B.6): its page objects are
+  // made in the slices too, so no step makes more than the limit, and it
+  // comes up on page 0 with every page there.
+  const std::string pages64 = gen_pages64();
+  shutdown();
+  reset_platform();
+  fake::st.flash_has = true;
+  fake::st.flash.assign(pages64.begin(), pages64.end());
+  tab::begin(g_fonts, fake::platform());
+  worst = slices = 0;
+  for (int i = 0; i < 2000 && std::string(tab::active_hash()).empty(); i++) {
+    const uint32_t before = count_built();
+    hh::advance(D::TICK_MS);
+    const uint32_t after = count_built();
+    if (after > before) {
+      slices++;
+      if (after - before > worst) worst = after - before;
+    }
+  }
+  CHECK_STR(tab::active_hash(), hash16(pages64));
+  CHECK_MSG(worst <= (uint32_t) D::SLICE_OBJECTS + 8, std::to_string(worst) + " objects in one slice of 64 pages");
+  CHECK(slices >= 10 && tab::current_page() == 0 && tab::page_count() == 64);
+  bool all_pages = active() != nullptr;
+  for (int p = 0; all_pages && p < 64; p++) all_pages = active()->model->pages[p].obj != nullptr;
+  CHECK(all_pages);
+  printf("  64 pages: %u objects in %u slices of at most %u\n", (unsigned) layout_objects(active()), (unsigned) slices,
+         (unsigned) worst);
 }
 
 // LVGL cannot make an object: the build stops with "build" (contract 5),
@@ -2937,12 +3218,43 @@ TEST(build_failure_is_reported) {
   const uint32_t whole = [&] {
     // How many objects the all-cards layout makes.
     CHECK(ha.show(all));
-    const uint32_t n = active() ? count_objects(active()->root) : 0;
+    const uint32_t n = layout_objects(active());
     CHECK(ha.show(small));
     hh::advance(2000);
     return n;
   }();
   CHECK(whole > 100);
+  // A 16-option choice and the v2 kit (which holds four choices): any object
+  // that cannot be made stops the build with "build".
+  for (const std::string &v2 : {gen_choice_cards(1, 2), layout_bytes("layout_v2_kit.dl.json")}) {
+    const std::string h = hash16(v2);
+    CHECK(ha.show(v2));
+    const uint32_t n = layout_objects(active());
+    int choices = 0;
+    for (uint32_t i = 0; active() && i < active()->model->nw; i++) choices += active()->model->w[i].kind == D::W_CHOICE;
+    CHECK(choices >= 2 && n > 4);
+    CHECK(ha.show(small));
+    hh::advance(2000);
+    int refused_v2 = 0;
+    for (uint32_t allow = 0; allow < n; allow += (QUICK && n > 60 ? 7 : 1)) {
+      CHECK_STR(ha.send(v2), "");
+      D::test_objects_left = (int32_t) allow;
+      CHECK_STR(ha.commit(h), "");
+      const bool ended = advance_until([] { return !tab::building(); }, 3000);
+      const bool refused = D::test_objects_left == 0;
+      D::test_objects_left = -1;
+      if (!CHECK_MSG(ended, "v2 allow " + std::to_string(allow))) break;
+      if (refused && std::string(tab::active_hash()) == "a9326c033e45f2f4") {
+        refused_v2++;
+        if (status_build() != "build") CHECK_MSG(false, "v2 allow " + std::to_string(allow) + ": " + status_build());
+      } else {
+        CHECK_MSG(std::string(tab::active_hash()) == h, "v2 allow " + std::to_string(allow));
+        CHECK(ha.show(small));
+      }
+      hh::advance(300);
+    }
+    CHECK_MSG(refused_v2 > (n > 60 && QUICK ? 5 : (int) n / 2), std::to_string(refused_v2) + " of " + std::to_string(n));
+  }
   int failed = 0;
   for (uint32_t allow = 0; allow < whole; allow += (QUICK ? 7 : 1)) {
     CHECK_STR(ha.send(all), "");
@@ -2967,7 +3279,9 @@ TEST(build_failure_is_reported) {
   CHECK(ha.show(all));
   CHECK_STR(status_build(), "");
   // A heading with an icon is three objects, and is counted as three.
-  CHECK(D::Loader::objects_of(D::W_HEADING) == 3);
+  D::Widget heading{};
+  heading.kind = D::W_HEADING;
+  CHECK(D::Loader::objects_of(heading) == 3);
 }
 
 // A touch that finds no session, on a tablet that is connected and paired,
@@ -3223,25 +3537,74 @@ TEST(set_over_12000_bytes_is_accepted) {
 // with no kerning, line_height = the font's height and base_line = height -
 // ascender. LVGL's own TTF defaults differ (kerning on, other line heights).
 TEST(font_metrics_match_the_tablet) {
-  const int text_px[6] = {14, 15, 16, 18, 20, 34}, icon_px[4] = {24, 28, 48, 72};
+  const tj::Value fonts = tj::load(CDIR + "/contract.json")["fonts"];
   auto same = [](const lv_font_t *f, const char *family, int px) {
     const hh::DeviceMetric *m = hh::device_metric(family, px);
     return m && f && (int) f->line_height == m->line_height && (int) f->base_line == m->base_line;
   };
-  for (int i = 0; i < 6; i++) {
+  for (size_t i = 0; i < fonts["text_px"].size(); i++) {
     const lv_font_t *f = g_fonts.text[i];
-    const std::string px = std::to_string(text_px[i]);
-    CHECK_MSG(same(f, "text", text_px[i]), px);
+    const std::string px = std::to_string(fonts["text_px"][i].i());
+    CHECK_MSG(same(f, "text", fonts["text_px"][i].i()), px);
     CHECK_MSG(lv_font_get_glyph_width(f, 'T', 'o') == lv_font_get_glyph_width(f, 'T', 0), px);
     CHECK_MSG(lv_font_get_glyph_width(f, 'A', 'V') == lv_font_get_glyph_width(f, 'A', 0), px);
   }
-  CHECK(same(g_fonts.digits, "digits", 48));
-  for (int i = 0; i < 4; i++) CHECK_MSG(same(g_fonts.icon[i], "icons", icon_px[i]), std::to_string(icon_px[i]));
+  for (size_t i = 0; i < fonts["digits_px"].size(); i++)
+    CHECK_MSG(same(g_fonts.digits[i], "digits", fonts["digits_px"][i].i()), std::to_string(fonts["digits_px"][i].i()));
+  for (size_t i = 0; i < fonts["icon_px"].size(); i++)
+    CHECK_MSG(same(g_fonts.icon[i], "icons", fonts["icon_px"][i].i()), std::to_string(fonts["icon_px"][i].i()));
   // LVGL lays text out with those numbers.
   lv_point_t p;
   lv_text_get_size(&p, "To", g_fonts.text[3], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
   CHECK(p.y == 22);
   CHECK(p.x == lv_font_get_glyph_width(g_fonts.text[3], 'T', 0) + lv_font_get_glyph_width(g_fonts.text[3], 'o', 0));
+}
+
+// contract.json `fonts` decides the fonts (cards spec B.8): every size has
+// its place in tab::Fonts and its font from text_font, digits_font and
+// icon_font; the digits fonts hold exactly fonts.digits_glyphs, read as
+// UTF-8; a digits font's line fits into its fonts.row_px.
+TEST(fonts_follow_the_contract) {
+  const tj::Value fonts = tj::load(CDIR + "/contract.json")["fonts"];
+  CHECK(fonts["text_px"].size() == 7 && fonts["digits_px"].size() == 3 && fonts["icon_px"].size() == 4);
+  Ha ha;
+  ha.boot(false);
+  for (size_t i = 0; i < fonts["text_px"].size(); i++) {
+    const int px = fonts["text_px"][i].i();
+    CHECK_MSG(D::text_font(px) == g_fonts.text[i], std::to_string(px));
+    const hh::DeviceMetric *m = hh::device_metric("text", px);
+    CHECK_MSG(m && D::line_height(D::text_font(px)) == m->line_height, std::to_string(px));
+  }
+  for (size_t i = 0; i < fonts["digits_px"].size(); i++) {
+    const int px = fonts["digits_px"][i].i();
+    CHECK_MSG(D::digits_font(px) == g_fonts.digits[i], std::to_string(px));
+    const hh::DeviceMetric *m = hh::device_metric("digits", px);
+    const tj::Value &row = fonts["row_px"][std::to_string(px).c_str()];
+    CHECK_MSG(m && row.t == tj::Value::NUM && m->line_height <= row.i(),
+              std::to_string(px) + " px: line " + std::to_string(m ? m->line_height : -1) + ", row " + std::to_string(row.i()));
+  }
+  for (size_t i = 0; i < fonts["icon_px"].size(); i++)
+    CHECK_MSG(D::icon_font(fonts["icon_px"][i].i()) == g_fonts.icon[i], std::to_string(fonts["icon_px"][i].i()));
+  // The 28 px text is its own font, not the 34 px one.
+  CHECK(D::text_font(28) != D::text_font(34) && D::line_height(D::text_font(28)) == 34);
+  // The 48 px digits keep engine 0.1.0's line.
+  CHECK(hh::device_metric("digits", 48) && hh::device_metric("digits", 48)->line_height == 59);
+
+  // The digits glyphs, character by character: "°" is U+00B0, two bytes in
+  // UTF-8. Taken byte by byte, U+00C2 would be in the font too, and a text
+  // the tablet cannot draw would pass here.
+  const std::vector<uint32_t> want = hf::utf8_codepoints(fonts["digits_glyphs"].s);
+  CHECK(want.size() == 18 && std::find(want.begin(), want.end(), 0xB0u) != want.end());
+  for (const lv_font_t *f : g_fonts.digits) {
+    for (uint32_t cp : want) CHECK_MSG(D::has_glyph(f, cp), std::to_string(cp));
+    CHECK(!D::has_glyph(f, 0xC2) && !D::has_glyph(f, 'A') && !D::has_glyph(f, 0x2013));
+  }
+  CHECK(hf::utf8_codepoints("1\xC2\xB0") == std::vector<uint32_t>({'1', 0xB0}));
+  CHECK(hf::utf8_codepoints("\xE2\x80\x93") == std::vector<uint32_t>({0x2013}));
+  CHECK(hf::utf8_codepoints("\xC2").empty() && hf::utf8_codepoints("\xB0").empty() && hf::utf8_codepoints("\xC2" "A").empty());
+  // The thermostat keeps its own list: "21:05" is not digits-only for it.
+  CHECK(D::thermostat_fit_font("21.5", 400) == g_fonts.digits[0]);
+  CHECK(D::thermostat_fit_font("21:05", 400) != g_fonts.digits[0]);
 }
 
 // ================================================================ set-up window and erase (design 10.8)
@@ -3507,7 +3870,7 @@ TEST(waiting_screen_states) {
   // text colour; the tablet's name 16 px in the dimmer colour.
   lv_obj_t *name = waiting_label(fake::NAME);
   if (!CHECK(name)) return;
-  CHECK(font_of(D::g.headline) == g_fonts.text[5] && font_of(D::g.hint) == g_fonts.text[4]);
+  CHECK(font_of(D::g.headline) == g_fonts.text[6] && font_of(D::g.hint) == g_fonts.text[4]);
   CHECK(font_of(D::g.hint2) == g_fonts.text[4]);
   CHECK(font_of(name) == g_fonts.text[2]);
   CHECK(text_colour_is(D::g.headline, D::DEF_TX) && text_colour_is(D::g.hint, D::DEF_TX));
@@ -3534,7 +3897,7 @@ TEST(waiting_screen_states) {
   steps.push_back(screen_words(SCREENS["waiting"]["erased"]["step"], "", "Apollo TAB-1 12ee0e"));
   for (int k = 0; k < 2; k++)
     for (const std::string &t : k == 0 ? titles : steps) {
-      const int w = D::text_width(g_fonts.text[k == 0 ? 5 : 4], t.c_str(), t.size());
+      const int w = D::text_width(g_fonts.text[k == 0 ? 6 : 4], t.c_str(), t.size());
       CHECK_MSG(w <= hh::W - 192, t + " is " + std::to_string(w) + " px");
       for (const char *jargon : {"integration", "entity", "config entry", "ESPHome", "API"})
         CHECK_MSG(t.find(jargon) == std::string::npos, t);
@@ -4179,14 +4542,14 @@ TEST(erase_hold_timing) {
   CHECK(D::g.erase_timer == nullptr);
   // The start line says how long after power-on the engine started, so the
   // time left for the hold can be measured on the tablet.
-  CHECK_STR(started_line(), "Engine 0.1.0 started 12000 ms after power-on (boot 3, not paired)");
+  CHECK_STR(started_line(), "Engine 0.2.0 started 12000 ms after power-on (boot 3, not paired)");
   hh::press(640, 400);
   hh::advance(6000);
   hh::release();
   CHECK(!tab::erase_asking());
   boot_at_uptime(0, false);
   CHECK(D::g.erase_timer == nullptr);
-  CHECK_STR(started_line(), "Engine 0.1.0 started (boot 3, not paired)");  // no uptime to tell
+  CHECK_STR(started_line(), "Engine 0.2.0 started (boot 3, not paired)");  // no uptime to tell
   Ha ha;
   ha.boot(false);  // the other tests: powered on long ago
   CHECK(D::g.erase_timer == nullptr && D::g.erase_step == D::E_OFF);
@@ -4789,6 +5152,81 @@ TEST(faded_controls_say_why) {
   CHECK(fake::events("tab1_input").empty());
 }
 
+// ================================================================ the host build
+
+// run.sh builds everything with -ffp-contract=off. Without it clang fuses
+// a * (1 - t) + b * t into one multiply-add, which rounds once where the
+// tablet (software doubles), Python and JavaScript round twice: at today's
+// weight 0.82, 19 pairs of channel values come out one apart.
+static volatile double g_mix_weight = 0.82;
+__attribute__((noinline)) static double mix_as_written(double a, double b, double t) {
+  return floor(a * (1 - t) + b * t + 0.5);
+}
+__attribute__((noinline)) static double mix_rounded_each_step(double a, double b, double t) {
+  volatile double p = a * (1 - t);
+  volatile double q = b * t;
+  volatile double s = p + q;
+  return floor(s + 0.5);
+}
+TEST(doubles_are_not_fused) {
+  const double t = g_mix_weight;
+  int fused = 0;
+  for (int a = 0; a < 256; a++)
+    for (int b = 0; b < 256; b++)
+      if (mix_as_written(a, b, t) != mix_rounded_each_step(a, b, t)) fused++;
+  CHECK_MSG(fused == 0, std::to_string(fused) + " pairs differ: build with -ffp-contract=off");
+}
+
+// The frozen sources of engine 0.1.0 (frozen/0.1.0, built by run.sh as
+// test_frozen and run before this program) drew the frames of frames.h into
+// TAB_FROZEN_FRAMES. This engine draws the same run, and every frame must be
+// the same, byte for byte: version 1 pixels do not move.
+TEST(v1_pixels_unchanged) {
+  const char *env = getenv("TAB_FROZEN_FRAMES");
+  if (!CHECK_MSG(env && *env, "TAB_FROZEN_FRAMES is not set: run engine_tests/run.sh, which draws engine 0.1.0's frames first"))
+    return;
+  const std::string dir = env;
+  FILE *lf = fopen((dir + "/frames.txt").c_str(), "r");
+  if (!CHECK_MSG(lf != nullptr, dir + "/frames.txt is missing: engine 0.1.0 did not run")) return;
+  std::string old_list;
+  for (int c; (c = fgetc(lf)) != EOF;) old_list += (char) c;
+  fclose(lf);
+
+  shutdown();
+  std::string list;
+  int frames_seen = 0;
+  const std::string err = frames::run(CDIR, g_fonts, [&](const std::string &name) {
+    list += name + "\n";
+    frames_seen++;
+    std::vector<uint16_t> old;
+    if (!CHECK_MSG(frames::read(dir + "/" + name + ".raw", &old), name + ": engine 0.1.0 drew no such frame")) return;
+    long differ = 0, first = -1;
+    for (size_t i = 0; i < old.size(); i++)
+      if (old[i] != hh::g_fb[i]) {
+        if (first < 0) first = (long) i;
+        differ++;
+      }
+    if (differ > 0) {
+      shot("v1_pixels_" + name);
+      CHECK_MSG(false, name + ": " + std::to_string(differ) + " pixels differ, the first at (" +
+                           std::to_string(first % hh::W) + ", " + std::to_string(first / hh::W) + "); this engine's frame is " +
+                           SHOTS + "/v1_pixels_" + name + ".png");
+    }
+  });
+  CHECK_MSG(err.empty(), err);
+  CHECK_MSG(list == old_list, "the frames differ from engine 0.1.0's list");
+  // Both fixtures, every page, without and with values.
+  CHECK_MSG(tab::page_count() > 1 && frames_seen >= 1 + 3 * tab::page_count(), std::to_string(frames_seen));
+  // And every page of the cards fixture's version 1 form: engine 0.1.0
+  // loaded it (cards spec G.2, E12).
+  const int v1_pages = (int) fixture("layout_v2_cards.v1.meta.json")["counts"]["pages"].n;
+  CHECK(v1_pages > 0 && v1_pages == (int) fixture("layout_v2_cards.meta.json")["counts"]["normal_pages"].n);
+  for (int p = 0; p < v1_pages; p++) {
+    const std::string name = "layout_v2_cards.v1.none.p" + std::to_string(p) + "\n";
+    CHECK_MSG(old_list.find(name) != std::string::npos, "engine 0.1.0 drew no " + name);
+  }
+}
+
 // ================================================================ main
 
 int main(int argc, char **argv) {
@@ -4818,26 +5256,28 @@ int main(int argc, char **argv) {
   size_t tn = 0, in = 0;
   uint8_t *text = hh::load_file(argv[2], &tn);
   uint8_t *icon = hh::load_file(argv[3], &in);
-  const int text_px[6] = {14, 15, 16, 18, 20, 34}, icon_px[4] = {24, 28, 48, 72};
-  // The tablet's fonts hold only the contract's characters; so do these.
+  // The tablet's fonts, at contract.json's sizes, hold only the contract's
+  // characters; so do these (tools/gen_engine_fonts.py reads the same keys).
   const tj::Value contract = tj::load(CDIR + "/contract.json");
-  std::vector<uint32_t> text_ranges, digit_ranges;
-  for (const tj::Value &r : contract["fonts"]["text_glyphs"].a) {
-    text_ranges.push_back((uint32_t) r[0].i());
-    text_ranges.push_back((uint32_t) r[1].i());
-  }
-  for (const char c : contract["fonts"]["digits_glyphs"].s) {
-    digit_ranges.push_back((uint32_t) (uint8_t) c);
-    digit_ranges.push_back((uint32_t) (uint8_t) c);
-  }
-  if (text_ranges.empty() || digit_ranges.empty()) {
-    fprintf(stderr, "contract.json has no fonts.text_glyphs or fonts.digits_glyphs\n");
+  const tj::Value &cf = contract["fonts"];
+  const size_t n_text = sizeof g_fonts.text / sizeof g_fonts.text[0];
+  const size_t n_digits = sizeof g_fonts.digits / sizeof g_fonts.digits[0];
+  const size_t n_icon = sizeof g_fonts.icon / sizeof g_fonts.icon[0];
+  if (cf["text_px"].size() != n_text || cf["digits_px"].size() != n_digits || cf["icon_px"].size() != n_icon) {
+    fprintf(stderr, "contract.json fonts has %zu text, %zu digits and %zu icon sizes; tab::Fonts holds %zu, %zu and %zu\n",
+            cf["text_px"].size(), cf["digits_px"].size(), cf["icon_px"].size(), n_text, n_digits, n_icon);
     return 2;
   }
-  for (int i = 0; i < 6; i++)
-    g_fonts.text[i] = hh::limited_font(hh::ttf_font(text, tn, text_px[i], "text"), text_ranges);
-  g_fonts.digits = hh::limited_font(hh::ttf_font(text, tn, 48, "digits"), digit_ranges);
-  for (int i = 0; i < 4; i++) g_fonts.icon[i] = hh::ttf_font(icon, in, icon_px[i], "icons");
+  const std::vector<uint32_t> text_ranges = hf::text_ranges(contract), digit_ranges = hf::digit_ranges(contract);
+  if (text_ranges.empty() || digit_ranges.empty()) {
+    fprintf(stderr, "contract.json has no fonts.text_glyphs, or no fonts.digits_glyphs in UTF-8\n");
+    return 2;
+  }
+  for (size_t i = 0; i < n_text; i++)
+    g_fonts.text[i] = hh::limited_font(hh::ttf_font(text, tn, cf["text_px"][i].i(), "text"), text_ranges);
+  for (size_t i = 0; i < n_digits; i++)
+    g_fonts.digits[i] = hh::limited_font(hh::ttf_font(text, tn, cf["digits_px"][i].i(), "digits"), digit_ranges);
+  for (size_t i = 0; i < n_icon; i++) g_fonts.icon[i] = hh::ttf_font(icon, in, cf["icon_px"][i].i(), "icons");
 
   int ran = 0;
   for (const TestCase &t : registry()) {
@@ -4854,4 +5294,5128 @@ int main(int argc, char **argv) {
   printf("\n%d tests, %d checks, %d failed\n", ran, g_checks, g_failed);
   for (auto &f : g_failures) printf("  %s\n", f.c_str());
   return g_failed == 0 ? 0 : 1;
+}
+
+// ================================================================ device layout version 2: parsing (package E2)
+//
+// Contract 4.2, 4.3 and 4.8, cards spec B.2. The keys of version 2 are read
+// and kept; most are drawn by later packages, so these tests look at the
+// model, and draw and press every layout that loads to show that nothing
+// breaks.
+
+// A JSON writer for tj values, for layouts made from the fixtures.
+static void json_out(const tj::Value &v, std::string &o) {
+  switch (v.t) {
+    case tj::Value::NUL: o += "null"; break;
+    case tj::Value::BOOL: o += v.b ? "true" : "false"; break;
+    case tj::Value::NUM: o += v.s; break;
+    case tj::Value::STR:
+      o += '"';
+      for (unsigned char c : v.s) {
+        if (c == '"' || c == '\\') {
+          o += '\\';
+          o += (char) c;
+        } else if (c < 0x20) {
+          char b[8];
+          snprintf(b, sizeof b, "\\u%04x", c);
+          o += b;
+        } else {
+          o += (char) c;
+        }
+      }
+      o += '"';
+      break;
+    case tj::Value::ARR:
+      o += '[';
+      for (size_t i = 0; i < v.a.size(); i++) {
+        if (i) o += ',';
+        json_out(v.a[i], o);
+      }
+      o += ']';
+      break;
+    case tj::Value::OBJ:
+      o += '{';
+      for (size_t i = 0; i < v.o.size(); i++) {
+        if (i) o += ',';
+        tj::Value k;
+        k.t = tj::Value::STR;
+        k.s = v.o[i].first;
+        json_out(k, o);
+        o += ':';
+        json_out(v.o[i].second, o);
+      }
+      o += '}';
+      break;
+  }
+}
+static std::string json_text(const tj::Value &v) {
+  std::string o;
+  json_out(v, o);
+  return o;
+}
+
+static std::string commit_answer(const std::string &bytes) {
+  D::Loader ld;
+  return D::model_check(bytes.data(), bytes.size(), ld);
+}
+
+// A version 2 layout: one page, one card holding `widgets`, slots "tnbilnn"
+// (1 text, 2 number, 3 bool, 4 icon, 5 list, 6 and 7 numbers).
+static const char *V2_SLOTS = "tnbilnn";
+static std::string v2_card(const std::string &widgets, const std::string &card_keys = "",
+                           const std::string &page_keys = "", int v = 2) {
+  return "{\"nav\":[{\"p\":0,\"title\":\"P\"}],\"pages\":[{" + page_keys + "\"title\":\"P\",\"w\":[{" + card_keys +
+         "\"id\":1,\"r\":[100,84,568,640],\"t\":\"card\",\"w\":[" + widgets + "]}]}],\"slots\":\"" + V2_SLOTS +
+         "\",\"v\":" + std::to_string(v) + "}";
+}
+
+// Every page drawn, every widget pressed at its centre and dragged across:
+// nothing may crash or leak (run under ASan and UBSan too).
+static void draw_and_press_all(const char *label) {
+  D::Layout *l = active();
+  if (!CHECK_MSG(l && l->model, label)) return;
+  const int pages = tab::page_count();
+  for (int p = 0; p < pages; p++) {
+    tab::go_to(p);
+    hh::advance(30);
+    l = active();
+    if (!l || !l->model) return;
+    D::Model &m = *l->model;
+    for (uint32_t i = 0; i < m.nw; i++) {
+      const D::Widget &w = m.w[i];
+      if (w.page != p || !w.obj || w.r[2] <= 0 || w.r[3] <= 0) continue;
+      const int x = centre_x(w.r), y = centre_y(w.r);
+      hh::tap(x, y);
+      hh::advance(10);
+      hh::drag(w.r[0] + 1, y, w.r[0] + w.r[2] - 1, y, 120);
+      hh::advance(10);
+      if (!hidden(D::g.question)) D::question_answer(false);
+      hh::advance(10);
+      if (tab::current_page() != p) {
+        tab::go_to(p);
+        hh::advance(20);
+      }
+      l = active();
+      if (!l || !l->model || &l->model->w[0] != m.w) return;  // another layout came up
+    }
+  }
+  tab::go_to(0);
+  hh::advance(20);
+}
+
+// One commit on a fresh, unpaired tablet: the answer, and when it is "" the
+// layout on screen, drawn and pressed.
+static std::string commit_and_draw(Ha &ha, const std::string &bytes, const char *label, bool press = true) {
+  ha.boot(false);
+  ha.hello();
+  const std::string hash = sha_hex(bytes).substr(0, 16);
+  const std::string sent = ha.send(bytes);
+  if (!sent.empty()) return sent;
+  const std::string got = ha.commit(hash);
+  if (!got.empty()) return got;
+  if (!CHECK_MSG(advance_until([&] { return hash == tab::active_hash(); }, 5000), label)) return "not shown";
+  if (press) draw_and_press_all(label);
+  return "";
+}
+
+static const tj::Value *find_item(const tj::Value &dl, uint32_t id) {
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      if (it["id"].n == id) return &it;
+      for (const tj::Value &w : it["w"].a)
+        if (w["id"].n == id) return &w;
+    }
+  return nullptr;
+}
+
+// A bound field of the model against its form in the layout.
+static bool same_bound(const D::Bound &b, const tj::Value &v) {
+  if (v.t == tj::Value::NUL) return b.how == D::B_NULL || (b.how == D::B_ABSENT && v.s.empty());
+  if (v.t == tj::Value::OBJ) return b.how == D::B_SLOT && b.slot == (uint16_t) v["s"].n;
+  if (v.t == tj::Value::NUM) return b.how == D::B_CONST && b.c.num == v.n;
+  if (v.t == tj::Value::BOOL) return b.how == D::B_CONST && b.c.num == (v.b ? 1 : 0);
+  return false;
+}
+
+static bool same_list(const double *got, int n, const tj::Value &want) {
+  if (n != (int) want.size()) return false;
+  for (int i = 0; i < n; i++)
+    if (!got || got[i] != want[i].n) return false;
+  return true;
+}
+
+// Every key of version 2 of every widget, as the model holds it, against the
+// layout's bytes (contract 4.3: absent keys give the version 1 look).
+static void check_v2_keys(const tj::Value &dl, const D::Model &m, const char *label) {
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    const tj::Value *it = find_item(dl, w.id);
+    const std::string id = std::string(label) + " widget " + std::to_string(w.id);
+    if (!CHECK_MSG(it, id)) continue;
+    const tj::Value &v = *it;
+    auto num = [&](const char *k, double def) { return v.has(k) ? v[k].n : def; };
+    if (w.kind == D::W_CARD) {
+      CHECK_MSG(v.has("tint") ? same_bound(w.c, v["tint"]) : w.c.how == D::B_ABSENT, id + " tint");
+      CHECK_MSG(v.has("un") ? same_bound(w.vis, v["un"]) : w.vis.how == D::B_ABSENT, id + " un");
+      CHECK_MSG(v.has("ic") ? same_bound(w.ic, v["ic"]) : w.ic.how == D::B_ABSENT, id + " ic");
+      CHECK_MSG(w.lit == num("lit", 0), id + " lit");
+    } else {
+      if (w.kind != D::W_HEADING)
+        CHECK_MSG(v.has("vis") ? same_bound(w.vis, v["vis"]) : w.vis.how == D::B_ABSENT, id + " vis");
+      if (w.kind != D::W_CHOICE) CHECK_MSG(v.has("c") ? same_bound(w.c, v["c"]) : w.c.how == D::B_ABSENT, id + " c");
+    }
+    const tj::Value &tap = v["tap"];
+    const int tap_kind = tap.has("p") ? 1 : tap.has("go") ? 2 : tap.has("back") ? 3 : 0;
+    CHECK_MSG(w.tap == tap_kind, id + " tap");
+    if (tap_kind == 2) CHECK_MSG(w.tap_v == tap["go"].n, id + " tap go");
+    const tj::Value &hold = v["hold"];
+    CHECK_MSG(w.hold == (hold.has("go") ? 2 : 0) && (!hold.has("go") || w.hold_v == hold["go"].n), id + " hold");
+    switch (w.kind) {
+      case D::W_LABEL:
+        CHECK_MSG(w.px == num("px", 0) && w.al == num("al", 0) && w.clk == num("clk", 0), id + " px al clk");
+        if (v.has("clk")) CHECK_MSG(same_bound(w.value, v["value"]), id + " clock value");
+        break;
+      case D::W_BUTTON:
+        CHECK_MSG(w.shape == num("shape", 0) && w.isz == num("isz", 0), id + " shape isz");
+        CHECK_MSG(v.has("value") ? same_bound(w.value, v["value"]) : w.value.how == D::B_ABSENT, id + " value");
+        CHECK_MSG(v.has("ic") ? same_bound(w.ic, v["ic"]) : w.ic.how == D::B_ABSENT, id + " ic");
+        break;
+      case D::W_SLIDER:
+        CHECK_MSG(w.look == num("look", 0) && w.dir == num("dir", 0) && w.nv == num("nv", 0), id + " look dir nv");
+        CHECK_MSG(v.has("rate") ? same_bound(w.mark, v["rate"]) : w.mark.how == D::B_ABSENT, id + " rate");
+        CHECK_MSG(v.has("track") ? same_list(w.track, w.track_n, v["track"]) : w.track_n == 0 && !w.track, id + " track");
+        break;
+      case D::W_THERMO:
+        CHECK_MSG(w.bs == num("bs", 36), id + " bs");
+        CHECK_MSG(v.has("mark") ? same_bound(w.mark, v["mark"]) : w.mark.how == D::B_ABSENT, id + " mark");
+        break;
+      case D::W_CHART:
+        CHECK_MSG(w.st == num("st", 0), id + " st");
+        CHECK_MSG(v.has("mark") ? same_bound(w.mark, v["mark"]) : w.mark.how == D::B_ABSENT, id + " mark");
+        break;
+      case D::W_IMAGE: CHECK_MSG(w.look == num("look", 0), id + " look"); break;
+      case D::W_CHOICE: {
+        CHECK_MSG(w.rows == num("rows", 1) && w.look == num("look", 0), id + " rows look");
+        CHECK_MSG(v.has("value") ? same_bound(w.value, v["value"]) : w.value.how == D::B_ABSENT, id + " value");
+        CHECK_MSG(same_list(w.icons, w.icons_n, v["icons"]) && same_list(w.cols, w.cols_n, v["cols"]), id + " lists");
+        CHECK_MSG(w.texts_n == v["texts"].size(), id + " texts");
+        for (uint32_t k = 0; k < w.texts_n; k++) CHECK_MSG(D::choice_text(w, k) == v["texts"][(size_t) k].s, id + " text");
+        const size_t most = std::max(v["texts"].size(), std::max(v["icons"].size(), v["cols"].size()));
+        CHECK_MSG(w.options == most, id + " options");
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+TEST(kit_loads) {
+  for (const char *name : {"layout_v2_kit", "layout_v2_kit.nochoice"}) {
+    g_test = name;
+    const std::string bytes = layout_bytes((std::string(name) + ".dl.json").c_str());
+    const tj::Value dl = fixture((std::string(name) + ".dl.json").c_str());
+    const tj::Value meta = fixture((std::string(name) + ".meta.json").c_str());
+    CHECK_STR(sha_hex(bytes).substr(0, 16), meta["hash"].s);
+    D::Loader ld;
+    CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+    CHECK(ld.c.version == 2);
+    CHECK(ld.c.pages == meta["counts"]["pages"].n && ld.c.normal == meta["counts"]["normal_pages"].n);
+    CHECK(ld.c.widgets == meta["counts"]["widgets"].n && ld.c.ids == meta["counts"]["widgets"].n);
+    CHECK(ld.c.slots == meta["counts"]["slots"].n);
+    Ha ha;
+    ha.boot(false);
+    CHECK(ha.hello());
+    CHECK(ha.show(bytes));
+    D::Layout *l = active();
+    if (!CHECK(l && l->model)) continue;
+    D::Model &m = *l->model;
+    // Pages: sub, ttl and theme (contract 4.8).
+    CHECK(m.npages == dl["pages"].size());
+    int themed = 0;
+    for (uint32_t p = 0; p < m.npages; p++) {
+      const tj::Value &pg = dl["pages"][(size_t) p];
+      const D::Page &mp = m.pages[p];
+      CHECK_MSG(mp.sub == (pg["sub"].n == 1 && p > 0 ? 1 : 0), "page " + std::to_string(p) + " sub");
+      CHECK_MSG(mp.ttl == (pg.has("ttl") ? pg["ttl"].n : 60), "page " + std::to_string(p) + " ttl");
+      if (!pg.has("theme")) {
+        CHECK(mp.theme == 0);
+        continue;
+      }
+      themed++;
+      CHECK(mp.theme > 0 && mp.theme < m.nthemes);
+      const D::Theme &t = m.themes[mp.theme];
+      for (int c = 0; c < D::C_COUNT; c++) {
+        const tj::Value &mine = pg["theme"][D::THEME_KEYS[c]];
+        CHECK_MSG(t.c[c] == (mine.t == tj::Value::NUM ? (uint32_t) mine.n : m.theme.c[c]), D::THEME_KEYS[c]);
+      }
+      CHECK(t.r == (pg["theme"].has("r") ? pg["theme"]["r"].n : m.theme.r));
+      CHECK(t.dark == (pg["theme"].has("dark") ? pg["theme"]["dark"].n : m.theme.dark));
+    }
+    CHECK(m.nthemes == 1 + themed && themed == 1);
+    CHECK(memcmp(&m.themes[0], &m.theme, sizeof m.theme) == 0);
+    check_v2_keys(dl, m, name);
+    // A card's style with the six colours of version 2 carries them whole.
+    const D::Widget *c7 = widget(7);
+    if (CHECK(c7 && c7->style >= 0)) {
+      const D::Tok t = D::card_tokens(m, c7);
+      const tj::Value &st = find_item(dl, 7)->operator[]("style");
+      CHECK(t.card_pr == st["card_pr"].n && t.card2_pr == st["card2_pr"].n && t.accf == st["accf"].n &&
+            t.accf_pr == st["accf_pr"].n && t.onbg_pr == st["onbg_pr"].n && t.ion == st["ion"].n);
+    }
+    // Every widget the engine draws is at its rectangle, a round button and
+    // a badge at their circle's square. A choice is one object (package E8).
+    int choices = 0;
+    for (uint32_t i = 0; i < m.nw; i++) {
+      const D::Widget &w = m.w[i];
+      const std::string id = std::string(name) + " widget " + std::to_string(w.id);
+      if (!CHECK_MSG(w.obj, id)) continue;
+      if (w.kind == D::W_CHOICE) {
+        choices++;
+        CHECK_MSG(lv_obj_get_child_count(w.obj) == 0 && D::Loader::objects_of(w) == 1, id + " is one object");
+      }
+      // A round button and a badge: the centred circle's square (package E5).
+      int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+      if (w.kind == D::W_BUTTON) D::button_box(w, &bx, &by, &bw, &bh);
+      if (w.kind == D::W_IMAGE) D::image_box(w, &bx, &by, &bw, &bh);
+      CHECK_MSG(obj_at(w.obj, w.r[0] + bx, w.r[1] + by, bw, bh), id + " at " + rect_text(w.obj));
+    }
+    CHECK_MSG(choices == (strcmp(name, "layout_v2_kit") ? 0 : 4), std::to_string(choices) + " choices");
+    // The values of state_v2.json's stream are all taken.
+    if (!strcmp(name, "layout_v2_kit")) {
+      const tj::Value st = fixture("state_v2.json");
+      CHECK_STR(st["hash"].s, meta["hash"].s);
+      for (const tj::Value &step : st["steps"].a)
+        for (const tj::Value &pl : step["payloads"].a) CHECK_STR(ha.set(pl.s), "");
+      CHECK_STR(ha.set(st["steps"][0]["payloads"][0].s), "");
+    }
+    hh::advance(40);
+    for (int p = 0; p < tab::page_count(); p++) {
+      tab::go_to(p);
+      hh::advance(40);
+      CHECK(tab::current_page() == p);
+      shot(std::string(name) + "_page" + std::to_string(p));
+      // Not blank: more than the layout's wall (page 1 has a wall of its own
+      // since package E9, page_theme). Page 2 holds one small card (184 x
+      // 184, about 3.6 % of the page area), so the bar is lower than
+      // shots_of_pages'.
+      const double share = share_not(hh::rgb565(m.theme.c[D::C_WALL]), 96);
+      CHECK_MSG(share > 0.025, std::string(name) + " page " + std::to_string(p) + ": " + std::to_string(share));
+    }
+    tab::go_to(0);
+    hh::advance(20);
+    g_cut_report.clear();
+    report_cuts(name);
+    const std::string path = OUT + "/cut_texts.txt";
+    FILE *f = fopen(path.c_str(), "a");
+    if (f) {
+      fprintf(f, "%s", g_cut_report.empty() ? (std::string(name) + ": no text is cut.\n").c_str() : g_cut_report.c_str());
+      fclose(f);
+    }
+    draw_and_press_all(name);
+  }
+  g_test = "kit_loads";
+}
+
+TEST(versions) {
+  // v 1 and 2 load, 3 answers version (contract 4.2, 5).
+  CHECK_STR(commit_answer(v2_card("", "", "", 1)), "");
+  CHECK_STR(commit_answer(v2_card("", "", "", 2)), "");
+  CHECK_STR(commit_answer(v2_card("", "", "", 3)), "version");
+  CHECK_STR(commit_answer(v2_card("", "", "", 0)), "version");
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":2.0}"), "");
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":1.5}"), "version");
+  CHECK_STR(commit_answer("{\"pages\":7,\"v\":3}"), "version");  // version before shape
+  CHECK_STR(commit_answer("{\"pages\":[],\"v\":true}"), "parse");
+  {
+    D::Loader ld;
+    const std::string one = v2_card("", "", "", 1), two = v2_card("", "", "", 2);
+    D::model_check(one.data(), one.size(), ld);
+    CHECK(ld.c.version == 1);
+    D::model_check(two.data(), two.size(), ld);
+    CHECK(ld.c.version == 2);
+  }
+  // Every case of commit_v2.json, each one transfer on a fresh tablet that
+  // is not paired, as in chunks.json.
+  const tj::Value f = fixture("commit_v2.json");
+  CHECK(f["cases"].size() == 13);
+  Ha ha;
+  for (const tj::Value &c : f["cases"].a) {
+    g_test = c["name"].s.c_str();
+    ha.boot(false);
+    CHECK(c["calls"].size() == c["expect"].size());
+    for (size_t i = 0; i < c["calls"].size(); i++) {
+      const tj::Value &k = c["calls"][i];
+      CHECK_STR(tab::on_layout(k["hash"].s.data(), k["hash"].s.size(), k["seq"].i(), k["total"].i(), k["size"].i(),
+                               k["data"].s.data(), k["data"].s.size()),
+                c["expect"][i].s == "ok" ? "" : c["expect"][i].s);
+    }
+    const std::string hash = c["commit_hash"].s;
+    CHECK_STR(tab::on_commit(hash.data(), hash.size(), "", 0), c["commit"].s == "ok" ? "" : c["commit"].s);
+    if (c["commit"].s == "ok") {
+      CHECK(advance_until([&] { return hash == tab::active_hash(); }, 5000));
+      CHECK(tab::page_count() > 0);
+    } else {
+      hh::advance(50);
+      CHECK_STR(tab::active_hash(), "");
+    }
+    // What the tablet keeps of lists that are too long: what HA's compile
+    // cuts them to (`cuts`), the first 8 colours, the first 16 options, the
+    // texts cut to 40 bytes at a character border (contract 4.3).
+    if (c["name"].s == "uncut_lists") {
+      for (auto &kv : f["cuts"]["widgets"].o) {
+        const D::Widget *w = widget((uint32_t) atoi(kv.first.c_str()));
+        const tj::Value &want = kv.second;
+        if (!CHECK_MSG(w, kv.first)) continue;
+        if (want.has("track")) CHECK_MSG(same_list(w->track, w->track_n, want["track"]), kv.first + " track");
+        if (want.has("icons")) CHECK_MSG(same_list(w->icons, w->icons_n, want["icons"]), kv.first + " icons");
+        if (want.has("cols")) CHECK_MSG(same_list(w->cols, w->cols_n, want["cols"]), kv.first + " cols");
+        if (want.has("texts")) {
+          CHECK_MSG(w->texts_n == want["texts"].size(), kv.first + " texts");
+          for (uint32_t k = 0; k < w->texts_n; k++)
+            CHECK_MSG(D::choice_text(*w, k) == want["texts"][(size_t) k].s, kv.first + " text " + std::to_string(k));
+        }
+      }
+    }
+  }
+  g_test = "versions";
+  // The page records of a case at the limit: page 0 is normal, the rest are
+  // detail pages with the default ttl.
+  ha.boot(false);
+  const tj::Value &c64 = f["cases"][0];
+  CHECK_STR(c64["name"].s, "pages_64");
+  CHECK(ha.show(c64["calls"][0]["data"].s));
+  if (CHECK(active() && active()->model && active()->model->npages == 64)) {
+    const D::Model &m = *active()->model;
+    CHECK(m.pages[0].sub == 0);
+    for (int p = 1; p < 64; p++) CHECK(m.pages[p].sub == 1 && m.pages[p].ttl == 60);
+  }
+}
+
+TEST(hostile_v2) {
+  struct Case {
+    const char *name;
+    std::string bytes;
+    const char *want;
+  };
+  const std::string S = "\"r\":[116,140,344,40],\"t\":\"slider\",\"value\":{\"s\":2},\"min\":0,\"max\":100,\"step\":1";
+  const std::string L = "\"r\":[116,140,344,40],\"t\":\"label\",\"text\":\"x\"";
+  const std::string B = "\"r\":[116,140,344,40],\"t\":\"button\",\"text\":\"x\",\"tap\":{\"p\":0}";
+  const std::string C = "\"r\":[116,140,344,96],\"t\":\"choice\",\"change\":{\"p\":0}";
+  const std::string T = "\"r\":[116,140,248,228],\"t\":\"thermostat\",\"value\":{\"s\":2},\"min\":7,\"max\":35,\"step\":0.5";
+  const std::string H = "\"r\":[116,140,344,104],\"t\":\"chart\",\"value\":{\"s\":5}";
+  const std::string I = "\"r\":[116,140,64,64],\"t\":\"image\",\"value\":{\"s\":4}";
+  auto w = [](const std::string &keys, const std::string &base) { return "{\"id\":2," + keys + (keys.empty() ? "" : ",") + base + "}"; };
+  std::string texts1000 = "[", texts_bad = "[";
+  for (int i = 0; i < 1000; i++) {
+    texts1000 += std::string(i ? "," : "") + "\"t" + std::to_string(i) + "\"";
+    texts_bad += std::string(i ? "," : "") + (i == 500 ? "5" : "\"t\"");
+  }
+  texts1000 += "]";
+  texts_bad += "]";
+  std::string pages64 = "[";
+  for (int p = 0; p < 64; p++)
+    pages64 += std::string(p ? "," : "") + "{\"sub\":" + (p ? "1" : "0") + ",\"theme\":{\"acc\":" + std::to_string(p * 1000) +
+               "},\"title\":\"P\",\"w\":[]}";
+  pages64 += "]";
+  const std::vector<Case> cases = {
+      // Wrong JSON types are parse (contract 4.3).
+      {"px text", v2_card(w("\"px\":\"28\"", L)), "parse"},
+      {"al bool", v2_card(w("\"al\":true", L)), "parse"},
+      {"look list", v2_card(w("\"look\":[1]", S)), "parse"},
+      {"track text", v2_card(w("\"track\":\"red\"", S)), "parse"},
+      {"track slot", v2_card(w("\"track\":{\"s\":2}", S)), "parse"},
+      {"track entry text", v2_card(w("\"track\":[1,\"a\"]", S)), "parse"},
+      {"track entry fraction", v2_card(w("\"track\":[1,2.5]", S)), "parse"},
+      {"track entry over", v2_card(w("\"track\":[1,16777216]", S)), "parse"},
+      {"track entry under", v2_card(w("\"track\":[-1,2]", S)), "parse"},
+      {"track 10th entry bad", v2_card(w("\"track\":[1,2,3,4,5,6,7,8,9,\"x\"]", S)), "parse"},
+      {"texts text", v2_card(w("\"texts\":\"abc\"", C)), "parse"},
+      {"texts entry number", v2_card(w("\"texts\":[1]", C)), "parse"},
+      {"texts entry null", v2_card(w("\"texts\":[\"a\",null]", C)), "parse"},
+      {"texts 501st entry number", v2_card(w("\"texts\":" + texts_bad, C)), "parse"},
+      {"icons negative", v2_card(w("\"icons\":[-1]", C)), "parse"},
+      {"icons over", v2_card(w("\"icons\":[1114112]", C)), "parse"},
+      {"cols over", v2_card(w("\"cols\":[16777216]", C)), "parse"},
+      {"cols text", v2_card(w("\"cols\":[\"#ff0000\"]", C)), "parse"},
+      {"c text", v2_card(w("\"c\":\"#ffffff\"", L)), "parse"},
+      {"c 16777216", v2_card(w("\"c\":16777216", L)), "parse"},
+      {"c fraction", v2_card(w("\"c\":0.5", L)), "parse"},
+      {"c negative", v2_card(w("\"c\":-1", L)), "parse"},
+      {"c bool", v2_card(w("\"c\":true", L)), "parse"},
+      {"c text slot", v2_card(w("\"c\":{\"s\":1}", L)), "parse"},
+      {"tint bool", v2_card("", "\"tint\":true,"), "parse"},
+      {"tint 16777216", v2_card("", "\"tint\":16777216,"), "parse"},
+      {"heading c text", "{\"pages\":[{\"title\":\"P\",\"w\":[{\"c\":\"x\",\"id\":1,\"r\":[0,0,9,9],\"t\":\"heading\",\"text\":\"h\"}]}],\"v\":2}", "parse"},
+      {"vis text", v2_card(w("\"vis\":\"x\"", L)), "parse"},
+      {"vis number slot", v2_card(w("\"vis\":{\"s\":2}", L)), "parse"},
+      {"un number slot", v2_card("", "\"un\":{\"s\":2},"), "parse"},
+      {"ic text", v2_card("", "\"ic\":\"x\","), "parse"},
+      {"ic bool slot", v2_card(w("\"ic\":{\"s\":3}", B)), "parse"},
+      {"lit text", v2_card("", "\"lit\":\"x\","), "parse"},
+      {"hold number", v2_card(w("\"hold\":7", L)), "parse"},
+      {"hold policy 9", v2_card(w("\"hold\":{\"p\":9}", L)), "parse"},
+      {"card hold text", v2_card("", "\"hold\":\"x\","), "parse"},
+      {"back text", v2_card(w("\"tap\":{\"back\":\"x\"}", L)), "parse"},
+      {"back fraction", v2_card(w("\"tap\":{\"back\":0.5}", L)), "parse"},
+      {"mark text", v2_card(w("\"mark\":\"x\"", T)), "parse"},
+      {"mark list slot", v2_card(w("\"mark\":{\"s\":5}", H)), "parse"},
+      {"rate bool", v2_card(w("\"rate\":true", S)), "parse"},
+      {"clock value text", v2_card(w("\"clk\":1,\"value\":\"x\"", L)), "parse"},
+      {"button value text", v2_card(w("\"value\":\"x\"", B)), "parse"},
+      {"choice value text", v2_card(w("\"texts\":[\"a\"],\"value\":\"x\"", C)), "parse"},
+      {"choice value list slot", v2_card(w("\"texts\":[\"a\"],\"value\":{\"s\":5}", C)), "parse"},
+      {"style ion over", v2_card("", "\"style\":{\"ion\":16777216},"), "parse"},
+      {"style card_pr text", v2_card("", "\"style\":{\"card_pr\":\"x\"},"), "parse"},
+      {"sub text", v2_card("", "", "\"sub\":\"1\","), "parse"},
+      {"ttl text", v2_card("", "", "\"ttl\":\"60\","), "parse"},
+      {"theme number", v2_card("", "", "\"theme\":5,"), "parse"},
+      {"theme colour text", v2_card("", "", "\"theme\":{\"acc\":\"x\"},"), "parse"},
+      {"theme colour over", v2_card("", "", "\"theme\":{\"acc\":16777216},"), "parse"},
+      {"theme r over", v2_card("", "", "\"theme\":{\"r\":401},"), "parse"},
+      // A fraction in a look key, in clk, nv or sub is parse.
+      {"px fraction", v2_card(w("\"px\":28.5", L)), "parse"},
+      {"ttl fraction", v2_card("", "", "\"ttl\":1.5,"), "parse"},
+      {"clk fraction", v2_card(w("\"clk\":1.5", L)), "parse"},
+      {"nv fraction", v2_card(w("\"nv\":0.5", S)), "parse"},
+      {"sub fraction", v2_card("", "", "\"sub\":0.5,"), "parse"},
+      {"rows fraction", v2_card(w("\"texts\":[\"a\"],\"rows\":2.5", C)), "parse"},
+      {"bs fraction", v2_card(w("\"bs\":40.5", T)), "parse"},
+      {"lit fraction", v2_card("", "\"lit\":1.5,"), "parse"},
+      // These load.
+      {"every new key null",
+       v2_card(w("\"vis\":null,\"hold\":null,\"c\":null,\"px\":null,\"al\":null,\"clk\":null", L) + "," +
+                   w("\"vis\":null,\"look\":null,\"dir\":null,\"track\":null,\"nv\":null,\"rate\":null,\"c\":null", S) + "," +
+                   w("\"vis\":null,\"texts\":null,\"icons\":null,\"cols\":null,\"value\":null,\"rows\":null,\"look\":null", C) + "," +
+                   w("\"mark\":null,\"bs\":null,\"c\":null", T) + "," + w("\"mark\":null,\"st\":null", H) + "," +
+                   w("\"look\":null,\"c\":null", I) + "," + w("\"value\":null,\"ic\":null,\"shape\":null,\"isz\":null", B),
+               "\"hold\":null,\"ic\":null,\"tint\":null,\"lit\":null,\"un\":null,", "\"sub\":null,\"ttl\":null,\"theme\":null,"),
+       ""},
+      {"constant colour 16777215", v2_card(w("\"c\":16777215", L)), ""},
+      {"colour slot", v2_card(w("\"c\":{\"s\":2}", L)), ""},
+      {"unknown clk", v2_card(w("\"clk\":7,\"value\":{\"s\":2}", L)), ""},
+      {"choice without a list", v2_card(w("", C)), ""},
+      {"choice with empty lists", v2_card(w("\"texts\":[],\"icons\":[],\"cols\":[]", C)), ""},
+      {"choice without value", v2_card(w("\"texts\":[\"a\",\"b\"]", C)), ""},
+      {"choice of 1000 texts", v2_card(w("\"texts\":" + texts1000, C)), ""},
+      {"64 pages with a theme each",
+       "{\"nav\":[],\"pages\":" + pages64 + ",\"slots\":\"\",\"theme\":{\"acc\":1},\"v\":2}", ""},
+      {"go to a missing page", v2_card(w("\"tap\":{\"go\":9},\"hold\":{\"go\":9}", L), "\"hold\":{\"go\":9},"), ""},
+      {"hold with p or back", v2_card(w("\"hold\":{\"p\":1}", L) + "," + w("\"hold\":{\"back\":1}", B)), ""},
+      {"hold on a slider is not a key there", v2_card(w("\"hold\":\"x\"", S)), ""},
+      {"back 2 does nothing", v2_card(w("\"tap\":{\"back\":2}", B)), ""},
+  };
+  for (const Case &c : cases) {
+    g_test = c.name;
+    CHECK_STR(commit_answer(c.bytes), c.want);
+  }
+  g_test = "hostile_v2";
+  Ha ha;
+  // Look keys out of range are held to the nearest value (contract 4.3).
+  {
+    const std::string held = v2_card(
+        "{\"id\":2,\"px\":3,\"al\":-5," + L + "},{\"id\":3,\"px\":1000000000,\"al\":9," + L + "},{\"id\":4,\"look\":5,\"dir\":7,\"nv\":2," + S +
+            "},{\"id\":5,\"look\":-1,\"dir\":-1,\"nv\":1," + S + "},{\"id\":6,\"texts\":[\"a\"],\"rows\":0,\"look\":3," + C +
+            "},{\"id\":7,\"texts\":[\"a\"],\"rows\":9," + C + "},{\"id\":8,\"bs\":10," + T + "},{\"id\":9,\"bs\":99," + T +
+            "},{\"id\":10,\"st\":3," + H + "},{\"id\":11,\"look\":9," + I + "},{\"id\":12,\"shape\":9,\"isz\":4," + B +
+            "},{\"id\":13,\"shape\":-2,\"isz\":-1," + B + "},{\"id\":14,\"clk\":2,\"value\":{\"s\":2}," + L + "},{\"id\":15,\"clk\":0," + L +
+            "},{\"id\":16,\"clk\":-1," + L + "},{\"id\":17,\"tap\":{\"back\":1}," + L + "}",
+        "\"lit\":7,");
+    CHECK_STR(commit_and_draw(ha, held, "held"), "");
+    auto W = [](uint32_t id) { return widget(id); };
+    if (CHECK(W(1) && W(2) && W(3) && W(4) && W(5) && W(6) && W(7) && W(8) && W(9) && W(10) && W(11) && W(12) && W(13) &&
+              W(14) && W(15) && W(16) && W(17))) {
+      CHECK(W(1)->lit == 3);
+      CHECK(W(2)->px == 14 && W(2)->al == 0 && W(3)->px == 255 && W(3)->al == 2);
+      CHECK(W(4)->look == 1 && W(4)->dir == 2 && W(4)->nv == 0 && W(5)->look == 0 && W(5)->dir == 0 && W(5)->nv == 1);
+      CHECK(W(6)->rows == 1 && W(6)->look == 1 && W(7)->rows == 4);
+      CHECK(W(8)->bs == 36 && W(9)->bs == 64 && W(10)->st == 1 && W(11)->look == 2);
+      CHECK(W(12)->shape == 2 && W(12)->isz == 1 && W(13)->shape == 0 && W(13)->isz == 0);
+      CHECK(W(14)->clk == 2 && W(14)->value.how == D::B_SLOT && W(15)->clk == 0 && W(16)->clk == 0);
+      CHECK(W(17)->tap == 3);
+    }
+  }
+  // ttl: below 0 is 0, 1 to 4 is 5, above 3600 is 3600; sub 2 counts as 0.
+  {
+    std::string pages = "[{\"title\":\"0\",\"w\":[]}";
+    const int ttls[] = {-1, 0, 1, 3, 4, 5, 3600, 4000};
+    for (int t : ttls) pages += ",{\"sub\":1,\"title\":\"d\",\"ttl\":" + std::to_string(t) + ",\"w\":[]}";
+    pages += ",{\"sub\":2,\"title\":\"s2\",\"w\":[]},{\"sub\":1,\"title\":\"none\",\"w\":[]}]";
+    CHECK_STR(commit_and_draw(ha, "{\"pages\":" + pages + ",\"v\":2}", "ttl"), "");
+    const int want[] = {0, 0, 5, 5, 5, 5, 3600, 3600};
+    if (CHECK(active() && active()->model->npages == 11)) {
+      const D::Model &m = *active()->model;
+      for (int i = 0; i < 8; i++) CHECK_MSG(m.pages[1 + i].ttl == want[i] && m.pages[1 + i].sub == 1, std::to_string(ttls[i]));
+      CHECK(m.pages[9].sub == 0 && m.pages[10].sub == 1 && m.pages[10].ttl == 60);
+    }
+  }
+  // A choice: 17 options and more keep 16; no list and empty lists load,
+  // are never built and take no touch; no value is none selected.
+  {
+    std::string t17 = "[", i17 = "[", c17 = "[";
+    for (int i = 0; i < 17; i++) {
+      t17 += std::string(i ? "," : "") + "\"o" + std::to_string(i) + "\"";
+      i17 += std::string(i ? "," : "") + "983568";
+      c17 += std::string(i ? "," : "") + std::to_string(i * 4096);
+    }
+    t17 += "]";
+    i17 += "]";
+    c17 += "]";
+    const std::string a40 = std::string(40, 'a'), a41 = std::string(41, 'a'), a255 = std::string(255, 'a');
+    const std::string e_on_border = std::string(39, 'a') + "\xC3\xA9";  // two bytes over 39 and 40: cut to 39
+    const std::string euro_on_border = std::string(38, 'a') + "\xE2\x82\xAC";  // three bytes over 38 to 40: cut to 38
+    const std::string escaped = std::string(38, 'a') + "\\u00e9z";  // an escape that decodes to two bytes: 40
+    const std::string bytes = v2_card(
+        "{\"id\":2,\"texts\":" + t17 + ",\"icons\":" + i17 + ",\"cols\":" + c17 + "," + C + "},{\"id\":3," + C +
+        "},{\"id\":4,\"texts\":[],\"icons\":[],\"cols\":[]," + C + "},{\"id\":5,\"texts\":[\"a\",\"b\"]," + C +
+        "},{\"id\":6,\"texts\":" + texts1000 + "," + C + "},{\"id\":7,\"texts\":[\"" + a40 + "\",\"" + a41 + "\",\"" + a255 +
+        "\",\"" + e_on_border + "\",\"" + euro_on_border + "\",\"" + escaped + "\",\"\"]," + C +
+        "},{\"id\":8,\"icons\":[0,983568],\"texts\":[\"x\"]," + C + "},{\"id\":9,\"texts\":[\"first\"],\"texts\":[\"p\",\"q\",\"r\"]," + C +
+        "},{\"id\":10,\"track\":[1,2,3],\"track\":[4,5]," + S + "},{\"id\":11,\"track\":[1]," + S +
+        "},{\"id\":12,\"track\":[1,2,3,4,5,6,7,8,9]," + S + "},{\"id\":13,\"track\":[]," + S + "}");
+    CHECK_STR(commit_and_draw(ha, bytes, "choices"), "");
+    D::Widget *w2 = widget(2), *w3 = widget(3), *w4 = widget(4), *w5 = widget(5), *w6 = widget(6), *w7 = widget(7),
+              *w8 = widget(8), *w9 = widget(9), *w10 = widget(10), *w11 = widget(11), *w12 = widget(12), *w13 = widget(13);
+    if (CHECK(w2 && w3 && w4 && w5 && w6 && w7 && w8 && w9 && w10 && w11 && w12 && w13)) {
+      CHECK(w2->options == 16 && w2->texts_n == 16 && w2->icons_n == 16 && w2->cols_n == 16);
+      CHECK_STR(D::choice_text(*w2, 15), "o15");
+      CHECK_STR(D::choice_text(*w2, 16), "");
+      CHECK(w2->cols[15] == 15 * 4096);
+      CHECK(w3->options == 0 && w4->options == 0 && D::Loader::objects_of(*w3) == 0 && D::Loader::objects_of(*w4) == 0);
+      CHECK(w3->obj == nullptr && w4->obj == nullptr);
+      CHECK(w5->options == 2 && w5->value.how == D::B_ABSENT && D::Loader::objects_of(*w5) == 1);
+      CHECK(w6->options == 16 && w6->texts_n == 16);
+      CHECK_STR(D::choice_text(*w6, 15), "t15");
+      CHECK(w7->texts_n == 7);
+      CHECK_STR(D::choice_text(*w7, 0), a40);
+      CHECK_STR(D::choice_text(*w7, 1), a40);
+      CHECK_STR(D::choice_text(*w7, 2), a40);
+      CHECK_STR(D::choice_text(*w7, 3), std::string(39, 'a'));
+      CHECK_STR(D::choice_text(*w7, 4), std::string(38, 'a'));
+      CHECK_STR(D::choice_text(*w7, 5), std::string(38, 'a') + "\xC3\xA9");
+      CHECK_STR(D::choice_text(*w7, 6), "");
+      CHECK(w8->options == 2 && w8->icons[0] == 0 && w8->icons[1] == 983568);
+      // A key given twice: the last one counts.
+      CHECK(w9->texts_n == 3);
+      CHECK_STR(D::choice_text(*w9, 0), "p");
+      CHECK(w10->track_n == 2 && w10->track[0] == 4 && w10->track[1] == 5);
+      CHECK(w11->track_n == 0 && !w11->track && w13->track_n == 0);
+      CHECK(w12->track_n == 8 && w12->track[7] == 8);
+    }
+    // A press on a choice that has no option does nothing and sends nothing.
+    fake::st.events.clear();
+    if (w3) hh::tap(centre_x(w3->r), centre_y(w3->r));
+    hh::advance(50);
+    CHECK(fake::events("tab1_input").empty());
+  }
+  // Every new part on rectangles of 0 x 0, 1 x 1, off the screen and
+  // shorter than two corner radii; values at and past their edges.
+  {
+    const char *rects[] = {"[116,140,0,0]", "[116,140,1,1]", "[1300,900,50,50]", "[-200,-200,100,100]", "[116,140,6,6]"};
+    std::string ws;
+    int id = 2;
+    for (const char *r : rects) {
+      const std::string rr = std::string("\"r\":") + r;
+      auto add = [&](const std::string &rest) { ws += std::string(ws.empty() ? "" : ",") + "{\"id\":" + std::to_string(id++) + "," + rr + "," + rest + "}"; };
+      add("\"t\":\"label\",\"text\":\"21:05\",\"px\":192,\"al\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"label\",\"text\":\"\",\"clk\":1,\"px\":96,\"value\":{\"s\":2}");
+      add("\"t\":\"button\",\"text\":\"x\",\"tap\":{\"p\":0},\"shape\":1,\"isz\":1,\"icon\":983568,\"c\":{\"s\":6},\"value\":{\"s\":3}");
+      add("\"t\":\"slider\",\"value\":{\"s\":2},\"min\":5,\"max\":5,\"step\":1,\"look\":1,\"dir\":1,\"track\":[1,2,3],\"rate\":{\"s\":7},\"change\":{\"p\":0}");
+      add("\"t\":\"slider\",\"value\":{\"s\":2},\"min\":9,\"max\":1,\"step\":0,\"look\":0,\"dir\":2,\"track\":[1,2,3,4,5,6,7,8],\"nv\":1,\"icon\":983568");
+      add("\"t\":\"thermostat\",\"value\":{\"s\":2},\"min\":35,\"max\":7,\"step\":0.5,\"mark\":{\"s\":6},\"bs\":64,\"c\":{\"s\":6},\"change\":{\"p\":0}");
+      add("\"t\":\"chart\",\"value\":{\"s\":5},\"kind\":1,\"mark\":{\"s\":6},\"st\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"image\",\"value\":{\"s\":4},\"look\":1,\"c\":{\"s\":6}");
+      add("\"t\":\"choice\",\"texts\":[\"a\",\"b\",\"c\"],\"icons\":[983568,0],\"cols\":[1,2,3,4],\"rows\":4,\"value\":{\"s\":6},\"change\":{\"p\":0}");
+    }
+    const std::string bytes = v2_card(ws, "\"tint\":{\"s\":6},\"un\":{\"s\":3},\"lit\":2,\"on\":{\"s\":3},\"tap\":{\"p\":0},");
+    CHECK_STR(commit_and_draw(ha, bytes, "sizes", false), "");
+    const std::string h = tab::active_hash();
+    const char *values[] = {"[[2,1000000000],[6,1000000000],[7,1000000000]]", "[[2,-1000000000],[6,-1],[7,-1]]",
+                            "[[2,0.5],[6,0.5],[7,0.5],[3,1]]", "[[2,null],[6,null],[7,null],[3,null]]",
+                            "[[2,5],[6,16754519],[5,[1,2,3]],[4,983568],[3,0]]"};
+    for (const char *v : values) {
+      CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":" + v + "}"), "");
+      hh::advance(30);
+      draw_and_press_all("sizes");
+    }
+    // A colour slot holds a colour only while it is a whole number 0 to
+    // 0xFFFFFF (contract 4.4).
+    D::Widget *lab = widget(2);
+    if (CHECK(lab && active())) {
+      uint32_t col = 0;
+      CHECK(D::bound_colour(*active()->model, lab->c, &col) && col == 16754519);
+      for (const char *bad : {"1000000000", "-1", "0.5", "16777216", "null"}) {
+        CHECK_STR(ha.set("{\"h\":\"" + h + "\",\"v\":[[6," + bad + "]]}"), "");
+        CHECK_MSG(!D::bound_colour(*active()->model, lab->c, &col), bad);
+      }
+    }
+  }
+  // 64 pages that each carry a theme: 65 themes, each its own.
+  {
+    CHECK_STR(commit_and_draw(ha, "{\"nav\":[],\"pages\":" + pages64 + ",\"slots\":\"\",\"theme\":{\"acc\":1,\"tx\":7},\"v\":2}", "themes", false), "");
+    if (CHECK(active() && active()->model->npages == 64)) {
+      const D::Model &m = *active()->model;
+      CHECK(m.nthemes == 65);
+      for (int p = 0; p < 64; p++) {
+        const D::Theme &t = m.themes[m.pages[p].theme];
+        CHECK_MSG(m.pages[p].theme == p + 1 && t.c[D::C_ACC] == (uint32_t) p * 1000 && t.c[D::C_TX] == 7, std::to_string(p));
+      }
+      CHECK(m.themes[0].c[D::C_ACC] == 1);
+    }
+  }
+}
+
+// The per-page draw counts of a version 2 layout (contract 4.2): the 9th
+// chart and the 9th thermostat of a page are skipped like a kind the engine
+// does not know (their ids still count), the 13th track is dropped from its
+// slider. A version 1 layout keeps everything.
+TEST(page_cost_limits) {
+  auto page = [](int first_id, int charts, int arcs, int tracks, bool bad_ninth) {
+    std::string ws;
+    int id = first_id + 1;
+    auto add = [&](const std::string &rest) { ws += std::string(ws.empty() ? "" : ",") + "{\"id\":" + std::to_string(id++) + ",\"r\":[116,140,40,40]," + rest + "}"; };
+    // A slider with one colour has no track and does not count.
+    add("\"t\":\"slider\",\"value\":1,\"min\":0,\"max\":2,\"step\":1,\"track\":[255]");
+    for (int i = 0; i < charts; i++) add(std::string("\"t\":\"chart\",\"value\":[1,2]") + (i == 8 && bad_ninth ? ",\"st\":\"skipped, so never read\"" : ""));
+    for (int i = 0; i < arcs; i++) add("\"t\":\"thermostat\",\"value\":20,\"min\":7,\"max\":35,\"step\":1");
+    for (int i = 0; i < tracks; i++) add("\"t\":\"slider\",\"value\":1,\"min\":0,\"max\":2,\"step\":1,\"track\":[255,65280]");
+    return "{\"title\":\"P\",\"w\":[{\"id\":" + std::to_string(first_id) + ",\"r\":[100,84,568,640],\"t\":\"card\",\"w\":[" + ws + "]}]}";
+  };
+  // Page 0: 9, 9 and 13 (the first slider has no track). Page 1: 8, 8 and 12.
+  Ha ha;
+  for (int v : {2, 1}) {
+    // Version 1 reads the 9th chart, so a wrong key there is parse.
+    const std::string pages = "[" + page(100, 9, 9, 13, v == 2) + "," + page(200, 8, 8, 12, false) + "]";
+    if (v == 1) {
+      const std::string bad = "{\"pages\":[" + page(100, 9, 9, 13, true) + "],\"v\":1}";
+      CHECK_STR(commit_answer(bad), "parse");
+    }
+    g_test = v == 2 ? "page_cost_limits v2" : "page_cost_limits v1";
+    const std::string bytes = "{\"pages\":" + pages + ",\"v\":" + std::to_string(v) + "}";
+    D::Loader ld;
+    CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+    CHECK(ld.c.ids == 2 + 2 + 9 + 9 + 13 + 8 + 8 + 12);
+    CHECK(ld.c.drop_charts == (v == 2 ? 1u : 0u) && ld.c.drop_arcs == (v == 2 ? 1u : 0u) &&
+          ld.c.drop_tracks == (v == 2 ? 1u : 0u));
+    CHECK(ld.c.widgets == ld.c.ids - (v == 2 ? 2 : 0));
+    fake::st.logs.clear();
+    CHECK_STR(commit_and_draw(ha, bytes, g_test), "");
+    int lines = 0;
+    for (const std::string &s : fake::st.logs)
+      if (s.find("over a page's limit") != std::string::npos) lines++;
+    CHECK(lines == (v == 2 ? 1 : 0));
+    // Page 0: ids 102..110 charts, 111..119 thermostats, 120..132 tracks.
+    for (int i = 0; i < 9; i++) {
+      CHECK_MSG((widget(102 + i) != nullptr) == (v == 1 || i < 8), "chart " + std::to_string(i));
+      CHECK_MSG((widget(111 + i) != nullptr) == (v == 1 || i < 8), "thermostat " + std::to_string(i));
+    }
+    for (int i = 0; i < 13; i++) {
+      const D::Widget *s = widget(120 + i);
+      if (!CHECK(s)) continue;
+      CHECK_MSG(s->track_n == (v == 1 || i < 12 ? 2 : 0), "track " + std::to_string(i));
+    }
+    CHECK(widget(101) && widget(101)->track_n == 0);
+    // Page 1 holds exactly the limits: everything is kept.
+    for (int i = 0; i < 8; i++) CHECK(widget(202 + i) && widget(210 + i));
+    for (int i = 0; i < 12; i++) CHECK(widget(218 + i) && widget(218 + i)->track_n == 2);
+  }
+  g_test = "page_cost_limits";
+}
+
+// Layouts made from the kit by dropping, repeating and retyping keys, by
+// numbers put in place of numbers and by empty and 1 px rectangles: none
+// crashes, each answers "", parse, version or limits, and each that loads
+// is drawn (cards spec B.9).
+TEST(fuzz_keys) {
+  const tj::Value kit = fixture("layout_v2_kit.dl.json");
+  uint32_t seed = 0x2545F491u;
+  auto rnd = [&](uint32_t n) {
+    seed ^= seed << 13;
+    seed ^= seed >> 17;
+    seed ^= seed << 5;
+    return n ? seed % n : 0;
+  };
+  // Every object and array of the tree, to pick one from.
+  std::function<void(tj::Value &, std::vector<tj::Value *> &)> nodes = [&](tj::Value &v, std::vector<tj::Value *> &out) {
+    if (v.t == tj::Value::OBJ || v.t == tj::Value::ARR) out.push_back(&v);
+    for (auto &kv : v.o) nodes(kv.second, out);
+    for (auto &e : v.a) nodes(e, out);
+  };
+  auto number = [](const char *text) {
+    tj::Value n;
+    n.t = tj::Value::NUM;
+    n.s = text;
+    n.n = atof(text);
+    return n;
+  };
+  auto retype = [&](tj::Value &v) {
+    static const char *const NUMS[] = {"0", "-1", "0.5", "1000000000", "2", "17", "65", "16777216"};
+    tj::Value n;
+    switch (rnd(7)) {
+      case 0: n = number(NUMS[rnd(8)]); break;
+      case 1: n.t = tj::Value::STR; n.s = "x"; break;
+      case 2: n.t = tj::Value::NUL; break;
+      case 3: n.t = tj::Value::BOOL; n.b = true; break;
+      case 4: n.t = tj::Value::ARR; n.a.push_back(number(NUMS[rnd(8)])); break;
+      case 5: n.t = tj::Value::OBJ; n.o.push_back({"s", number(NUMS[rnd(8)])}); break;
+      default: n.t = tj::Value::ARR; break;
+    }
+    v = n;
+  };
+  const int runs = QUICK ? 1000 : 10000;
+  const int draw_every = QUICK ? 50 : 10;
+  std::map<std::string, int> answers;
+  Ha ha;
+  int loaded = 0, drawn = 0;
+  const auto started = std::chrono::steady_clock::now();
+  for (int run = 0; run < runs; run++) {
+    tj::Value t = kit;
+    const int edits = 1 + (int) rnd(4);
+    for (int e = 0; e < edits; e++) {
+      std::vector<tj::Value *> all;
+      nodes(t, all);
+      tj::Value &n = *all[rnd((uint32_t) all.size())];
+      if (n.t == tj::Value::OBJ && !n.o.empty()) {
+        const size_t k = rnd((uint32_t) n.o.size());
+        tj::Value &val = n.o[k].second;
+        switch (rnd(5)) {
+          case 0: n.o.erase(n.o.begin() + (long) k); break;              // drop
+          case 1: n.o.push_back(n.o[k]); break;                          // repeat
+          case 2: retype(val); break;                                    // retype
+          case 3:
+            if (val.t == tj::Value::NUM) {
+              static const char *const NUMS[] = {"0", "-1", "0.5", "1000000000"};
+              val = number(NUMS[rnd(4)]);
+            } else {
+              retype(val);
+            }
+            break;
+          default:
+            if (n.o[k].first == "r" || n.o[k].first == "hr") {  // an empty or 1 px rectangle
+              const bool one = rnd(2) != 0;
+              val.a[2] = number(one ? "1" : "0");
+              val.a[3] = number(one ? "1" : "0");
+            } else {
+              retype(val);
+            }
+        }
+      } else if (n.t == tj::Value::ARR && !n.a.empty()) {
+        const size_t k = rnd((uint32_t) n.a.size());
+        switch (rnd(3)) {
+          case 0: n.a.erase(n.a.begin() + (long) k); break;
+          case 1: n.a.push_back(n.a[k]); break;
+          default: retype(n.a[k]);
+        }
+      }
+    }
+    const std::string bytes = json_text(t);
+    const std::string got = commit_answer(bytes);
+    answers[got]++;
+    if (!CHECK_MSG(got == "" || got == "parse" || got == "version" || got == "limits", got)) break;
+    if (got != "") continue;
+    loaded++;
+    if (loaded % draw_every != 1) continue;
+    drawn++;
+    const std::string shown = commit_and_draw(ha, bytes, "fuzz", drawn % 4 == 1);
+    if (!CHECK_MSG(shown.empty(), "run " + std::to_string(run) + ": " + shown)) break;
+  }
+  const long long ms = (long long) std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+  printf("  %d layouts in %lld ms: %d load (%d drawn), %d parse, %d version, %d limits\n", runs, ms, answers[""], drawn,
+         answers["parse"], answers["version"], answers["limits"]);
+  CHECK(answers[""] > runs / 20 && answers["parse"] > runs / 20);
+}
+
+// The key tables find a key with about one comparison, however many names
+// they hold: the item table knows 44 (cards spec B.2).
+TEST(keys_found_at_once) {
+  const D::KeyIndex *tables[] = {&D::ITEM_INDEX, &D::THEME_INDEX, &D::STYLE_INDEX, &D::PAGE_INDEX,
+                                 &D::TOP_INDEX,  &D::TAP_INDEX,   &D::NAV_INDEX};
+  for (const D::KeyIndex *t : tables) {
+    for (int i = 0; i < t->count; i++) {
+      tab::json::Span k{t->names[i], strlen(t->names[i]), false};
+      CHECK_MSG(t->find(k) == i, t->names[i]);
+      tab::json::Span esc{t->names[i], strlen(t->names[i]), true};
+      CHECK(t->find(esc) == -1);
+    }
+    for (const char *other : {"", "x", "zz", "texts2", "Id", "valu", "values"}) {
+      tab::json::Span k{other, strlen(other), false};
+      CHECK_MSG(t->find(k) == -1, other);
+    }
+  }
+  CHECK(D::ITEM_INDEX.count == 44);
+  const std::string bytes = layout_bytes("layout_v2_kit.dl.json");
+  D::test_counts() = D::TestCounts{};
+  D::Loader ld;
+  CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+  const D::TestCounts c = D::test_counts();
+  printf("  kit: %llu keys, %llu names compared\n", (unsigned long long) c.keys, (unsigned long long) c.key_compares);
+  CHECK(c.keys > 400);
+  CHECK_MSG(c.key_compares * 4 <= c.keys * 5, std::to_string(c.key_compares) + " compares");  // at most 1.25 a key
+}
+
+// No walk of the heap while a layout is being built (cards spec B.6): the
+// largest free block is read once per commit, in stage(); build steps read
+// free PSRAM, and tab_status and tab_hello report the block read at the
+// commit until the build ends (contract 3.1). What hangs under the shown
+// screen meanwhile is in offscreen_tree.
+TEST(offscreen_costs_nothing) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const tj::Value f = fixture("commit_v2.json");
+  CHECK(ha.show(f["cases"][0]["calls"][0]["data"].s));  // 64 pages
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK_STR(ha.send(kit), "");
+  fake::st.largest = 15000000;
+  fake::st.largest_calls = 0;
+  CHECK_STR(ha.commit("ef98088e1fda910d"), "");
+  CHECK(fake::st.largest_calls == 1 && tab::building());
+  fake::st.largest = 9000000;
+  char out[768];
+  tj::Value v;
+  int steps = 0;
+  while (tab::building() && steps < 3000) {
+    CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v) && v["mem"]["block"].n == 15000000);
+    const size_t n = tab::on_hello(NONCE, 32, "", 0, out, sizeof out);
+    CHECK(n > 0 && tj::parse(out, n, &v) && v["mem"]["block"].n == 15000000);
+    hh::advance(1);
+    steps++;
+  }
+  CHECK(steps > 3);  // the build took several steps
+  CHECK_MSG(fake::st.largest_calls == 1, std::to_string(fake::st.largest_calls) + " calls");
+  CHECK(advance_until([] { return std::string(tab::active_hash()) == "ef98088e1fda910d"; }, 5000));
+  CHECK(tj::parse(out, tab::on_status(out, sizeof out), &v) && v["mem"]["block"].n == 9000000);
+  CHECK(fake::st.largest_calls == 2);
+  // A build that runs short of free PSRAM stops with memory, whatever the
+  // largest block was at the commit.
+  CHECK_STR(ha.send(layout_bytes("layout_all_cards.dl.json")), "");
+  fake::st.largest = 16000000;
+  CHECK_STR(ha.commit("4384f665e4dd9f62"), "");
+  fake::st.free = 1000000;
+  hh::advance(50);
+  fake::st.free = 28000000;
+  CHECK_STR(status_build(), "memory");
+  CHECK_STR(tab::active_hash(), "ef98088e1fda910d");
+}
+
+// ================================================================ colours and repaints (cards spec B.3, B.4)
+
+static uint32_t colour_of(const tj::Value &v) { return (uint32_t) v.n; }
+
+// A theme and a card style of maths.json (device form) as the engine holds them.
+static D::Theme maths_theme(const tj::Value &t) {
+  D::Theme th{};
+  for (int c = 0; c < D::C_COUNT; c++) th.c[c] = colour_of(t[D::THEME_KEYS[c]]);
+  th.dark = (uint8_t) t["dark"].n;
+  th.r = (int16_t) t["r"].n;
+  th.r2 = (int16_t) t["r2"].n;
+  th.bw = (int16_t) t["bw"].n;
+  return th;
+}
+
+static D::CardStyle maths_style(const tj::Value &s) {
+  D::CardStyle st{};
+  st.gd = -1;
+  for (int i = 0; i < D::S_COUNT; i++)
+    if (s.has(D::STYLE_KEYS[i])) {
+      st.c[i] = colour_of(s[D::STYLE_KEYS[i]]);
+      st.mask |= 1u << i;
+    }
+  return st;
+}
+
+static std::string hex6(uint32_t c) {
+  char b[16];
+  snprintf(b, sizeof b, "%06x", (unsigned) c);
+  return b;
+}
+
+// The colour rules of contract 4.7 against every vector of maths.json that
+// the colours cover: the table, mix (and every exact half), lum, contrast,
+// readable, legible, blend at 0.82 (also the pairs a fused multiply-add gets
+// wrong), the card colours for every lit with and without a tint, with the
+// tokens of each style, and the two colours of an image in each state. The
+// geometry of maths.json (label sizes, the clock, sliders, tracks, choice
+// cells and dots, chart steps, bars, the image's box) is checked here for
+// the parts drawn so far, and comes with the packages that draw the rest.
+TEST(maths_fixture) {
+  const tj::Value f = fixture("maths.json");
+  // The table, bit for bit.
+  CHECK(f["linear"].size() == 256);
+  int bad = 0;
+  for (int i = 0; i < 256; i++) {
+    const double want = f["linear"][i].n;
+    if (memcmp(&want, &D::LINEAR[i], sizeof want) != 0) bad++;
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " entries of LINEAR differ from maths.json");
+
+  bad = 0;
+  std::string first;
+  auto miss = [&](const std::string &what) {
+    if (!bad++) first = what;
+  };
+  CHECK(f["mix"].size() > 1000);
+  for (const tj::Value &v : f["mix"].a)
+    if (D::mix(colour_of(v[0]), colour_of(v[1]), (uint32_t) v[2].n) != colour_of(v[3]))
+      miss("mix " + v[0].s + " " + v[1].s + " " + v[2].s);
+  int halves = 0;
+  for (const auto &kv : f["mix_halves"].o) {
+    const uint32_t p = (uint32_t) atoi(kv.first.c_str());
+    for (const tj::Value &v : kv.second.a)
+      for (int shift = 0; shift <= 16; shift += 8) {
+        halves++;
+        if (D::mix(colour_of(v[0]) << shift, colour_of(v[1]) << shift, p) != colour_of(v[2]) << shift)
+          miss("mix half " + kv.first + " " + v[0].s + " " + v[1].s);
+      }
+  }
+  CHECK(halves > 300);
+  for (const tj::Value &v : f["lum"].a)
+    if (D::lum(colour_of(v[0])) != v[1].n) miss("lum " + v[0].s);
+  for (const tj::Value &v : f["contrast"].a)
+    if (D::contrast(colour_of(v[0]), colour_of(v[1])) != v[2].n) miss("contrast " + v[0].s + " " + v[1].s);
+  for (const tj::Value &v : f["readable"].a)
+    if (D::readable(colour_of(v[0])) != colour_of(v[1])) miss("readable " + v[0].s);
+  for (const tj::Value &v : f["legible"].a)
+    if (D::legible(colour_of(v[0]), colour_of(v[1]), colour_of(v[2])) != colour_of(v[3]))
+      miss("legible " + v[0].s + " " + v[1].s + " " + v[2].s);
+  const double t = f["blend"]["t"].n;
+  CHECK(t == 0.82);
+  for (const tj::Value &v : f["blend"]["cases"].a)
+    if (D::blend(colour_of(v[0]), colour_of(v[1]), t) != colour_of(v[2])) miss("blend " + v[0].s + " " + v[1].s);
+  for (const char *part : {"fused", "halves"}) {
+    CHECK(f["blend"][part].size() > 10);
+    for (const tj::Value &v : f["blend"][part].a)
+      for (int shift = 0; shift <= 16; shift += 8)
+        if (D::blend(colour_of(v[0]) << shift, colour_of(v[1]) << shift, t) != colour_of(v[2]) << shift)
+          miss(std::string("blend ") + part + " " + v[0].s + " " + v[1].s);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " colour vectors differ, the first: " + first);
+
+  // The card colours, with the tokens of the page theme and the style.
+  bad = 0;
+  CHECK(f["card"].size() >= 200);
+  for (const tj::Value &v : f["card"].a) {
+    const D::Theme th = maths_theme(f["themes"][v["theme"].s.c_str()]);
+    const D::CardStyle st = maths_style(f["styles"][v["style"].s.c_str()]);
+    const D::Tok tok = D::style_tokens(th, st.mask ? &st : nullptr);
+    const bool has_tint = !v["tint"].is_null();
+    const D::CardColours k = D::card_colours(tok, v["on"].n == 1, v["lit"].i(), has_tint, has_tint ? colour_of(v["tint"]) : 0);
+    const tj::Value &e = v["expect"];
+    const std::string what = v["theme"].s + "/" + v["style"].s + " on " + v["on"].s + " lit " + v["lit"].s + " tint " +
+                             (has_tint ? v["tint"].s : "none");
+    const struct {
+      const char *key;
+      uint32_t got;
+    } fields[] = {{"A", k.A},
+                  {"AF", k.AF},
+                  {"AT", k.AT},
+                  {"AP", k.AP},
+                  {"F", k.F},
+                  {"FT", k.FT},
+                  {"FS", k.FS},
+                  {"FI", k.FI},
+                  {"FP", k.FP},
+                  {"background", k.background},
+                  {"text", k.text},
+                  {"border", k.border},
+                  {"header_icon", k.header_icon},
+                  {"border_width", (uint32_t) k.border_width},
+                  {"dark", k.dark},
+                  {"filled", k.filled}};
+    for (const auto &fd : fields)
+      if (fd.got != colour_of(e[fd.key])) miss(what + ": " + fd.key + " " + hex6(fd.got) + ", not " + hex6(colour_of(e[fd.key])));
+    if (tok.bg != colour_of(v["tokens"]["bg"]) || tok.ion != colour_of(v["tokens"]["ion"]) ||
+        tok.onbg_pr != colour_of(v["tokens"]["onbg_pr"]))
+      miss(what + ": tokens");
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " card colours differ, the first: " + first);
+  // FS on a tinted card is tx when tx2 does not stand out on F (contract
+  // 4.7). No vector of maths.json reaches that branch, so two by hand: a
+  // dark card whose tx2 is close to the fill, and one whose tx2 stands out.
+  {
+    D::Tok tok = D::theme_tokens(maths_theme(f["themes"]["midnight"]));
+    tok.tx2 = 0x404040;
+    const D::CardColours dim = D::card_colours(tok, true, 0, true, 0x303030);
+    CHECK(D::contrast(tok.tx2, dim.F) < 3 && dim.FS == tok.tx);
+    tok.tx2 = 0xC0C0C0;
+    const D::CardColours bright = D::card_colours(tok, true, 0, true, 0x303030);
+    CHECK(D::contrast(tok.tx2, bright.F) >= 3 && bright.FS == tok.tx2);
+  }
+
+  // An image's box (or circle) and icon colour.
+  bad = 0;
+  int images = 0;
+  for (const tj::Value &v : f["image"].a) {
+    const tj::Value &e = v["expect"];
+    if (e.is_null()) continue;  // a rectangle of no size: nothing is drawn
+    images++;
+    const D::Tok tok = D::theme_tokens(maths_theme(f["themes"][v["theme"].s.c_str()]));
+    const bool has_tint = !v["tint"].is_null(), has_c = !v["c"].is_null();
+    const D::CardColours k = D::card_colours(tok, v["on"].n == 1, v["lit"].i(), has_tint, has_tint ? colour_of(v["tint"]) : 0);
+    const D::ImageColours ic = D::image_colours(tok, k, v["look"].i(), has_c, has_c ? colour_of(v["c"]) : 0);
+    const std::string what = v["theme"].s + " " + v["state"].s + " look " + v["look"].s + " c " + (has_c ? v["c"].s : "none");
+    if (ic.icon != colour_of(e["icon"])) miss(what + ": icon " + hex6(ic.icon));
+    if (e["fill"].is_null() ? ic.boxed != 0 : (ic.boxed != 1 || ic.fill != colour_of(e["fill"]))) miss(what + ": fill");
+    if (e.has("plain") && ic.plain != (uint8_t) e["plain"].n) miss(what + ": plain");
+  }
+  CHECK(images >= 480);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " image colours differ, the first: " + first);
+
+  // (package E5) An image's box and icon size by look; a rectangle of no
+  // size draws nothing.
+  bad = 0;
+  int boxes = 0, empty = 0;
+  for (const tj::Value &v : f["image"].a) {
+    D::Widget w{};
+    w.kind = D::W_IMAGE;
+    w.look = (uint8_t) v["look"].i();
+    w.r[2] = (int16_t) v["w"].i();
+    w.r[3] = (int16_t) v["h"].i();
+    int x, y, bw, bh;
+    D::image_box(w, &x, &y, &bw, &bh);
+    const std::string what = "look " + v["look"].s + " " + v["w"].s + "x" + v["h"].s;
+    const tj::Value &e = v["expect"];
+    if (e.is_null()) {
+      empty++;
+      if (bw > 0 && bh > 0) miss(what + ": drawn");
+      continue;
+    }
+    boxes++;
+    if (D::image_icon_size(w.look, w.r[2], w.r[3]) != e["icon_px"].i()) miss(what + ": icon size");
+    if (e["box"].is_null()) {
+      if (w.look != 2) miss(what + ": a box");
+      continue;
+    }
+    if (w.look == 2 || x != e["box"][0].i() || y != e["box"][1].i() || bw != e["box"][2].i() || bh != e["box"][3].i())
+      miss(what + ": box " + std::to_string(x) + "," + std::to_string(y) + "," + std::to_string(bw) + "," +
+           std::to_string(bh));
+  }
+  CHECK(boxes >= 480 && empty >= 100);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " image boxes differ, the first: " + first);
+
+  // (package E5) The label size rule before the width is checked, the small
+  // colour and the sizes tried in turn while the text is too wide.
+  bad = 0;
+  CHECK(f["label"].size() >= 25);
+  for (const tj::Value &v : f["label"].a) {
+    const int px = v["px"].is_null() ? 0 : v["px"].i();
+    bool small = false;
+    const int got = D::label_size(v["size"].i(), px, v["text"].s.c_str(), &small);
+    const tj::Value &e = v["expect"];
+    const std::string what = "px " + (v["px"].is_null() ? std::string("none") : v["px"].s) + " size " + v["size"].s +
+                             " \"" + v["text"].s + "\"";
+    if (got != e["px"].i()) miss(what + ": " + std::to_string(got));
+    if (small != (e["small"].n == 1)) miss(what + ": small");
+    std::vector<int> chain;
+    for (int s = D::label_smaller(got); s; s = D::label_smaller(s)) chain.push_back(s);
+    bool same = chain.size() == e["smaller"].size();
+    for (size_t i = 0; same && i < chain.size(); i++) same = chain[i] == e["smaller"][i].i();
+    if (!same) miss(what + ": smaller");
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " label sizes differ, the first: " + first);
+
+  // (package E10) The clock text: m = floor(v + age / 60) mod 1440, both
+  // forms, no value, a fraction, -1, 1e9 and -1e9, and more than 50 days.
+  bad = 0;
+  CHECK(f["clock"].size() >= 20);
+  for (const tj::Value &v : f["clock"].a) {
+    const bool has = !v["value"].is_null();
+    char text[D::CLOCK_CAP];
+    D::clock_text(D::clock_minute(has, has ? v["value"].n : 0, v["age_s"].n), v["clk"].i(), text);
+    if (v["expect"].s != text)
+      miss("clock " + (has ? v["value"].s : std::string("none")) + " age " + v["age_s"].s + " clk " + v["clk"].s + ": " + text);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " clock texts differ, the first: " + first);
+
+  // (package E6) The slider: the amount and the value under a finger, and
+  // where a value is drawn, for both looks, the three directions, tracks of
+  // 0, 2, 7 and 8 colours, and rectangles of no size, 1 px and thin ones.
+  bad = 0;
+  int presses = 0, sends = 0, knobs = 0, bars = 0, tracks = 0;
+  CHECK(f["slider"].size() >= 300);
+  for (const tj::Value &v : f["slider"].a) {
+    const tj::Value &r = v["rect"];
+    const D::SliderGeom g = D::slider_geom(r[2].i(), r[3].i(), (uint8_t) v["look"].i(), (uint8_t) v["dir"].i(),
+                                           (uint8_t) v["track"].i(), v["r2"].i());
+    const double lo = v["min"].n, hi = v["max"].n, step = v["step"].n;
+    const std::string what = "look " + v["look"].s + " dir " + v["dir"].s + " track " + v["track"].s + " " +
+                             v["rect_name"].s + " " + v["min"].s + ".." + v["max"].s;
+    for (const tj::Value &p : v["presses"].a) {
+      presses++;
+      const std::string at = what + " at " + p[0].s + "," + p[1].s;
+      const double amount = D::slider_amount_at(g, D::slider_along(g, r[0].i(), r[1].i(), p[0].n, p[1].n));
+      if (amount != p[2].n) miss(at + ": amount " + std::to_string(amount));
+      const bool sent = D::slider_sends(g, lo, hi);
+      if (sent) sends++;
+      if (sent != !p[3].is_null()) miss(at + (sent ? ": sends" : ": sends nothing"));
+      else if (sent && D::clamp_step(lo + amount * (hi - lo), lo, hi, step) != p[3].n) miss(at + ": value");
+    }
+    for (const tj::Value &sh : v["shapes"].a) {
+      const tj::Value &e = sh["expect"];
+      const bool has = !sh["value"].is_null();
+      const std::string at = what + " value " + (has ? sh["value"].s : "none") + " change " + sh["change"].s;
+      if (g.L != e["L"].i() || g.S != e["S"].i() || (e.has("R") && g.R != e["R"].i())) miss(at + ": L S R");
+      const int pos = D::slider_shown(g, has, sh["value"].n, lo, hi);
+      if (e.has("knob")) {
+        knobs++;
+        if (e["knob"].is_null() ? pos != -1 : pos != e["knob"].i()) miss(at + ": knob " + std::to_string(pos));
+      } else if (e.has("fill")) {
+        bars++;
+        const int fill = pos > 0 ? pos : 0;
+        const bool handle = sh["change"].n == 1 && D::bar_handle(fill);
+        if (fill != e["fill"].i() || D::bar_drawn(g, fill) != e["drawn"].i()) miss(at + ": fill " + std::to_string(fill));
+        if (e["handle"].is_null() ? handle : (!handle || fill - 12 != e["handle"][0].i() || fill - 8 != e["handle"][1].i()))
+          miss(at + ": handle");
+        if (D::bar_icon_room(g) != !e["icon_centre"].is_null() || (D::bar_icon_room(g) && e["icon_centre"].i() != 24))
+          miss(at + ": icon");
+        if (D::bar_icon_on_fill(g, fill) != (e["icon_on_fill"].n == 1)) miss(at + ": icon on the fill");
+      } else {
+        tracks++;
+        int a1, b0;
+        D::track_caps(g, &a1, &b0);
+        const tj::Value &caps = e["caps"];
+        if (caps[0][0].i() != 0 || caps[0][1].i() != a1 || caps[1][0].i() != b0 || caps[1][1].i() != g.L)
+          miss(at + ": caps " + std::to_string(a1) + " " + std::to_string(b0));
+        const size_t n = g.x1 > g.x0 ? (size_t) g.colours - 1 : 0;
+        bool same = e["pieces"].size() == n;
+        for (size_t k = 0; same && k < n; k++) {
+          int from, to;
+          D::track_piece(g.colours, g.x0, g.x1, (int) k, &from, &to);
+          same = from == e["pieces"][k][0].i() && to == e["pieces"][k][1].i();
+        }
+        if (!same) miss(at + ": pieces");
+        if (e["mark"].is_null() ? pos != -1 : pos != e["mark"].i()) miss(at + ": mark " + std::to_string(pos));
+      }
+    }
+  }
+  CHECK(presses >= 2000 && sends >= 1000 && knobs >= 200 && bars >= 400 && tracks >= 2000);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " slider vectors differ, the first: " + first);
+
+  // (package E6) The pieces of a track, n - 1 of them from x0 to x1, none
+  // when x1 is not above x0.
+  bad = 0;
+  CHECK(f["track"].size() >= 30);
+  for (const tj::Value &v : f["track"].a) {
+    const int n = v["n"].i(), x0 = v["x0"].i(), x1 = v["x1"].i();
+    const size_t count = n >= 2 && x1 > x0 ? (size_t) n - 1 : 0;
+    bool same = v["expect"].size() == count;
+    for (size_t k = 0; same && k < count; k++) {
+      int from, to;
+      D::track_piece(n, x0, x1, (int) k, &from, &to);
+      same = from == v["expect"][k][0].i() && to == v["expect"][k][1].i();
+    }
+    if (!same) miss("track " + v["n"].s + " " + v["x0"].s + " " + v["x1"].s);
+  }
+  CHECK_MSG(bad == 0, std::to_string(bad) + " track pieces differ, the first: " + first);
+
+  // (package E7) A line chart's points (linePoints) and the rectangles of
+  // its steps, also for one value, no value and rectangles of 0 and 9 px.
+  bad = 0;
+  int runs = 0;
+  CHECK(f["steps"].size() >= 7);
+  for (const tj::Value &v : f["steps"].a) {
+    std::vector<double> vals;
+    for (const tj::Value &x : v["values"].a) vals.push_back(x.n);
+    const int n = (int) vals.size(), W = v["w"].i(), H = v["h"].i();
+    double low = n ? vals[0] : 0, high = low;
+    for (double x : vals) {
+      low = fmin(low, x);
+      high = fmax(high, x);
+    }
+    const std::string what = "steps " + v["w"].s + "x" + v["h"].s + " of " + std::to_string(n);
+    const int count = D::chart_points(n);
+    if ((size_t) count != v["points"].size()) {
+      miss(what + ": " + std::to_string(count) + " points");
+      continue;
+    }
+    std::vector<int32_t> got;
+    double xa = 0, ya = 0;
+    for (int i = 0; i < count; i++) {
+      double x, y;
+      D::chart_point(vals.data(), n, low, high, W, H, i, &x, &y);
+      if (x != v["points"][(size_t) i][0].n || y != v["points"][(size_t) i][1].n) miss(what + ": point " + std::to_string(i));
+      if (i) {
+        int32_t rs[2][4];
+        const int nr = D::chart_step(xa, ya, x, y, rs);
+        for (int j = 0; j < nr; j++) got.insert(got.end(), rs[j], rs[j] + 4);
+      }
+      xa = x;
+      ya = y;
+    }
+    const tj::Value &e = v["expect"];
+    bool same = got.size() == e.size() * 4;
+    for (size_t k = 0; same && k < e.size(); k++)
+      for (size_t j = 0; j < 4; j++) same = same && got[k * 4 + j] == e[k][j].i();
+    runs += (int) e.size();
+    if (!same) miss(what + ": rectangles");
+  }
+  CHECK(runs >= 20);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " chart steps differ, the first: " + first);
+
+  // (package E7) The colour of each bar with `mark`: acc2 as usual, the bar
+  // at round(mark) acc, the later ones card2; none past the bars.
+  bad = 0;
+  CHECK(f["bars"].size() >= 13);
+  for (const tj::Value &v : f["bars"].a) {
+    const int n = v["n"].i();
+    const bool has = !v["mark"].is_null();
+    const int mark = D::chart_mark(n, has, has ? v["mark"].n : 0);
+    const std::string what = "bars " + v["n"].s + " mark " + (has ? v["mark"].s : "none");
+    if (v["expect"].size() != (size_t) (n > 0 ? n : 0)) miss(what + ": count");
+    for (int i = 0; i < n && i < (int) v["expect"].size(); i++) {
+      const uint32_t c = D::chart_bar_colour(i, mark, 1, 2, 3);
+      const std::string &role = v["expect"][(size_t) i].s;
+      if (c != (role == "acc2" ? 1u : role == "acc" ? 2u : role == "card2" ? 3u : 0u)) miss(what + ": bar " + std::to_string(i));
+    }
+  }
+  CHECK(D::chart_mark(7, true, 1e9) == -1 && D::chart_mark(7, true, -1e9) == -1 && D::chart_mark(7, true, 0.49) == 0);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " bar colours differ, the first: " + first);
+
+  // (package E8) The cells of a choice, the dot of each with look 1 and the
+  // option under a point (null: a gap, outside, or nothing drawn), also for
+  // no option, 17 options, rows out of range and cells of 1 px and below.
+  bad = 0;
+  int cells = 0, points = 0, none = 0;
+  CHECK(f["choice"].size() >= 15);
+  for (const tj::Value &v : f["choice"].a) {
+    const int n = v["n"].i(), rows = v["rows"].i(), W = v["w"].i(), H = v["h"].i(), look = v["look"].i();
+    const std::string what = "choice " + v["n"].s + " in " + v["rows"].s + " rows, " + v["w"].s + "x" + v["h"].s +
+                             " look " + v["look"].s;
+    D::ChoiceGrid g;
+    const bool drawn = D::choice_grid(n, rows, W, H, &g);
+    if (drawn != !v["cells"].is_null()) {
+      miss(what + (drawn ? ": drawn" : ": not drawn"));
+      continue;
+    }
+    if (!drawn) none++;
+    if (drawn && (size_t) g.n != v["cells"].size()) miss(what + ": " + std::to_string(g.n) + " cells");
+    for (int i = 0; drawn && i < g.n && (size_t) i < v["cells"].size(); i++) {
+      const tj::Value &e = v["cells"][(size_t) i];
+      int c[4], d[4];
+      D::choice_cell(g, i, c);
+      cells++;
+      for (int j = 0; j < 4; j++)
+        if (c[j] != e[(size_t) j].i()) miss(what + ": cell " + std::to_string(i));
+      if (look == 1) {
+        D::choice_dot(g, i, d);
+        for (int j = 0; j < 4; j++)
+          if (d[j] != e[4][(size_t) j].i()) miss(what + ": dot " + std::to_string(i));
+      } else if (e.size() != 4) {
+        miss(what + ": a dot without look 1");
+      }
+    }
+    for (const tj::Value &p : v["presses"].a) {
+      points++;
+      const int got = D::choice_cell_at(g, p[0].i(), p[1].i());
+      if (p[2].is_null() ? got != -1 : got != p[2].i()) miss(what + " at " + p[0].s + "," + p[1].s + ": " + std::to_string(got));
+    }
+  }
+  CHECK(cells >= 70 && points >= 100 && none >= 4);
+  CHECK_MSG(bad == 0, std::to_string(bad) + " choice vectors differ, the first: " + first);
+  // A dot whose cell is an odd number of pixels wider than high is placed
+  // half a pixel to the right, rounded up as everywhere in 4.7 (no vector
+  // of maths.json has one).
+  {
+    D::ChoiceGrid g;
+    int d[4];
+    CHECK(D::choice_grid(2, 1, 210, 56, &g) && g.cw == 101 && g.ch == 56);
+    D::choice_dot(g, 1, d);
+    CHECK(d[0] == 109 + 23 && d[1] == 0 && d[2] == 56 && d[3] == 56);
+    CHECK(D::choice_grid(1, 1, 56, 101, &g));
+    D::choice_dot(g, 0, d);
+    CHECK(d[0] == 0 && d[1] == 23 && d[2] == 56);
+  }
+  // The engine's list of digit glyphs is contract.json's.
+  CHECK_STR(D::DIGITS_GLYPHS, tj::load(CDIR + "/contract.json")["fonts"]["digits_glyphs"].s);
+}
+
+// The card's look as its state gives it now, worked out apart from the record.
+static D::CardColours look_now(D::Model &m, const D::Widget &card) {
+  uint32_t tint = 0;
+  const bool has_tint = D::bound_colour(m, card.c, &tint);
+  return D::card_colours(D::card_tokens(m, &card), D::card_is_on(m, &card), card.lit, has_tint, tint);
+}
+
+static bool same_look(const D::CardColours &a, const D::CardColours &b) {
+  return a.A == b.A && a.AF == b.AF && a.AT == b.AT && a.AP == b.AP && a.F == b.F && a.FT == b.FT && a.FS == b.FS &&
+         a.FI == b.FI && a.FP == b.FP && a.background == b.background && a.text == b.text && a.border == b.border &&
+         a.header_icon == b.header_icon && a.border_width == b.border_width && a.dark == b.dark && a.filled == b.filled &&
+         a.lit_on == b.lit_on && a.sel_border == b.sel_border;
+}
+
+// Every card's record and every widget's own colours hold what the state
+// gives now.
+static void looks_hold(D::Model &m, const std::string &when) {
+  int cards = 0, kept = 0;
+  for (uint32_t i = 0; i < m.nw; i++) {
+    D::Widget &w = m.w[i];
+    if (!w.obj) continue;
+    if (w.kind == D::W_CARD) {
+      cards++;
+      const D::CardLook *k = D::card_look(m, &w);
+      if (!CHECK_MSG(k, when + ": card " + std::to_string(w.id) + " has no record")) continue;
+      CHECK_MSG(same_look(k->k, look_now(m, w)), when + ": card " + std::to_string(w.id));
+      const D::Tok t = D::card_tokens(m, &w);
+      CHECK_MSG(k->t.bg == t.bg && k->t.tx == t.tx && k->t.acc == t.acc && k->t.ion == t.ion && k->t.onbg_pr == t.onbg_pr &&
+                    k->t.card2 == t.card2 && k->t.r2 == t.r2 && k->t.bw == t.bw,
+                when + ": tokens of card " + std::to_string(w.id));
+      continue;
+    }
+    D::Widget copy = w;
+    D::widget_colour_update(m, copy);
+    if (w.c_has) kept++;
+    CHECK_MSG(copy.c_has == w.c_has && copy.c_now == w.c_now && copy.c_on == w.c_on,
+              when + ": widget " + std::to_string(w.id) + " keeps " + hex6(w.c_now) + "/" + hex6(w.c_on) + ", the state gives " +
+                  hex6(copy.c_now) + "/" + hex6(copy.c_on));
+  }
+  CHECK(cards > 5 && kept > 5);
+}
+
+// A card's nine colours are worked out at the build and again only when its
+// `on`, `tint` or `un` changes; a widget's own colours at the build, when its
+// `c` changes and after its card's. A repaint with unchanged state works out
+// no contrast, also for widgets that carry `c`, the badges and a bar with a
+// handle (cards spec B.3). The optimistic value of a card comes with package
+// E4, and with it the record's update for it.
+TEST(card_look_cache) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  const std::string hash = sha_hex(kit).substr(0, 16);
+  CHECK(ha.show(kit));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  int cards = 0;
+  for (uint32_t i = 0; i < m.nw; i++) cards += m.w[i].kind == D::W_CARD;
+  CHECK(m.nlooks == cards && cards == 15);
+  looks_hold(m, "built without values");
+  // The tokens are the page's theme (page 1 has its own) with the style on
+  // top (card 7's style names none of these).
+  const tj::Value dl = fixture("layout_v2_kit.dl.json");
+  int themed = 0;
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    if (w.kind != D::W_CARD) continue;
+    const tj::Value &pt = dl["pages"][(size_t) w.page]["theme"];
+    auto role = [&](const char *key) { return colour_of(pt.has(key) ? pt[key] : dl["theme"][key]); };
+    const D::Tok &t = D::card_look(m, &w)->t;
+    CHECK_MSG(t.bg == role("card") && t.tx == role("tx") && t.acc == role("acc") && t.card2 == role("card2") &&
+                  t.line == role("line"),
+              "tokens of card " + std::to_string(w.id));
+    themed += pt.has("card") ? 1 : 0;
+  }
+  CHECK(themed == 7);
+  auto set = [&](const std::string &v) { return ha.set("{\"h\":\"" + hash + "\",\"v\":[" + v + "]}"); };
+  auto counts = [] { return D::test_counts(); };
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+
+  // The values of state_v2.json's first step: on, tint, un and the widgets' c.
+  CHECK_STR(ha.set(fixture("state_v2.json")["steps"][0]["payloads"][0].s), "");
+  hh::advance(50);
+  looks_hold(m, "after the first snapshot");
+  D::Widget *c2 = widget(2), *c7 = widget(7), *c55 = widget(55);
+  if (!CHECK(c2 && c7 && c55)) return;
+  CHECK(D::card_look(m, c2)->k.filled == 1 && D::card_look(m, c2)->has_tint == 1 && D::card_look(m, c2)->tint == 16754519);
+  CHECK(D::card_look(m, c7)->k.filled == 0 && D::card_look(m, c7)->k.lit_on == 1 && D::card_look(m, c7)->unavailable == 0);
+
+  // A repaint with unchanged state, of every widget on every page, and the
+  // frames of every page (the chart and thermostat draw callbacks).
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*l, m.w[i]);
+  for (int p = 0; p < tab::page_count(); p++) {
+    tab::go_to(p);
+    hh::advance(20);
+    lv_obj_invalidate(lv_screen_active());
+    hh::refresh();
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  CHECK_MSG(D::test_contrasts() == 0, std::to_string(D::test_contrasts()) + " contrasts");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 0);
+
+  // A text: no colour work.
+  reset();
+  CHECK_STR(set("[5,\"Off\"]"), "");
+  CHECK(D::test_contrasts() == 0 && counts().look_updates == 0 && counts().colour_updates == 0);
+
+  // `on` of three cards (2 and 7 on page 0, 55 on page 2): their records and
+  // their widgets', nothing else.
+  reset();
+  CHECK_STR(set("[2,0]"), "");
+  CHECK_MSG(counts().look_updates == 3, std::to_string(counts().look_updates));
+  CHECK_MSG(counts().colour_updates == (uint64_t) (c2->children + c7->children + c55->children), std::to_string(counts().colour_updates));
+  CHECK(D::test_contrasts() > 0);
+  CHECK(D::card_look(m, c2)->k.filled == 0 && D::card_look(m, c2)->k.background == D::card_look(m, c2)->t.bg);
+  looks_hold(m, "on 0");
+
+  // `tint` (slot 4 is also the c of the bars 6 and 11 in cards 2 and 7).
+  reset();
+  CHECK_STR(set("[4,255]"), "");
+  CHECK(counts().look_updates == 2 && D::card_look(m, c2)->tint == 255 && D::card_look(m, c7)->tint == 255);
+  looks_hold(m, "tint 0x0000ff");
+  // A colour slot with a value that is no colour: no tint.
+  for (const char *odd : {"1e9", "-1", "0.5", "16777216"}) {
+    CHECK_STR(set(std::string("[4,") + odd + "]"), "");
+    CHECK_MSG(D::card_look(m, c2)->has_tint == 0, odd);
+    looks_hold(m, std::string("tint ") + odd);
+  }
+  // Another value that is no colour changes no colour: the widgets of the
+  // two cards are not worked out again, but for the two bars whose own `c`
+  // is that slot.
+  reset();
+  CHECK_STR(set("[4,-2]"), "");
+  CHECK_MSG(counts().look_updates == 2 && counts().colour_updates == 2 && D::card_look(m, c2)->has_tint == 0,
+            std::to_string(counts().look_updates) + " " + std::to_string(counts().colour_updates));
+  CHECK_STR(set("[4,16711680]"), "");
+  CHECK(D::card_look(m, c2)->has_tint == 1);
+
+  // `un` of card 7.
+  reset();
+  CHECK_STR(set("[8,1]"), "");
+  CHECK(counts().look_updates == 1 && D::card_look(m, c7)->unavailable == 1);
+  looks_hold(m, "un 1");
+
+  // A widget's own c (label 50 on page 1, not on screen): its colours only.
+  reset();
+  D::Widget *lab = widget(50);
+  if (!CHECK(lab)) return;
+  CHECK_STR(set("[33,1382429]"), "");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 1);
+  const D::CardLook *k46 = D::card_look(m, D::card_of(m, *lab));
+  CHECK(lab->c_has && lab->c_now == D::legible(1382429, k46->k.background, k46->k.text));
+  looks_hold(m, "c of label 50");
+
+  // The same values again: nothing.
+  reset();
+  CHECK_STR(set("[2,0],[4,16711680],[8,1],[33,1382429]"), "");
+  CHECK(counts().look_updates == 0 && counts().colour_updates == 0 && D::test_contrasts() == 0);
+
+  // A repaint after all of it still works nothing out.
+  hh::advance(50);
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*l, m.w[i]);
+  CHECK(D::test_contrasts() == 0 && counts().look_updates == 0);
+}
+
+// LVGL lays the screen out again before the next frame (layout_update_core).
+static bool layout_pending() {
+  lv_obj_t *s = lv_screen_active();
+  return s && s->scr_layout_inv;
+}
+
+// The four repaint rules of cards spec B.4 for the parts of version 1: no
+// style call for a repaint with unchanged state; a tab_set paints only the
+// page on screen and marks the rest stale, which the timer's slices paint
+// (not in a tick that ran a build step), and the page's own before it
+// shows; a changed thermostat value, a changed `on` and a new text lay
+// nothing out.
+TEST(repaint_cost) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  const std::string all = layout_bytes("layout_all_cards.dl.json");
+  CHECK(ha.show(all));
+  CHECK_STR(ha.set(state_payload(0)), "");
+  hh::advance(100);
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  CHECK(tab::current_page() == 0 && l->stale == 0);
+  auto set = [&](const std::string &v) { return ha.set("{\"h\":\"4384f665e4dd9f62\",\"v\":[" + v + "]}"); };
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+
+  // Rules 2 and 3: a repaint with unchanged state sets nothing.
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  reset();
+  int painted = 0;
+  for (uint32_t i = 0; i < m.nw; i++)
+    if (m.w[i].obj) {
+      D::paint_widget(*l, m.w[i]);
+      painted++;
+    }
+  CHECK(painted > 60);
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending() && D::test_contrasts() == 0);
+
+  // Rule 1: a label and a thermostat of page 1 while page 0 is on screen.
+  D::Widget *lab = widget(32), *th = widget(49), *lab0 = widget(4);
+  if (!CHECK(lab && th && lab0 && lab->page == 1 && th->page == 1 && lab0->page == 0)) return;
+  const std::string before = label_text(lab->obj), th_before = label_text(th->o1);
+  reset();
+  CHECK_STR(set("[26,\"Changed\"],[36,22.5]"), "");
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(lab->stale && th->stale && l->stale == 2 && m.pages[1].stale == 2 && m.pages[0].stale == 0);
+  CHECK(label_text(lab->obj) == before && label_text(th->o1) == th_before);
+  // The slices paint them.
+  hh::advance(20);
+  CHECK(!lab->stale && !th->stale && l->stale == 0 && m.pages[1].stale == 0);
+  CHECK_STR(label_text(lab->obj), "Changed");
+  CHECK_STR(label_text(th->o1), "22.5");
+  CHECK(D::test_counts().style_sets > 0);
+  // A page shows only once what is stale on it is painted, slices or not.
+  CHECK_STR(set("[26,\"Again\"]"), "");
+  CHECK(lab->stale);
+  tab::go_to(1);
+  CHECK(!lab->stale && l->stale == 0);
+  CHECK_STR(label_text(lab->obj), "Again");
+  // The page on screen is painted at once, and page 0 now waits.
+  CHECK_STR(set("[26,\"Now\"],[3,\"Stale\"]"), "");
+  CHECK_STR(label_text(lab->obj), "Now");
+  CHECK(!lab->stale && lab0->stale);
+  hh::advance(20);
+  CHECK(!lab0->stale);
+  CHECK_STR(label_text(lab0->obj), "Stale");
+
+  // Rule 3: on the page on screen, a thermostat's new value (same size of
+  // text) and a label's text lay nothing out.
+  tab::go_to(0);
+  hh::advance(20);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::Widget *th0 = widget(23);
+  if (!CHECK(th0)) return;
+  CHECK_STR(set("[16,22.5]"), "");
+  CHECK_STR(label_text(th0->o1), "22.5");
+  CHECK(!layout_pending());
+  hh::refresh();
+  CHECK_STR(set("[3,\"A new text\"]"), "");
+  CHECK_STR(label_text(lab0->obj), "A new text");
+  CHECK(!layout_pending());
+  hh::refresh();
+
+  // Rule 1 again: no stale paint in a tick that ran a build step.
+  CHECK_STR(set("[26,\"During a build\"]"), "");
+  CHECK(lab->stale);
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK_STR(ha.send(kit), "");
+  CHECK_STR(ha.commit(sha_hex(kit).substr(0, 16)), "");
+  int ticks = 0;
+  for (int t = 0; t < 2000 && D::staged_layout() && D::staged_layout()->state == D::L_BUILDING; t++) {
+    hh::advance(1);
+    ticks++;
+    if (D::staged_layout() && D::staged_layout()->state == D::L_BUILDING) CHECK(lab->stale && l->stale == 1);
+  }
+  CHECK_MSG(ticks > 10, std::to_string(ticks) + " ms of building");
+
+  // A card's `on` lays nothing out either (card 2 of the kit: a badge, two
+  // labels and a bar; the switch that shares its slot is on page 2).
+  const std::string kh = sha_hex(kit).substr(0, 16);
+  CHECK(advance_until([&] { return kh == tab::active_hash(); }, 5000));
+  CHECK_STR(ha.set(fixture("state_v2.json")["steps"][0]["payloads"][0].s), "");
+  hh::advance(50);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::Widget *card2 = widget(2);
+  if (!CHECK(card2 && D::card_look(*active()->model, card2))) return;
+  CHECK(D::card_look(*active()->model, card2)->k.filled == 1);
+  reset();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[2,0]]}"), "");
+  CHECK(D::card_look(*active()->model, card2)->k.filled == 0);
+  CHECK(D::test_counts().style_sets > 0);
+  CHECK(!layout_pending());
+
+  // (package E6) A moving bar: no style call, no layout pass, and only the
+  // strip between the old and the new end of the fill is drawn again. The
+  // two bars of slot 7 (cards 1 and 2), and the upright one of card 3.
+  hh::refresh();
+  lv_display_t *disp = lv_display_get_default();
+  D::Widget *bar1 = widget(6), *bar2 = widget(11), *up = widget(15);
+  if (!CHECK(bar1 && bar2 && up && bar1->sl_pos == (int) D::px_round(0.8 * 344))) return;
+  // The rectangles drawn again, as the parts of each that meet r.
+  auto redrawn = [&](const int16_t r[4], int *along) {
+    int from = 1 << 20, to = -(1 << 20), n = 0;
+    for (uint32_t i = 0; i < disp->inv_p; i++) {
+      if (disp->inv_area_joined[i]) continue;
+      const lv_area_t &a = disp->inv_areas[i];
+      if (a.x2 < r[0] || a.x1 >= r[0] + r[2] || a.y2 < r[1] || a.y1 >= r[1] + r[3]) continue;
+      n++;
+      from = std::min(from, (int) a.x1);
+      to = std::max(to, (int) a.x2 + 1);
+    }
+    *along = to - from;
+    return n;
+  };
+  reset();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,70]]}"), "");
+  CHECK(bar1->sl_pos == (int) D::px_round(0.7 * 344) && bar2->sl_pos == bar1->sl_pos);
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending());
+  int along = 0;
+  // 34 px moved, with the radius, the handle and a pixel each side: under 60.
+  CHECK(redrawn(bar1->r, &along) >= 1 && along > 34 && along < 60);
+  CHECK(redrawn(bar2->r, &along) >= 1 && along > 34 && along < 60);
+  hh::refresh();
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,75]]}"), "");
+  CHECK(redrawn(up->r, &along) >= 1 && along <= up->r[2] + 28);
+  int tall = 1 << 20, top = -(1 << 20);
+  for (uint32_t i = 0; i < disp->inv_p; i++) {
+    const lv_area_t &a = disp->inv_areas[i];
+    if (disp->inv_area_joined[i] || a.x2 < up->r[0] || a.x1 >= up->r[0] + up->r[2]) continue;
+    tall = std::min(tall, (int) a.y1);
+    top = std::max(top, (int) a.y2 + 1);
+  }
+  CHECK_MSG(top - tall < 40, std::to_string(top - tall) + " rows of the upright bar");  // 10 px moved
+  CHECK(!layout_pending() && D::test_counts().style_sets == 0);
+  hh::refresh();
+  // The same value again draws nothing.
+  CHECK_STR(ha.set("{\"h\":\"" + kh + "\",\"v\":[[7,75]]}"), "");
+  CHECK(redrawn(bar1->r, &along) == 0 && redrawn(up->r, &along) == 0);
+}
+
+// ================================================================ cards as buttons (package E4)
+//
+// Contract 4.3 ("Who gets a press") and 7.4, cards spec B.5: the tap of a
+// card, its pressed look, pulse and waiting outline, the border of `lit` 2,
+// the optimistic bool per slot, `un`, `vis`, the hold, and the press that is
+// lost. The kit's ids and rectangles are those of layout_v2_kit.dl.json.
+
+static std::string kit_hash() { return sha_hex(layout_bytes("layout_v2_kit.dl.json")).substr(0, 16); }
+
+// The slot values of an input_v2.json case as a full snapshot.
+static std::string snapshot_of(const tj::Value &slots, const std::string &hash) {
+  std::string v;
+  for (const tj::Value &s : slots.a) {
+    if (!v.empty()) v += ',';
+    v += "[" + json_text(s[0]) + "," + json_text(s[1]) + "]";
+  }
+  return "{\"f\":1,\"h\":\"" + hash + "\",\"v\":[" + v + "]}";
+}
+
+static std::vector<std::string> fields_of(const std::string &d) {
+  std::vector<std::string> f;
+  size_t at = 0;
+  for (size_t bar = d.find('|'); bar != std::string::npos; bar = d.find('|', at)) {
+    f.push_back(d.substr(at, bar - at));
+    at = bar + 1;
+  }
+  f.push_back(d.substr(at));
+  return f;
+}
+
+// The inputs sent so far as "<id><event>" words: "2t 6c".
+static std::string sent_words() {
+  std::string s;
+  for (const auto &e : fake::events("tab1_input")) {
+    const auto f = fields_of(e.d);
+    if (f.size() != 9) return "(bad input " + e.d + ")";
+    if (!s.empty()) s += ' ';
+    s += f[5] + f[6];
+  }
+  return s;
+}
+
+// The value field of the last input sent, or "" for none.
+static std::string last_input_value() {
+  const auto ev = fake::events("tab1_input");
+  if (ev.empty()) return "";
+  const auto f = fields_of(ev.back().d);
+  return f.size() == 9 ? f[6] + "=" + f[8] : "";
+}
+
+static uint32_t last_input_counter() {
+  const auto ev = fake::events("tab1_input");
+  if (ev.empty()) return 0;
+  const auto f = fields_of(ev.back().d);
+  return f.size() == 9 ? (uint32_t) atoi(f[3].c_str()) : 0;
+}
+
+static void finger(int x, int y, bool down) {
+  hh::g_x = x;
+  hh::g_y = y;
+  hh::g_down = down;
+}
+
+// A press at one point held `ms`, then the release and 40 ms after it.
+static void press_for(int x, int y, uint32_t ms) {
+  finger(x, y, true);
+  hh::advance(ms);
+  finger(x, y, false);
+  hh::advance(40);
+}
+
+// The touches, values and acks of an input_v2.json case, each at its time
+// from now; then 200 ms for the release to be read.
+static void play_case(Ha &ha, const tj::Value &cs, const std::string &hash) {
+  struct Ev {
+    uint32_t ms;
+    int kind;  // 0 touch, 1 tab_set, 2 ack
+    const tj::Value *v;
+  };
+  std::vector<Ev> evs;
+  for (const tj::Value &t : cs["touch"].a) evs.push_back({(uint32_t) t[0].n, 0, &t});
+  for (const tj::Value &s : cs["sets"].a) evs.push_back({(uint32_t) s[0].n, 1, &s});
+  for (const tj::Value &a : cs["acks"].a) evs.push_back({(uint32_t) a[0].n, 2, &a});
+  std::stable_sort(evs.begin(), evs.end(), [](const Ev &a, const Ev &b) { return a.ms < b.ms; });
+  const uint32_t t0 = hh::g_ms;
+  for (const Ev &e : evs) {
+    if (t0 + e.ms > hh::g_ms) hh::advance(t0 + e.ms - hh::g_ms);
+    const tj::Value &v = *e.v;
+    if (e.kind == 0) {
+      finger((int) v[2].n, (int) v[3].n, v[1].s == "up" ? false : v[1].s == "down" ? true : hh::g_down);
+    } else if (e.kind == 1) {
+      std::string pairs;
+      for (const tj::Value &p : v[1].a) pairs += (pairs.empty() ? "[" : ",[") + json_text(p[0]) + "," + json_text(p[1]) + "]";
+      CHECK_STR(ha.set("{\"h\":\"" + hash + "\",\"v\":[" + pairs + "]}"), "");
+    } else {
+      ha.ack(last_input_counter(), v[1].b, v[2].s);
+    }
+  }
+  hh::advance(200);
+}
+
+// What a played case did against what it expects; empty when all holds.
+static std::vector<std::string> case_misses(const tj::Value &cs, const std::string &hash) {
+  std::vector<std::string> miss;
+  const auto ev = fake::events("tab1_input");
+  const tj::Value &want = cs["events"];
+  if (ev.size() != want.size())
+    miss.push_back("sent \"" + sent_words() + "\", want " + std::to_string(want.size()) + " inputs");
+  for (size_t i = 0; i < ev.size() && i < want.size(); i++) {
+    const auto f = fields_of(ev[i].d);
+    const tj::Value &w = want[i];
+    const bool value_ok = w[3].is_null() ? f.size() == 9 && f[8].empty()
+                                         : f.size() == 9 && !f[8].empty() && atof(f[8].c_str()) == w[3].n;
+    if (f.size() != 9 || f[4] != hash || f[5] != std::to_string((uint32_t) w[0].n) || f[6] != w[1].s ||
+        f[7] != std::to_string((int) w[2].n) || !value_ok)
+      miss.push_back("input " + std::to_string(i) + " is " + ev[i].d);
+  }
+  if (tab::current_page() != (int) cs["end_page"].n)
+    miss.push_back("ends on page " + std::to_string(tab::current_page()) + ", want " + cs["end_page"].s);
+  if (!hidden(D::g.question) != (cs["question"].n == 1)) miss.push_back("question box");
+  if (cs.has("counter") && cs.has("payload") && !ev.empty() &&
+      (ev[0].d != cs["payload"]["d"].s || ev[0].s != cs["payload"]["s"].s))
+    miss.push_back("payload " + ev[0].d + " " + ev[0].s);
+  return miss;
+}
+
+// One case on a fresh, paired tablet with a session, on its page and with
+// its values (input_v2.json "note").
+static std::vector<std::string> run_input_case(const tj::Value &cs) {
+  Ha ha;
+  ha.boot(true);
+  if (!ha.hello()) return {"no session"};
+  if (!ha.show(layout_bytes("layout_v2_kit.dl.json"))) return {"the kit is not on screen"};
+  const std::string hash = kit_hash();
+  if (!ha.set(snapshot_of(cs["slots"], hash)).empty()) return {"the snapshot is refused"};
+  tab::go_to((int) cs["page"].n);
+  hh::advance(50);
+  fake::st.events.clear();
+  if (cs.has("counter")) D::g.counter = (uint32_t) cs["counter"].n - 1;
+  play_case(ha, cs, hash);
+  return case_misses(cs, hash);
+}
+
+// Touch cases that need a part of a later package: each is played and
+// reported, and is not a failure yet. The package turns it green and takes
+// it off this list.
+// None is left since package E9 (pages).
+static const std::vector<std::pair<const char *, const char *>> INPUT_LATER = {};
+
+static const char *input_later(const std::string &name) {
+  for (const auto &row : INPUT_LATER)
+    if (name == row.first) return row.second;
+  return nullptr;
+}
+
+// Every touch case of input_v2.json (contract 4.3 and 7.4): the touches at
+// their points and times, with the tab_set a case sends mid-press, emit
+// exactly the listed inputs, end on the listed page, with the question box
+// as listed; a case with a counter emits the payload of the fixture.
+TEST(input_v2_fixture) {
+  const tj::Value file = fixture("input_v2.json");
+  CHECK_STR(file["layout"].s, "layout_v2_kit");
+  CHECK_STR(file["hash"].s, kit_hash());
+  CHECK_STR(file["mac"].s, fake::MAC);
+  CHECK_STR(file["nonce"].s, NONCE);
+  CHECK_STR(file["secret_hex"].s, SECRET_HEX);
+  int run = 0, later = 0, counted = 0;
+  std::vector<std::string> seen;
+  for (const tj::Value &cs : file["cases"].a) {
+    if (!cs.has("touch")) continue;  // the cases for Home Assistant alone
+    const std::string name = cs["name"].s;
+    seen.push_back(name);
+    const auto miss = run_input_case(cs);
+    if (const char *pkg = input_later(name)) {
+      later++;
+      printf("  %s: package %s, %s\n", name.c_str(), pkg, miss.empty() ? "passes already" : miss[0].c_str());
+      continue;
+    }
+    run++;
+    if (cs.has("counter")) counted++;
+    std::string all;
+    for (const auto &m : miss) all += m + "; ";
+    CHECK_MSG(miss.empty(), name + ": " + all);
+  }
+  for (const auto &row : INPUT_LATER)
+    CHECK_MSG(std::find(seen.begin(), seen.end(), row.first) != seen.end(), std::string(row.first) + " is no case");
+  printf("  %d cases run, %d for later packages, %d with their payload\n", run, later, counted);
+  CHECK(run >= 45 && counted >= 4 && run + later == (int) seen.size());
+}
+
+// The kit on a paired tablet with a session, page 0 on screen, and the
+// values of the first case of input_v2.json; or another layout without
+// values.
+struct KitRig {
+  Ha ha;
+  std::string hash;
+  bool up(const std::string &bytes = "", bool values = true) {
+    const std::string b = bytes.empty() ? layout_bytes("layout_v2_kit.dl.json") : bytes;
+    ha.boot(true);
+    if (!ha.hello() || !ha.show(b)) return false;
+    hash = sha_hex(b).substr(0, 16);
+    if (values && !ha.set(snapshot_of(fixture("input_v2.json")["cases"][0]["slots"], hash)).empty()) return false;
+    hh::advance(50);
+    fake::st.events.clear();
+    return true;
+  }
+  std::string set(const std::string &v) { return ha.set("{\"h\":\"" + hash + "\",\"v\":[" + v + "]}"); }
+  // A clean start for the next press: feedback over, nothing sent so far.
+  void settle() {
+    hh::advance(4500);
+    if (!hidden(D::g.question)) D::question_answer(false);
+    fake::st.events.clear();
+  }
+};
+
+// The table "Who gets a press" of contract 4.3, row by row, on the kit's
+// "Routing" card (page 1: tap and hold, a thermostat with change, a swap of
+// two buttons, labels, a bar that only shows, a switch) and card 2 (page 0).
+// The gap of a `choice` is in choice_feedback and input_v2_fixture.
+TEST(card_tap_and_children) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Widget *c2 = widget(2), *c12 = widget(12), *c46 = widget(46);
+  if (!CHECK(c2 && c12 && c46)) return;
+  // A card with tap or hold is a button; one without is not.
+  CHECK(clickable(c2->obj) && clickable(c46->obj) && !clickable(c12->obj));
+  tab::go_to(1);
+  hh::advance(20);
+  struct Row {
+    const char *what;
+    const char *set;  // values before the press, or ""
+    int x, y;
+    const char *sent;
+  };
+  const Row rows[] = {
+      {"a child with tap is never the card's", "", 1036, 628, "53t"},
+      {"a label is the card's", "", 1124, 554, "46t"},
+      {"a label with its own colour is the card's", "", 1124, 518, "46t"},
+      {"a bar that only shows is the card's", "", 1124, 588, "46t"},
+      {"so is the same bar faded for want of a value", "[34,null]", 1124, 588, "46t"},
+      {"the body of a thermostat is the card's", "[34,40]", 888, 546, "46t"},
+      {"a thermostat's button is the button's", "", 970, 626, "47c"},
+      {"a faded switch swallows the press", "[35,null]", 1036, 628, ""},
+      {"the card outside its widgets", "[35,1]", 1200, 420, "46t"},
+  };
+  for (const Row &r : rows) {
+    if (*r.set) CHECK_STR(rig.set(r.set), "");
+    hh::tap(r.x, r.y);
+    hh::advance(20);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.what) + ": sent \"" + sent_words() + "\"");
+    CHECK(tab::current_page() == 1);
+    rig.settle();
+  }
+  // Drift on card 2: 20 px, 13 px and back, 9 and 9 are no tap; 8 and 8 is
+  // (11.3 px). None of these is a swipe.
+  tab::go_to(0);
+  hh::advance(20);
+  struct Drift {
+    int dx, dy, back;
+    const char *sent;
+  };
+  const Drift drifts[] = {{20, 0, 0, ""}, {13, 0, 1, ""}, {9, 9, 0, ""}, {8, 8, 0, "2t"}, {0, 11, 0, "2t"}, {0, 12, 0, ""}};
+  for (const Drift &d : drifts) {
+    finger(300, 240, true);
+    hh::advance(30);
+    finger(300 + d.dx, 240 + d.dy, true);
+    hh::advance(30);
+    if (d.back) finger(300, 240, true);
+    hh::advance(40);
+    finger(hh::g_x, hh::g_y, false);
+    hh::advance(40);
+    CHECK_MSG(sent_words() == d.sent, std::to_string(d.dx) + "," + std::to_string(d.dy) + (d.back ? " and back" : "") +
+                                          ": sent \"" + sent_words() + "\"");
+    CHECK(tab::current_page() == 0 && !c2->pressed);
+    rig.settle();
+  }
+  // A swipe that starts on a card taps nothing and shows no pressed look:
+  // it has moved 12 px before the 80 ms are over.
+  bool looked = false;
+  finger(300, 240, true);
+  for (int i = 1; i <= 25; i++) {
+    hh::advance(25);
+    finger(300 - 6 * i, 240, true);
+    looked |= c2->pressed != 0;
+  }
+  finger(hh::g_x, hh::g_y, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && sent_words().empty() && !looked);
+}
+
+// A theme whose every role has its own colour, so a check of one role
+// cannot pass on another (a layout without a theme has every role 0).
+static const char *DISTINCT_THEME =
+    "\"theme\":{\"wall\":1052688,\"card\":2105376,\"card_pr\":3158064,\"card2\":4210752,\"card2_pr\":5263440,"
+    "\"line\":6316128,\"tx\":14737632,\"tx2\":10526880,\"acc\":16711680,\"accf\":65280,\"accf_pr\":43520,"
+    "\"acct\":255,\"acc2\":16711935,\"onbg\":7360512,\"onbg_pr\":8413184,\"ontx\":16777200,\"ion\":65535,"
+    "\"dark\":1,\"r\":16,\"r2\":10,\"bw\":0},";
+
+// A layout of two pages in DISTINCT_THEME: page 0 holds card 1 with
+// `card_keys` and the widgets `widgets`, page 1 a heading. Slots `slots`.
+static std::string two_pages(const std::string &card_keys, const std::string &widgets, const std::string &slots,
+                             const std::string &style = "") {
+  return std::string("{") + DISTINCT_THEME + "\"screen\":[1280,800]," +
+         "\"nav\":[{\"p\":0,\"title\":\"P\"},{\"p\":1,\"title\":\"Q\"}],\"pages\":[{\"title\":\"P\",\"w\":[{" + card_keys +
+         (style.empty() ? "" : "\"style\":" + style + ",") +
+         "\"hr\":[116,100,536,32],\"icon\":983861,\"id\":1,\"r\":[100,84,568,400],\"t\":\"card\",\"title\":\"Lamp\","
+         "\"w\":[" + widgets + "]}]},{\"title\":\"Q\",\"w\":[{\"id\":90,\"r\":[100,20,568,56],\"t\":\"heading\","
+         "\"text\":\"Q\"}]}],\"slots\":\"" + slots + "\",\"v\":2}";
+}
+
+// A light card: `on` and a switch and a button on slot 1, another switch on
+// slot 2, a label (slots "bbn").
+static const char *LAMP_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,200,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":1}},"
+    "{\"id\":3,\"r\":[116,200,200,48],\"t\":\"button\",\"tap\":{\"p\":0},\"text\":\"On\",\"value\":{\"s\":1}},"
+    "{\"id\":4,\"r\":[116,260,200,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"id\":5,\"r\":[116,320,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Label\"}";
+
+static uint32_t text_colour(lv_obj_t *o) {
+  return o ? lv_color_to_u32(lv_obj_get_style_text_color(o, LV_PART_MAIN)) & 0xFFFFFF : 0;
+}
+
+static uint32_t bg_colour(lv_obj_t *o) {
+  return o ? lv_color_to_u32(lv_obj_get_style_bg_color(o, LV_PART_MAIN)) & 0xFFFFFF : 0;
+}
+
+static int knob_at(D::Widget *w) {
+  lv_obj_update_layout(w->o2);
+  return (int) lv_obj_get_x(w->o2);
+}
+
+// Contract 7.4 for a card with tap: policy 0 with a bound `on` shows the
+// other state at once and goes back on an ack that is not ok or after 4 s
+// without one; the optimistic bool is per slot inside the card, on the card,
+// its switches and its buttons together; without a value for `on`, and
+// without `on`, the waiting outline; policy 1 the pulse; policy 2 the
+// outline until a value of the card changes; policy 3 the question, then
+// the outline. And the pressed look, 80 ms after the touch.
+TEST(card_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,1],[2,0],[3,5]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *sw = widget(2), *bt = widget(3), *sw2 = widget(4);
+  if (!CHECK(card && sw && bt && sw2)) return;
+  auto filled = [&] { return D::card_look(m, card)->k.filled == 1; };
+  auto agree = [&](bool on) {
+    return filled() == on && knob_at(sw) == (on ? 32 : 4) && D::button_selected(m, *bt) == on && knob_at(sw2) == 4;
+  };
+  CHECK(agree(true));
+  // The card's tap: the other state at once, on the card, the switch and
+  // the button of its slot, not on the switch of another slot. The card's
+  // colours are worked out once.
+  D::test_counts() = D::TestCounts{};
+  hh::tap(500, 420);
+  CHECK_STR(sent_words(), "1t");
+  CHECK(card->ovr == 1 && card->ovr_slot == 1 && card->fb == 0 && agree(false));
+  CHECK_MSG(D::test_counts().look_updates == 1, std::to_string(D::test_counts().look_updates));
+  // A repaint with that state works nothing out.
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_contrasts() == 0);
+  // An ack that is not ok: back at once.
+  rig.ha.ack(last_input_counter(), false, "failed");
+  CHECK(card->ovr == 0 && agree(true));
+  // No ack: back after 4 s.
+  hh::tap(500, 420);
+  hh::advance(3800);
+  CHECK(agree(false));
+  hh::advance(300);
+  CHECK(agree(true));
+  // An ok ack: the state stays until the value comes.
+  hh::tap(500, 420);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(card->ovr == 2 && agree(false));
+  CHECK_STR(rig.set("[1,0]"), "");
+  CHECK(card->ovr == 0 && agree(false));
+  // The switch's tap: the card and the button follow.
+  rig.settle();
+  hh::tap(centre_x(sw->r), centre_y(sw->r));
+  CHECK_STR(sent_words(), "2t");
+  CHECK(card->ovr_slot == 1 && agree(true));
+  rig.ha.ack(last_input_counter(), false, "failed");
+  CHECK(agree(false));
+  // The button's tap: the card and the switch follow.
+  rig.settle();
+  hh::tap(centre_x(bt->r), centre_y(bt->r));
+  CHECK_STR(sent_words(), "3t");
+  CHECK(agree(true));
+  hh::advance(4100);
+  CHECK(agree(false));
+  // The switch of slot 2 flips alone.
+  rig.settle();
+  hh::tap(centre_x(sw2->r), centre_y(sw2->r));
+  CHECK(knob_at(sw2) == 32 && knob_at(sw) == 4 && !filled() && card->ovr_slot == 2);
+  rig.settle();
+  // The switch of slot 2 while the card's own tap waits: the card, the
+  // switch and the button of slot 1 keep the card's flip; each ends alone.
+  CHECK(agree(false));
+  hh::tap(500, 420);
+  CHECK(card->ovr == 1 && agree(true));
+  hh::tap(centre_x(sw2->r), centre_y(sw2->r));
+  CHECK_STR(sent_words(), "1t 4t");
+  CHECK(card->ovr == 1 && card->ovr_slot == 2 && knob_at(sw2) == 32);
+  CHECK(filled() && knob_at(sw) == 32 && D::button_selected(m, *bt));
+  rig.ha.ack(last_input_counter(), false, "failed");  // the switch's
+  CHECK(card->ovr == 1 && agree(true));
+  hh::advance(4100);
+  CHECK(card->ovr == 0 && agree(false));
+  rig.settle();
+  // `on` without a value: the waiting outline, 2 px in acc, until the ack.
+  CHECK_STR(rig.set("[1,null]"), "");
+  const D::CardLook *k = D::card_look(m, card);
+  CHECK(k->k.A == 0xFF0000 && k->k.FI == 0x00FFFF);  // acc and ion of DISTINCT_THEME
+  hh::tap(500, 420);
+  CHECK_STR(sent_words(), "1t");
+  CHECK(card->fb == 1 && card->ovr == 0);
+  CHECK(lv_obj_get_style_outline_width(card->obj, LV_PART_MAIN) == 2 &&
+        (lv_color_to_u32(lv_obj_get_style_outline_color(card->obj, LV_PART_MAIN)) & 0xFFFFFF) == k->k.A);
+  rig.ha.ack(last_input_counter(), true, "");
+  CHECK(card->fb == 0 && lv_obj_get_style_outline_width(card->obj, LV_PART_MAIN) == 0);
+  // While filled the outline is ion.
+  CHECK_STR(rig.set("[1,1]"), "");
+  D::start_feedback(*active(), *card, 2, 't', false, 0);
+  CHECK((lv_color_to_u32(lv_obj_get_style_outline_color(card->obj, LV_PART_MAIN)) & 0xFFFFFF) == k->k.FI);
+  // Policy 2: until a value of the card changes (here the switch of slot 2).
+  CHECK(card->fb == 1);
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(card->fb == 0);
+
+  // A card without `on`: the waiting outline.
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,1],[2,0]"), "");
+  card = widget(1);
+  hh::tap(500, 420);
+  CHECK(sent_words() == "1t" && card->fb == 1 && card->ovr == 0);
+  hh::advance(4100);
+  CHECK(card->fb == 0);
+
+  // Policy 1, the pulse: accf for 300 ms; the header and the labels acct.
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tap\":{\"p\":1},", LAMP_WIDGETS, "bbn"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  D::Model &m1 = *active()->model;
+  card = widget(1);
+  D::Widget *lab = widget(5);
+  k = D::card_look(m1, card);
+  // accf and acct of DISTINCT_THEME, each unlike what the card shows at rest.
+  CHECK(k->k.AF == 0x00FF00 && k->k.AT == 0x0000FF && k->t.bg == 0x202020);
+  CHECK(k->k.text != k->k.AT && k->k.header_icon != k->k.AT && k->k.F != k->k.AF);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  hh::tap(500, 420);
+  CHECK(sent_words() == "1t" && card->fb == 2);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->k.AF));
+  CHECK(text_colour(lab->obj) == k->k.AT && text_colour(card->o1) == k->k.AT && text_colour(card->o2) == k->k.AT);
+  hh::advance(320);
+  hh::refresh();
+  CHECK(card->fb == 0 && hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  CHECK(text_colour(lab->obj) == k->k.text && text_colour(card->o1) == k->k.header_icon);
+
+  // Policy 3, and cf: the question, then the outline.
+  if (!CHECK(rig.up(two_pages("\"confirm\":\"Sure?\",\"on\":{\"s\":1},\"tap\":{\"p\":3},", LAMP_WIDGETS, "bbn"), false)))
+    return;
+  CHECK_STR(rig.set("[1,1],[2,0]"), "");
+  card = widget(1);
+  hh::tap(500, 420);
+  CHECK(sent_words().empty() && !hidden(D::g.question) && card->fb == 0 && card->ovr == 0);
+  CHECK_STR(label_text(D::g.q_text), "Sure?");
+  hh::tap(776, 456);  // Yes
+  CHECK(fake::events("tab1_input").size() == 1 && fake::events("tab1_input")[0].d.find("|1|t|1|") != std::string::npos);
+  CHECK(card->fb == 1 && card->ovr == 0 && D::card_look(*active()->model, card)->k.filled == 1);
+
+  // The pressed look: 80 ms after the touch, card_pr (on: onbg_pr), gone at
+  // the release; not after 12 px of movement.
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"go\":1},\"on\":{\"s\":1},\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn"), false)))
+    return;
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  D::Model &m3 = *active()->model;
+  card = widget(1);
+  k = D::card_look(m3, card);
+  CHECK(k->pr == k->t.card_pr && k->pr == 0x303030 && k->t.bg == 0x202020 && k->k.FP == 0x806000);
+  finger(500, 420, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  const uint32_t at = D::g.press_at;
+  hh::advance(at + 79 - hh::g_ms);
+  CHECK(!card->pressed);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->t.bg));
+  hh::advance(6);
+  CHECK(card->pressed);
+  hh::refresh();
+  CHECK(hh::pixel(560, 440) == hh::rgb565(k->pr));
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(!card->pressed && sent_words() == "1t");
+  hh::refresh();
+  rig.settle();
+  CHECK_STR(rig.set("[1,1]"), "");
+  finger(500, 420, true);
+  hh::advance(120);
+  hh::refresh();
+  CHECK(card->pressed && hh::pixel(560, 440) == hh::rgb565(k->k.FP));
+  // Moved 12 px: the look goes, and the release is no tap.
+  finger(512, 420, true);
+  hh::advance(20);
+  CHECK(!card->pressed);
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  bool looked = false;
+  finger(500, 420, true);
+  hh::advance(30);
+  finger(500, 433, true);
+  for (int i = 0; i < 100; i++) {
+    hh::advance(5);
+    looked |= card->pressed != 0;
+  }
+  finger(500, 433, false);
+  hh::advance(40);
+  CHECK(!looked && sent_words().empty());
+  // A style with bg and no card_pr: mix(tx, bg, 90).
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":0},", LAMP_WIDGETS, "bbn", "{\"bg\":2105392}"), false))) return;
+  card = widget(1);
+  k = D::card_look(*active()->model, card);
+  CHECK(k->t.bg == 2105392 && k->pr == D::mix(k->t.tx, 2105392, 90) && k->pr != k->t.card_pr);
+  finger(500, 420, true);
+  hh::advance(120);
+  hh::refresh();
+  CHECK(card->pressed && hh::pixel(560, 440) == hh::rgb565(k->pr));
+  finger(500, 420, false);
+  hh::advance(40);
+}
+
+// The border of `lit` 2 (contract 4.7): while `on` is 1, `acc` and at least
+// 2 wide, drawn over the card's own border without changing the object's
+// border width, so no widget of the card moves and nothing is laid out.
+TEST(lit2_border) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *c7 = widget(7), *img = widget(8);
+  if (!CHECK(c7 && img)) return;
+  const D::CardLook *k = D::card_look(m, c7);
+  CHECK(k->t.bw == 0 && c7->lit == 2);
+  CHECK(k->k.lit_on == 1 && k->k.border_width == 2 && k->k.border == k->k.A && c7->ring == 2);
+  CHECK(lv_obj_get_style_border_width(c7->obj, LV_PART_MAIN) == 0);
+  hh::refresh();
+  const int y = 84 + 124;
+  CHECK(hh::pixel(484, y) == hh::rgb565(k->k.A) && hh::pixel(485, y) == hh::rgb565(k->k.A));
+  CHECK(hh::pixel(486, y) == hh::rgb565(k->t.bg));
+  const std::string before = rect_text(img->obj);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  CHECK_STR(rig.set("[2,0]"), "");
+  CHECK(c7->ring == 0 && k->k.border_width == 0 && !layout_pending());
+  hh::refresh();
+  CHECK(hh::pixel(484, y) == hh::rgb565(k->t.bg));
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(c7->ring == 2 && !layout_pending());
+  hh::refresh();
+  CHECK(hh::pixel(485, y) == hh::rgb565(k->k.A));
+  CHECK_STR(rect_text(img->obj), before);
+  CHECK(lv_obj_get_style_border_width(c7->obj, LV_PART_MAIN) == 0);
+  // A border of 1 becomes 2; one of 3 stays 3, and nothing is drawn over it.
+  for (int bw : {1, 3}) {
+    const std::string style = "{\"bw\":" + std::to_string(bw) + "}";
+    if (!CHECK(rig.up(two_pages("\"lit\":2,\"on\":1,", LAMP_WIDGETS, "bbn", style), false))) return;
+    D::Widget *c = widget(1);
+    k = D::card_look(*active()->model, c);
+    CHECK_MSG(k->k.border_width == (bw > 2 ? bw : 2) && c->ring == (bw > 2 ? 0 : 2), std::to_string(bw));
+    CHECK(lv_obj_get_style_border_width(c->obj, LV_PART_MAIN) == bw);
+    hh::refresh();
+    CHECK_MSG(hh::pixel(100, 284) == hh::rgb565(k->k.A) && hh::pixel(101, 284) == hh::rgb565(k->k.A),
+              std::to_string(bw));
+    CHECK_MSG(hh::pixel(100 + (bw > 2 ? bw : 2), 284) == hh::rgb565(k->t.bg), std::to_string(bw));
+  }
+}
+
+// A hold (contract 4.3 and 7.4): 500 ms opens the page that the table names,
+// sends nothing, and the release is no tap; 499 ms is a tap; 12 px of
+// movement is no hold. None on a slider with change, a thermostat's button
+// or a `choice` with change; yes on a thermostat's body, on a button with
+// tap (the card's page), on a label with its own hold. None during the erase
+// watch: such a press releases as the card's tap.
+TEST(hold_is_not_a_tap) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  // Released before 500 ms on card 2 (tap and hold): a tap. The release is
+  // read up to one touch period (16 ms) after the finger goes.
+  finger(300, 240, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  hh::advance(D::g.press_at + 499 - 16 - hh::g_ms);
+  CHECK(tab::current_page() == 0);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  rig.settle();
+  // 500 ms: page 3, nothing sent, no tap at the release.
+  finger(300, 240, true);
+  hh::advance(1);
+  CHECK(advance_until([] { return D::g.tracking; }, 10));
+  hh::advance(D::g.press_at + 499 - hh::g_ms);
+  CHECK(tab::current_page() == 0);
+  hh::advance(D::TICK_MS + 1);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  hh::advance(500);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  tab::go_to(0);
+  hh::advance(20);
+  // 13 px and back: no hold, and no tap.
+  finger(300, 240, true);
+  hh::advance(30);
+  finger(313, 240, true);
+  hh::advance(30);
+  finger(300, 240, true);
+  hh::advance(700);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words().empty());
+  struct Row {
+    const char *what;
+    int page, x, y, end;
+    const char *sent;
+  };
+  const Row rows[] = {
+      {"a slider with change: none, its release sends", 0, 288, 292, 0, "6c"},
+      {"a widget with only hold: its own", 0, 996, 636, 4, ""},
+      {"a thermostat's button: none, the button sends", 1, 970, 626, 1, "47c"},
+      {"the body of a thermostat: the card's", 1, 888, 546, 4, ""},
+      {"a button with tap and no hold: the card's", 1, 1124, 472, 4, ""},
+      {"a label: the card's", 1, 1124, 554, 4, ""},
+      {"a card without hold: none, the release is its tap", 1, 520, 540, 1, "41t"},
+  };
+  for (const Row &r : rows) {
+    tab::go_to(r.page);
+    hh::advance(20);
+    press_for(r.x, r.y, 700);
+    CHECK_MSG(tab::current_page() == r.end && sent_words() == r.sent,
+              std::string(r.what) + ": page " + std::to_string(tab::current_page()) + ", sent \"" + sent_words() + "\"");
+    rig.settle();
+  }
+  // A label with its own hold in a card without one; a `choice` with
+  // change in a card with one: no hold, and the release in the cell it went
+  // down in sends the option; a hold of the form {"p": n} is no hold.
+  const std::string widgets =
+      "{\"hold\":{\"go\":1},\"id\":2,\"r\":[116,140,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Hold me\"},"
+      "{\"change\":{\"p\":0},\"id\":3,\"r\":[116,200,536,48],\"t\":\"choice\",\"texts\":[\"A\",\"B\"],\"value\":{\"s\":1}}";
+  if (!CHECK(rig.up(two_pages("", widgets, "n"), false))) return;
+  CHECK(widget(2)->hold == 2 && !clickable(widget(1)->obj));
+  press_for(200, 154, 700);
+  CHECK(tab::current_page() == 1);
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"go\":1},", widgets, "n"), false))) return;
+  press_for(300, 224, 700);
+  CHECK(tab::current_page() == 0 && sent_words() == "3c" && last_input_value() == "c=0");
+  rig.settle();
+  press_for(500, 420, 700);
+  CHECK(tab::current_page() == 1);
+  if (!CHECK(rig.up(two_pages("\"hold\":{\"p\":0},\"tap\":{\"p\":1},", widgets, "n"), false))) return;
+  CHECK(widget(1)->hold == 0);
+  press_for(500, 420, 700);
+  CHECK(tab::current_page() == 0 && sent_words() == "1t");
+  // No hold while the question is open, also over a card with one.
+  if (!CHECK(rig.up(two_pages("\"confirm\":\"Sure?\",\"hold\":{\"go\":1},\"tap\":{\"p\":3},", widgets, "n"), false)))
+    return;
+  hh::tap(500, 420);
+  CHECK(!hidden(D::g.question) && D::g.q_open);
+  finger(500, 420, true);
+  hh::advance(700);
+  CHECK(tab::current_page() == 0 && !hidden(D::g.question));
+  finger(500, 420, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words().empty());
+  rig.settle();
+
+  // The erase watch: a press that begins in the first 10 s after power-on
+  // opens no page, and its release is the card's tap; after the watch the
+  // same press opens the page.
+  shutdown();
+  reset_platform();
+  memcpy(fake::st.secret, rig.ha.secret, 32);
+  fake::st.have_secret = true;
+  fake::st.powered_on_at = hh::g_ms;
+  start();
+  rig.ha.paired = true;
+  rig.ha.hellos = 0;
+  rig.ha.nonce = NONCE;
+  CHECK(rig.ha.hello());
+  const std::string kit = layout_bytes("layout_v2_kit.dl.json");
+  CHECK(rig.ha.show(kit));
+  rig.hash = kit_hash();
+  CHECK_STR(rig.ha.set(snapshot_of(fixture("input_v2.json")["cases"][0]["slots"], rig.hash)), "");
+  hh::advance(50);
+  fake::st.events.clear();
+  CHECK(D::g.erase_timer != nullptr && uptime() < D::ERASE_ARM_MS - 1000);
+  press_for(300, 240, 600);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  // Also when the watch ends under the finger: the press began in it.
+  fake::st.events.clear();
+  finger(300, 240, true);
+  hh::advance(30);
+  CHECK(D::g.tracking && D::g.press_in_watch);
+  D::erase_stop();
+  hh::advance(700);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 0 && sent_words() == "2t");
+  advance_to_uptime(D::ERASE_ARM_MS + 100);
+  CHECK(D::g.erase_timer == nullptr);
+  fake::st.events.clear();
+  press_for(300, 240, 600);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+}
+
+// A press is lost (contract 7.4) when the widget that has it is hidden,
+// faded or its card turns unavailable while the finger is down: the release
+// sends nothing, also when the widget shows again first. A press that is the
+// card's stays the card's when a widget under it that only shows fades.
+TEST(press_lost) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *arm = widget(48), *disarm = widget(49), *sw = widget(53);
+  if (!CHECK(arm && disarm && sw)) return;
+  struct Row {
+    const char *what;
+    int page, x, y;
+    const char *during;  // the values sent while the finger is down
+    const char *again;   // and then, or ""
+    const char *sent;
+    const char *after;   // the values after the release
+  };
+  const Row rows[] = {
+      {"a swap under the finger", 1, 1124, 472, "[31,0],[32,1]", "", "", "[31,1],[32,0]"},
+      {"a swap and back", 1, 1124, 472, "[31,0],[32,1]", "[31,1],[32,0]", "", ""},
+      {"the value of the pressed switch goes away", 1, 1036, 628, "[35,null]", "", "", "[35,1]"},
+      {"the card turns unavailable", 0, 684, 240, "[8,1]", "", "", "[8,0]"},
+      {"the card turns unavailable and back", 0, 684, 240, "[8,1]", "[8,0]", "", ""},
+      {"a bar that only shows fades: the card's press", 1, 1124, 588, "[34,null]", "", "46t", "[34,40]"},
+      {"a label in it is not hidden: the card's press", 1, 1124, 554, "[33,0]", "", "46t", ""},
+  };
+  for (const Row &r : rows) {
+    tab::go_to(r.page);
+    hh::advance(20);
+    finger(r.x, r.y, true);
+    hh::advance(50);
+    CHECK_STR(rig.set(r.during), "");
+    if (*r.again) {
+      hh::advance(20);
+      CHECK_STR(rig.set(r.again), "");
+    }
+    hh::advance(30);
+    finger(r.x, r.y, false);
+    hh::advance(40);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.what) + ": sent \"" + sent_words() + "\"");
+    CHECK_MSG(!arm->pressed && !disarm->pressed && !sw->pressed && D::g.cp_layout < 0 && tab::current_page() == r.page,
+              r.what);
+    if (*r.after) CHECK_STR(rig.set(r.after), "");
+    rig.settle();
+  }
+  // A drag whose slider loses its value sends nothing.
+  tab::go_to(0);
+  hh::advance(20);
+  D::Widget *bar = widget(6);
+  finger(200, 292, true);
+  hh::advance(30);
+  finger(260, 292, true);
+  hh::advance(30);
+  CHECK(bar->dragging);
+  CHECK_STR(rig.set("[7,null]"), "");
+  CHECK(!bar->dragging && bar->faded);
+  finger(300, 292, true);
+  hh::advance(30);
+  finger(300, 292, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  CHECK_STR(rig.set("[7,80]"), "");
+  rig.settle();
+  // A card press and its hold are dropped at a forced swap.
+  finger(300, 240, true);
+  hh::advance(50);
+  CHECK(D::g.cp_layout >= 0);
+  const std::string small = layout_bytes("layout_small.dl.json");
+  CHECK_STR(rig.ha.send(small), "");
+  CHECK_STR(rig.ha.commit(sha_hex(small).substr(0, 16)), "");
+  hh::advance(D::SWAP_WAIT_MS + 200);
+  CHECK(tab::active_hash() == sha_hex(small).substr(0, 16));
+  CHECK(D::g.cp_layout < 0 && tab::current_page() == 0);
+  hh::advance(600);
+  finger(300, 240, false);
+  hh::advance(40);
+  CHECK(sent_words().empty() && tab::current_page() == 0);
+}
+
+// `un` 1 (contract 4.3 and 4.7): the header and every widget of the card at
+// 40%, once (a widget faded for want of a value is not faded again), the card
+// itself not; nothing in the card sends while the tablet can send, a hold
+// works, and while the tablet cannot send a tap says why.
+TEST(unavailable_card) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *c7 = widget(7);
+  if (!CHECK(c7)) return;
+  // Each object's own opacity: 40% on a parent and again on its child would
+  // be 16% on screen.
+  auto opa = [](lv_obj_t *o) { return o ? (int) lv_obj_get_style_opa(o, LV_PART_MAIN) : -1; };
+  auto all_at = [&](int want) {
+    bool ok = opa(c7->o1) == want && opa(c7->o2) == want && opa(c7->obj) == LV_OPA_COVER;
+    for (uint32_t k = 1; k <= c7->children; k++) ok = ok && opa(m.w[c7 - m.w + k].obj) == want;
+    return ok;
+  };
+  CHECK(all_at(LV_OPA_COVER) && !D::card_unavailable(m, *c7));
+  CHECK_STR(rig.set("[7,null]"), "");  // the bar of card 7 has no value: faded
+  D::Widget *bar = widget(11);
+  CHECK(bar->faded && opa(bar->obj) == LV_OPA_40);
+  CHECK_STR(rig.set("[8,1]"), "");
+  CHECK(D::card_unavailable(m, *c7) && D::card_unavailable(m, *bar));
+  // The bar is one drawn object (package E6): no part of it to fade twice.
+  CHECK(all_at(LV_OPA_40) && !bar->o1 && !bar->o2 && !bar->o3);
+  // The 40% is set once: repainting sets nothing.
+  D::test_counts() = D::TestCounts{};
+  for (uint32_t k = 0; k <= c7->children; k++) D::paint_widget(*active(), m.w[c7 - m.w + k]);
+  CHECK(D::test_counts().style_sets == 0);
+  CHECK_STR(rig.set("[7,80]"), "");
+  CHECK(all_at(LV_OPA_40));
+  // Nothing sends; the hold works.
+  for (const auto &p : {std::make_pair(684, 240), std::make_pair(672, 292), std::make_pair(708, 190)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(sent_words().empty() && hidden(D::g.strip), std::to_string(p.first) + "," + std::to_string(p.second));
+  }
+  press_for(684, 240, 600);
+  CHECK(tab::current_page() == 3 && sent_words().empty());
+  tab::go_to(0);
+  hh::advance(20);
+  // Without Home Assistant a tap on the card says why.
+  fake::st.network = true;
+  fake::st.connected = false;
+  hh::advance(20);
+  hh::tap(684, 240);
+  CHECK(!hidden(D::g.strip) && sent_words().empty());
+  CHECK_STR(label_text(D::g.strip_label), "Home Assistant is not connected");
+  fake::st.connected = true;
+  CHECK(rig.ha.hello());
+  hh::advance(D::STRIP_MS + 100);
+  // Back: full opacity, and the card sends.
+  CHECK_STR(rig.set("[8,0]"), "");
+  CHECK(all_at(LV_OPA_COVER));
+  fake::st.events.clear();
+  hh::tap(684, 240);
+  CHECK_STR(sent_words(), "7t");
+  // A `go` sends nothing and still works: on a widget faded for want of a
+  // value, on a card with `un` 1 and on a button in that card.
+  const std::string go_widgets =
+      "{\"id\":3,\"r\":[116,200,200,48],\"t\":\"button\",\"tap\":{\"go\":1},\"text\":\"Go\"},"
+      "{\"id\":4,\"r\":[116,260,200,48],\"t\":\"switch\",\"tap\":{\"go\":1},\"value\":{\"s\":2}}";
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"go\":1},\"un\":{\"s\":1},", go_widgets, "bb"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,null]"), "");
+  D::Model &gm = *active()->model;
+  CHECK(widget(4)->faded && !D::card_unavailable(gm, *widget(1)));
+  hh::tap(216, 284);
+  hh::advance(20);
+  CHECK_MSG(tab::current_page() == 1, "a faded switch's go");
+  tab::go_to(0);
+  hh::advance(20);
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(D::card_unavailable(gm, *widget(1)));
+  for (const auto &p : {std::make_pair(500, 420), std::make_pair(216, 224)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(tab::current_page() == 1, std::to_string(p.first) + "," + std::to_string(p.second));
+    tab::go_to(0);
+    hh::advance(20);
+  }
+  CHECK(sent_words().empty());
+}
+
+// `vis` (contract 4.3, 4.4): 0 and no value hide a widget, which is not
+// drawn and not there for a touch: the press goes to what is under it, else
+// to the card. Two widgets on one rectangle.
+TEST(visible_by_value) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *arm = widget(48), *disarm = widget(49), *c46 = widget(46);
+  if (!CHECK(arm && disarm && c46)) return;
+  const D::CardLook *k = D::card_look(m, c46);
+  const int x = 1010, y = 472;  // the button's own background, left of its text
+  struct Row {
+    const char *values;
+    bool arm, disarm;
+    const char *sent;
+  };
+  const Row rows[] = {{"[31,1],[32,0]", true, false, "48t"},
+                      {"[31,0],[32,1]", false, true, "49t"},
+                      {"[31,null],[32,null]", false, false, "46t"},
+                      {"[31,0],[32,0]", false, false, "46t"},
+                      {"[31,1],[32,null]", true, false, "48t"}};
+  for (const Row &r : rows) {
+    CHECK_STR(rig.set(r.values), "");
+    CHECK_MSG(hidden(arm->obj) == !r.arm && hidden(disarm->obj) == !r.disarm, r.values);
+    hh::refresh();
+    const uint32_t want = r.arm || r.disarm ? k->t.card2 : k->k.background;
+    CHECK_MSG(hh::pixel(x, y) == hh::rgb565(want), r.values);
+    hh::tap(1124, y);
+    hh::advance(20);
+    CHECK_MSG(sent_words() == r.sent, std::string(r.values) + ": sent \"" + sent_words() + "\"");
+    rig.settle();
+  }
+  // Without the key a widget always shows (the label next to them).
+  CHECK(!hidden(widget(51)->obj) && widget(51)->vis.how == D::B_ABSENT);
+}
+
+// ================================================================ label, button, switch, image, heading (package E5)
+//
+// Contract 4.7: a label's `px` (with the digit sizes and the width check),
+// `al` and `c`; a button's selected look, swatch (`c`), `shape`, `isz` and
+// `ic`; a card header's `ic`; the badge and the bare image; a heading's `c`
+// on the page's theme.
+
+// The first and last column in [x, x + w) of rows [y, y + h) whose pixels
+// differ from bg (the text's ink); -1 when there is none.
+static void ink_columns(int x, int y, int w, int h, uint32_t bg, int *first, int *last) {
+  *first = *last = -1;
+  const uint16_t b = hh::rgb565(bg);
+  for (int cx = x; cx < x + w; cx++)
+    for (int cy = y; cy < y + h; cy++)
+      if (hh::pixel(cx, cy) != b) {
+        if (*first < 0) *first = cx;
+        *last = cx;
+        break;
+      }
+}
+
+// A card with labels: `on` slot 1, `tint` slot 2, a text slot 3, a colour
+// slot 4, in DISTINCT_THEME, whose tx2 stands out on a tinted fill (so FS is
+// tx2 and FT is tx there, two different colours).
+static const char *LABEL_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,300,28],\"size\":0,\"t\":\"label\",\"text\":\"small\"},"
+    "{\"id\":3,\"r\":[116,170,300,28],\"size\":1,\"t\":\"label\",\"text\":\"medium\"},"
+    "{\"id\":4,\"px\":15,\"r\":[116,200,300,28],\"size\":1,\"t\":\"label\",\"text\":\"px 15\"},"
+    "{\"id\":5,\"px\":16,\"r\":[116,230,300,28],\"size\":0,\"t\":\"label\",\"text\":\"px 16\"},"
+    "{\"id\":6,\"px\":96,\"r\":[116,262,520,120],\"size\":1,\"t\":\"label\",\"text\":{\"s\":3}},"
+    "{\"id\":7,\"px\":192,\"r\":[416,140,236,118],\"size\":1,\"t\":\"label\",\"text\":\"21:05\"},"
+    "{\"id\":8,\"px\":48,\"r\":[116,384,120,60],\"size\":1,\"t\":\"label\",\"text\":\"1234567890123456\"},"
+    "{\"al\":1,\"id\":9,\"r\":[252,384,200,28],\"size\":1,\"t\":\"label\",\"text\":\"Mid\"},"
+    "{\"al\":2,\"id\":10,\"r\":[252,414,200,28],\"size\":1,\"t\":\"label\",\"text\":\"End\"},"
+    "{\"c\":{\"s\":4},\"id\":11,\"r\":[460,384,190,28],\"size\":1,\"t\":\"label\",\"text\":\"Own\"},"
+    "{\"id\":12,\"px\":96,\"r\":[460,414,190,60],\"size\":1,\"t\":\"label\",\"text\":\"42\"}";
+
+// The label size rule against the tablet's fonts, the small colour by `px`,
+// FS and FT on a filled tinted card, `al`, `c`, a line higher than its box,
+// and the font set only when the text needs another (cards spec B.4, rule 3).
+TEST(label_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},\"tint\":{\"s\":2},", LABEL_WIDGETS, "bntn"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,null],[3,\"12:34\"],[4,null]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1);
+  D::Widget *small = widget(2), *medium = widget(3), *p15 = widget(4), *p16 = widget(5), *big = widget(6);
+  D::Widget *wide = widget(7), *cut = widget(8), *mid = widget(9), *end = widget(10), *own = widget(11),
+            *tall = widget(12);
+  if (!CHECK(card && small && medium && p15 && p16 && big && wide && cut && mid && end && own && tall)) return;
+  const D::CardLook *k = D::card_look(m, card);
+
+  // Sizes: `size` alone, `px` of a text size, a digit size, the width check.
+  CHECK(font_of(small->obj) == D::text_font(14) && font_of(medium->obj) == D::text_font(18));
+  CHECK(font_of(p15->obj) == D::text_font(15) && font_of(p16->obj) == D::text_font(16));
+  CHECK(font_of(big->obj) == D::digits_font(96));
+  // 21:05 at 192 is wider than its 236 px; at 96 it fits.
+  CHECK_MSG(D::text_width(D::digits_font(192), "21:05", 5) > 236 && D::text_width(D::digits_font(96), "21:05", 5) <= 236,
+            std::to_string(D::text_width(D::digits_font(192), "21:05", 5)) + " and " +
+                std::to_string(D::text_width(D::digits_font(96), "21:05", 5)));
+  CHECK(font_of(wide->obj) == D::digits_font(96) && !wide->cut);
+  // Too wide at 48 too: 34, cut with an ellipsis.
+  CHECK(font_of(cut->obj) == D::text_font(34) && cut->cut);
+  const std::string ct = label_text(cut->obj);
+  CHECK(ct.size() >= 3 && ct.compare(ct.size() - 3, 3, "\xE2\x80\xA6") == 0);
+  // A line higher than its box starts at the box's top.
+  CHECK(D::line_height(D::digits_font(96)) > 60 && font_of(tall->obj) == D::digits_font(96));
+  CHECK(lv_obj_get_style_pad_top(tall->obj, LV_PART_MAIN) == 0);
+  CHECK(lv_obj_get_style_pad_top(big->obj, LV_PART_MAIN) == (120 - D::line_height(D::digits_font(96))) / 2);
+
+  // Colours off, on, and on with a tint: 14 and 15 px are small.
+  auto colours_are = [&](uint32_t sm, uint32_t tx, const std::string &when) {
+    CHECK_MSG(text_colour(small->obj) == sm && text_colour(p15->obj) == sm, when + " small " + hex6(text_colour(small->obj)));
+    CHECK_MSG(text_colour(medium->obj) == tx && text_colour(p16->obj) == tx && text_colour(big->obj) == tx,
+              when + " text " + hex6(text_colour(medium->obj)));
+  };
+  colours_are(k->t.tx2, k->t.tx, "off");
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(k->k.filled && k->k.FS == k->t.ontx && k->k.FT == k->t.ontx);
+  colours_are(k->t.ontx, k->t.ontx, "on");
+  CHECK_STR(rig.set("[2,16711680]"), "");
+  CHECK(k->k.filled && k->k.FS == k->t.tx2 && k->k.FT == k->t.tx && k->k.FS != k->k.FT);
+  colours_are(k->k.FS, k->k.FT, "on with a tint");
+  // `c`: legible on the card's background now, with its text colour now.
+  // 0x808080 stands out on the card (0x202020) and not on its fill.
+  CHECK(text_colour(own->obj) == k->k.FT);
+  CHECK_STR(rig.set("[2,null],[4,8421504]"), "");
+  const uint32_t on_fill = D::legible(8421504, k->k.F, k->k.FT);
+  CHECK(k->k.filled && text_colour(own->obj) == on_fill && own->c_has && on_fill != 8421504);
+  CHECK_STR(rig.set("[1,0]"), "");
+  CHECK(text_colour(own->obj) == 8421504 && D::legible(8421504, k->t.bg, k->t.tx) == 8421504);
+
+  // `al`: left, centre and right in the box.
+  CHECK(lv_obj_get_style_text_align(mid->obj, LV_PART_MAIN) == LV_TEXT_ALIGN_CENTER);
+  CHECK(lv_obj_get_style_text_align(end->obj, LV_PART_MAIN) == LV_TEXT_ALIGN_RIGHT);
+  CHECK(lv_obj_get_style_text_align(medium->obj, LV_PART_MAIN) != LV_TEXT_ALIGN_CENTER &&
+        lv_obj_get_style_text_align(medium->obj, LV_PART_MAIN) != LV_TEXT_ALIGN_RIGHT);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  int f0, l0, f1, l1, f2, l2;
+  ink_columns(116, 170, 300, 28, k->t.bg, &f0, &l0);
+  ink_columns(252, 384, 200, 28, k->t.bg, &f1, &l1);
+  ink_columns(252, 414, 200, 28, k->t.bg, &f2, &l2);
+  CHECK_MSG(f0 >= 116 && f0 <= 120, std::to_string(f0));
+  CHECK_MSG(f1 > 252 + 60 && l1 < 452 - 60 && abs((f1 - 252) - (452 - 1 - l1)) <= 3,
+            std::to_string(f1) + ".." + std::to_string(l1));
+  CHECK_MSG(f2 > 252 + 120 && l2 >= 452 - 4 && l2 <= 451, std::to_string(f2) + ".." + std::to_string(l2));
+
+  // The font follows the text: digits, then a word (34), then digits again.
+  // It is set only when it changes, so a new time of the same size lays
+  // nothing out.
+  hh::refresh();
+  CHECK(!layout_pending());
+  D::test_counts() = D::TestCounts{};
+  CHECK_STR(rig.set("[3,\"12:35\"]"), "");
+  CHECK(font_of(big->obj) == D::digits_font(96) && label_text(big->obj) == "12:35" && !layout_pending());
+  CHECK_MSG(D::test_counts().style_sets == 1, std::to_string(D::test_counts().style_sets));  // the text
+  CHECK_STR(rig.set("[3,\"Kitchen\"]"), "");
+  CHECK(font_of(big->obj) == D::text_font(34));
+  CHECK(lv_obj_get_style_pad_top(big->obj, LV_PART_MAIN) == (120 - D::line_height(D::text_font(34))) / 2);
+  hh::refresh();
+  CHECK_STR(rig.set("[3,\"21.5\xC2\xB0\"]"), "");
+  CHECK(font_of(big->obj) == D::digits_font(96));
+  CHECK_STR(rig.set("[3,\"\xE2\x88\x92" "5\"]"), "");  // U+2212 is no digit glyph
+  CHECK(font_of(big->obj) == D::text_font(34));
+  hh::refresh();
+  // A repaint with unchanged state sets nothing and works out nothing.
+  D::test_counts() = D::TestCounts{};
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && !layout_pending());
+}
+
+// A heading's `c` and its text colour come from the theme of its page: the
+// kit's page 1 has its own, and a heading with `c` on such a page is legible
+// on that page's wall.
+TEST(heading_colours) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *h1 = widget(1), *h30 = widget(30);
+  if (!CHECK(h1 && h30)) return;
+  const D::Theme &t0 = D::page_theme(m, 0), &t1 = D::page_theme(m, 1);
+  CHECK(t1.c[D::C_TX] != m.theme.c[D::C_TX] && t1.c[D::C_WALL] != m.theme.c[D::C_WALL]);
+  const uint32_t want1 = D::legible(5030794, t0.c[D::C_WALL], t0.c[D::C_TX]);
+  CHECK(text_colour(h1->o1) == want1 && text_colour(h1->o2) == want1);
+  CHECK(text_colour(h30->o2) == t1.c[D::C_TX]);
+  // `c` on a page with its own theme.
+  std::string themed = two_pages("", LAMP_WIDGETS, "bbn");
+  const std::string from = "{\"title\":\"Q\",\"w\":[{\"id\":90,";
+  const size_t at = themed.find(from);
+  if (!CHECK(at != std::string::npos)) return;
+  themed.replace(at, from.size(),
+                 "{\"theme\":{\"tx\":1382429,\"wall\":15659251},\"title\":\"Q\",\"w\":[{\"c\":{\"s\":3},\"icon\":983772,"
+                 "\"id\":90,");
+  if (!CHECK(rig.up(themed, false))) return;
+  D::Model &m2 = *active()->model;
+  D::Widget *h = widget(90);
+  if (!CHECK(h && h->page == 1)) return;
+  CHECK_STR(rig.set("[3,16766474]"), "");
+  hh::advance(20);
+  const uint32_t own = D::legible(16766474, 15659251, 1382429);
+  CHECK(own != D::legible(16766474, m2.theme.c[D::C_WALL], m2.theme.c[D::C_TX]));
+  CHECK_MSG(text_colour(h->o2) == own && text_colour(h->o1) == own, hex6(text_colour(h->o2)));
+  CHECK_STR(rig.set("[3,null]"), "");
+  hh::advance(20);
+  CHECK(text_colour(h->o2) == 1382429 && text_colour(h->o1) == 1382429);
+}
+
+// Buttons of every new look, on a card whose `on` shares slot 2 with a
+// button, the swatch and a switch: slots 1 b, 2 b, 3 n (the swatch's
+// colour), 4 b (the bare button's value), 5 i (`ic`).
+static const char *BUTTON_WIDGETS =
+    "{\"id\":2,\"r\":[116,140,160,48],\"t\":\"button\",\"tap\":{\"p\":0},\"text\":\"Sel\",\"value\":{\"s\":2}},"
+    "{\"c\":{\"s\":3},\"id\":3,\"r\":[292,140,160,48],\"t\":\"button\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"icon\":984101,\"id\":4,\"isz\":1,\"r\":[468,140,120,80],\"shape\":1,\"t\":\"button\",\"tap\":{\"p\":1},"
+    "\"text\":\"No\"},"
+    "{\"icon\":983512,\"id\":5,\"r\":[116,240,160,48],\"shape\":2,\"t\":\"button\",\"tap\":{\"p\":0},"
+    "\"value\":{\"s\":4}},"
+    "{\"ic\":{\"s\":5},\"icon\":983568,\"id\":6,\"r\":[292,240,160,48],\"t\":\"button\",\"tap\":{\"p\":1},"
+    "\"text\":\"Fan\"},"
+    "{\"id\":7,\"r\":[468,240,120,48],\"t\":\"switch\",\"tap\":{\"p\":0},\"value\":{\"s\":2}}";
+
+static std::string glyph(uint32_t cp) {
+  char b[5];
+  D::icon_utf8(cp, b);
+  return b;
+}
+
+// Contract 7.4 for a button with a bound `value` (policy 0: the other state
+// at once, back on an ack that is not ok or after 4 s without one, kept
+// after an ok ack until the value comes), with the card's `on` and a switch
+// of the same slot; a card whose `on` has no value. And contract 4.7: the
+// selected look (accf, acct, pressed accf_pr, the 2 px border in acct when
+// accf does not stand out on the card's background now), the swatch, the
+// round and the bare shape, `isz` and `ic` on a button and a card header.
+TEST(button_selected_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"ic\":{\"s\":5},\"on\":{\"s\":2},\"tap\":{\"p\":0},", BUTTON_WIDGETS, "bbnbi"), false)))
+    return;
+  CHECK_STR(rig.set("[1,0],[2,0],[3,16728128],[4,0],[5,0]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *sel = widget(2), *sw = widget(3), *round = widget(4), *bare = widget(5),
+            *fan = widget(6), *swi = widget(7);
+  if (!CHECK(card && sel && sw && round && bare && fan && swi)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  const int sy = 164;  // the middle row of the first row of buttons
+  auto looks = [&](bool on, const std::string &when) {
+    hh::refresh();
+    bool ok = (k->k.filled == 1) == on && D::button_selected(m, *sel) == on && D::button_selected(m, *sw) == on &&
+              knob_at(swi) == (on ? 32 : 4);
+    ok = ok && bg_colour(sel->obj) == (on ? k->k.AF : k->t.card2) && text_colour(sel->o2) == (on ? k->k.AT : k->t.tx);
+    ok = ok && hh::pixel(124, sy) == hh::rgb565(on ? k->k.AF : k->t.card2);
+    // The swatch: background c, content readable(c); selected, a 3 px
+    // border inside in the card's text colour now.
+    ok = ok && bg_colour(sw->obj) == 16728128 && sw->ring == (on ? 3 : 0);
+    ok = ok && hh::pixel(293, sy) == hh::rgb565(on ? k->k.text : 16728128) &&
+         hh::pixel(294, sy) == hh::rgb565(on ? k->k.text : 16728128) && hh::pixel(296, sy) == hh::rgb565(16728128);
+    CHECK_MSG(ok, when);
+  };
+  looks(false, "at rest");
+  CHECK(sw->c_has && sw->c_now == 16728128 && sw->c_on == D::readable(16728128));
+  CHECK_STR(rig.set("[2,1]"), "");
+  looks(true, "value 1");
+  CHECK(k->k.text == k->t.ontx && sel->ring == 0);  // accf stands out: no border
+  CHECK_STR(rig.set("[2,0]"), "");
+  looks(false, "value 0");
+
+  // The button's tap: at once on the button, the swatch, the card and the
+  // switch of its slot. Not ok: back at once.
+  hh::tap(196, sy);
+  CHECK_STR(sent_words(), "2t");
+  looks(true, "tapped");
+  rig.ha.ack(last_input_counter(), false, "failed");
+  looks(false, "ack not ok");
+  // No ack: back after 4 s.
+  rig.settle();
+  hh::tap(196, sy);
+  hh::advance(3800);
+  looks(true, "3.8 s without an ack");
+  hh::advance(300);
+  looks(false, "4.1 s without an ack");
+  // An ok ack: the state stays until the value comes.
+  rig.settle();
+  hh::tap(196, sy);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(sel->ovr == 2);
+  looks(true, "ok ack");
+  CHECK_STR(rig.set("[2,1]"), "");
+  CHECK(sel->ovr == 0);
+  looks(true, "the value came");
+  // The swatch's tap flips the same slot.
+  rig.settle();
+  hh::tap(372, sy);
+  CHECK_STR(sent_words(), "3t");
+  looks(false, "the swatch tapped");
+  hh::advance(4100);
+  looks(true, "the swatch's flip ended");
+  // A card whose `on` has no value: the button's value counts as 0, so its
+  // tap shows 1 on the button and on the card, and goes back after 4 s.
+  rig.settle();
+  CHECK_STR(rig.set("[2,null]"), "");
+  looks(false, "no value");
+  hh::tap(196, sy);
+  CHECK_STR(sent_words(), "2t");
+  looks(true, "no value, tapped");
+  hh::advance(4100);
+  looks(false, "no value, 4.1 s");
+  rig.settle();
+  CHECK_STR(rig.set("[2,0]"), "");
+
+  // Pressed: card2_pr (on: onbg_pr); selected accf_pr; a swatch
+  // mix(readable(c), c, 85).
+  auto pressed_bg = [&](D::Widget *w, int x, int y) {
+    finger(x, y, true);
+    hh::advance(20);
+    hh::refresh();
+    const uint32_t got = bg_colour(w->obj);
+    const uint16_t pix = hh::pixel(x, y);
+    finger(x, y, false);
+    hh::advance(30);
+    rig.settle();
+    rig.set("[2,0],[4,0]");
+    hh::advance(20);
+    return std::make_pair(got, pix);
+  };
+  auto p = pressed_bg(sel, 124, sy);
+  CHECK(p.first == k->t.card2_pr && p.second == hh::rgb565(k->t.card2_pr));
+  CHECK_STR(rig.set("[2,1]"), "");
+  p = pressed_bg(sel, 124, sy);  // the tap flips it to 0 at the release; pressed while 1
+  CHECK(p.first == k->k.AP && p.second == hh::rgb565(k->k.AP));
+  p = pressed_bg(sw, 300, sy);
+  CHECK(p.first == D::mix(D::readable(16728128), 16728128, 85) && p.first != 16728128);
+
+  // Bare: no background at rest (the card shows through), pressed card2_pr,
+  // on: onbg_pr; selected fills accf.
+  hh::refresh();
+  CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->t.bg));
+  p = pressed_bg(bare, 120, 244);
+  CHECK(p.first == k->t.card2_pr && p.second == hh::rgb565(k->t.card2_pr));
+  CHECK_STR(rig.set("[2,1]"), "");  // the card is filled
+  hh::refresh();
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->k.F));
+  finger(120, 244, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(120, 244) == hh::rgb565(k->k.FP) && k->k.FP == k->t.onbg_pr);
+  finger(120, 244, false);
+  hh::advance(30);
+  rig.settle();
+  CHECK_STR(rig.set("[2,0],[4,1]"), "");
+  hh::refresh();
+  CHECK(D::button_selected(m, *bare) && hh::pixel(120, 244) == hh::rgb565(k->k.AF));
+  CHECK(text_colour(bare->o1) == k->k.AT);
+  CHECK_STR(rig.set("[4,0]"), "");
+
+  // Round: the circle of side min(w, h), centred, no text; `isz` 1 gives the
+  // largest icon not above min(w, h) / 2 (28 for 80).
+  CHECK(obj_at(round->obj, 488, 140, 80, 80) && round->o2 == nullptr);
+  CHECK(lv_obj_get_style_radius(round->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+  CHECK(font_of(round->o1) == D::icon_font(28) && label_text(round->o1) == glyph(984101));
+  hh::refresh();
+  CHECK(hh::pixel(490, 142) == hh::rgb565(k->t.bg) && hh::pixel(492, 180) == hh::rgb565(k->t.card2));
+  // A press beside the circle, inside the rectangle, is the card's.
+  hh::tap(472, 210);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  CHECK_STR(rig.set("[2,0]"), "");
+  hh::tap(528, 180);
+  CHECK_STR(sent_words(), "4t");
+  rig.settle();
+
+  // `ic`: the icon while it has a value above 0, on a button and in the
+  // card's header; 0 gives `icon` back.
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  CHECK_STR(rig.set("[5,985117]"), "");
+  CHECK(label_text(fan->o1) == glyph(985117) && label_text(card->o1) == glyph(985117));
+  CHECK_STR(rig.set("[5,0]"), "");
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  CHECK_STR(rig.set("[5,null]"), "");
+  CHECK(label_text(fan->o1) == glyph(983568) && label_text(card->o1) == glyph(983861));
+  // Without `isz` a button's icon is 24.
+  CHECK(font_of(fan->o1) == D::icon_font(24));
+
+  // A repaint with unchanged state sets nothing and works out nothing.
+  CHECK_STR(rig.set("[2,1],[4,1]"), "");
+  D::test_counts() = D::TestCounts{};
+  D::test_contrasts() = 0;
+  for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0);
+
+  // accf that does not stand out on the card (contrast below 1.3): a 2 px
+  // border in acct inside a selected button, only while the card's
+  // background now is the one it does not stand out on.
+  if (!CHECK(rig.up(two_pages("\"on\":{\"s\":1},", BUTTON_WIDGETS, "bbnbi", "{\"accf\":2302755}"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,null],[4,0],[5,0]"), "");
+  hh::advance(20);
+  D::Model &m2 = *active()->model;
+  sel = widget(2);
+  card = widget(1);
+  const D::CardLook *k2 = D::card_look(m2, card);
+  CHECK(k2->k.AF == 2302755 && D::contrast(k2->k.AF, k2->t.bg) < 1.3 && k2->k.sel_border);
+  hh::refresh();
+  CHECK(sel->ring == 2 && hh::pixel(117, sy) == hh::rgb565(k2->k.AT) && hh::pixel(119, sy) == hh::rgb565(k2->k.AF));
+  // The swatch slot without a value: a plain selected button, with the border.
+  CHECK(!widget(3)->c_has && widget(3)->ring == 2);
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(D::contrast(k2->k.AF, k2->k.background) >= 1.3 && !k2->k.sel_border);
+  hh::refresh();
+  CHECK(sel->ring == 0 && hh::pixel(117, sy) == hh::rgb565(k2->k.AF));
+  CHECK_STR(rig.set("[1,0],[2,0]"), "");
+  hh::refresh();
+  CHECK(sel->ring == 0 && hh::pixel(117, sy) == hh::rgb565(k2->t.card2));
+}
+
+// The image's looks (contract 4.7, "Image, badge and bare"): the badge is
+// the centred circle with a wash of K and the largest icon not above 0.6 of
+// it; the bare image has no box and the largest icon not above min(w, h);
+// K by state (plain, filled, lit 1); pressed card2_pr (on: onbg_pr) with
+// radius r2; the pulse without a box; the placeholder without a value; a
+// hold beside the circle is the card's.
+static const char *IMAGE_WIDGETS =
+    "{\"id\":2,\"look\":1,\"r\":[116,140,120,80],\"t\":\"image\",\"tap\":{\"p\":0},\"value\":{\"s\":2}},"
+    "{\"c\":{\"s\":3},\"id\":3,\"look\":2,\"r\":[252,140,120,80],\"t\":\"image\",\"tap\":{\"p\":0},\"value\":984463},"
+    "{\"id\":4,\"r\":[388,140,64,64],\"t\":\"image\",\"value\":984463},"
+    "{\"hold\":{\"go\":1},\"id\":5,\"look\":1,\"r\":[116,240,120,80],\"t\":\"image\",\"value\":984463}";
+
+TEST(image_looks) {
+  for (int lit : {0, 1}) {
+    KitRig rig;
+    const std::string keys = "\"lit\":" + std::to_string(lit) + ",\"on\":{\"s\":1},";
+    if (!CHECK(rig.up(two_pages(keys, IMAGE_WIDGETS, "bin"), false))) return;
+    CHECK_STR(rig.set("[1,0],[2,984211],[3,null]"), "");
+    hh::advance(20);
+    D::Model &m = *active()->model;
+    D::Widget *card = widget(1), *badge = widget(2), *bare = widget(3), *box = widget(4), *held = widget(5);
+    if (!CHECK(card && badge && bare && box && held)) return;
+    const D::CardLook *k = D::card_look(m, card);
+    const std::string at = "lit " + std::to_string(lit);
+    // Places and icon sizes: the badge 80 (0.6 * 80 = 48), bare 72, the box 28.
+    CHECK_MSG(obj_at(badge->obj, 136, 140, 80, 80) && obj_at(bare->obj, 252, 140, 120, 80), at);
+    CHECK(lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+    CHECK(font_of(badge->o1) == D::icon_font(48) && font_of(bare->o1) == D::icon_font(72) &&
+          font_of(box->o1) == D::icon_font(28));
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+    // Plain: circle card2, icon tx2; bare icon tx2 legible on the card.
+    auto plain_now = [&] {
+      return bg_colour(badge->obj) == k->t.card2 && text_colour(badge->o1) == k->t.tx2 &&
+             text_colour(bare->o1) == D::legible(k->t.tx2, k->t.bg, k->t.tx) && text_colour(box->o1) == k->t.acc2;
+    };
+    CHECK_MSG(plain_now(), at);
+    hh::refresh();
+    CHECK(hh::pixel(140, 180) == hh::rgb565(k->t.card2) && hh::pixel(137, 141) == hh::rgb565(k->t.bg));
+    CHECK(hh::pixel(254, 142) == hh::rgb565(k->t.bg));
+    // On: K is ion while filled (lit 0), acc with lit 1.
+    CHECK_STR(rig.set("[1,1]"), "");
+    const uint32_t K = lit == 0 ? k->k.FI : k->k.A;
+    const uint32_t wash = D::mix(K, k->k.background, 80);
+    CHECK_MSG(bg_colour(badge->obj) == wash && text_colour(badge->o1) == D::legible(K, wash, k->k.text), at);
+    CHECK(text_colour(bare->o1) == D::legible(K, k->k.background, k->k.text));
+    CHECK(wash != k->t.card2);
+    hh::refresh();
+    CHECK(hh::pixel(140, 180) == hh::rgb565(wash));
+    // `c` wins over the state.
+    CHECK_STR(rig.set("[3,16729402]"), "");
+    CHECK(text_colour(bare->o1) == D::legible(16729402, k->k.background, k->k.text));
+    // Pressed: card2_pr, on: onbg_pr, radius r2.
+    finger(140, 180, true);
+    hh::advance(20);
+    CHECK(bg_colour(badge->obj) == (k->k.filled ? k->k.FP : k->t.card2_pr) &&
+          lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == k->t.r2);
+    finger(140, 180, false);
+    hh::advance(30);
+    rig.settle();
+    CHECK(lv_obj_get_style_radius(badge->obj, LV_PART_MAIN) == LV_RADIUS_CIRCLE);
+    finger(256, 144, true);
+    hh::advance(20);
+    hh::refresh();
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_COVER &&
+          hh::pixel(256, 150) == hh::rgb565(k->k.filled ? k->k.FP : k->t.card2_pr));
+    finger(256, 144, false);
+    hh::advance(30);
+    rig.settle();
+    CHECK(lv_obj_get_style_bg_opa(bare->obj, LV_PART_MAIN) == LV_OPA_TRANSP);
+    // No value: the placeholder, faded.
+    CHECK_STR(rig.set("[2,null]"), "");
+    CHECK(label_text(badge->o1) == glyph(D::ICON_PLACEHOLDER) && lv_obj_get_style_opa(badge->obj, LV_PART_MAIN) == LV_OPA_40);
+    CHECK_STR(rig.set("[2,984211]"), "");
+    CHECK(label_text(badge->o1) == glyph(984211));
+    // The widget's own hold in its circle; beside it the card's, which has
+    // none. (No hold opens while the erase watch of the first 10 s runs.)
+    CHECK(advance_until([] { return D::g.erase_timer == nullptr; }, D::ERASE_ARM_MS + 1000));
+    press_for(176, 280, 700);
+    CHECK(tab::current_page() == 1);
+    tab::go_to(0);
+    hh::advance(20);
+    press_for(118, 242, 700);
+    CHECK(tab::current_page() == 0 && sent_words().empty());
+    // A repaint with unchanged state sets nothing and works out nothing.
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+    for (uint32_t i = 0; i < m.nw; i++) D::paint_widget(*active(), m.w[i]);
+    CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0);
+  }
+  // The pulse: no box or badge, the icon acct.
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("\"tap\":{\"p\":1},", IMAGE_WIDGETS, "bin"), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,984211],[3,null]"), "");
+  hh::advance(20);
+  D::Widget *card = widget(1), *badge = widget(2), *box = widget(4);
+  const D::CardLook *k = D::card_look(*active()->model, card);
+  hh::tap(500, 420);
+  CHECK(card->fb == 2);
+  CHECK(lv_obj_get_style_bg_opa(badge->obj, LV_PART_MAIN) == LV_OPA_TRANSP && text_colour(badge->o1) == k->k.AT);
+  CHECK(lv_obj_get_style_bg_opa(box->obj, LV_PART_MAIN) == LV_OPA_TRANSP && text_colour(box->o1) == k->k.AT);
+  hh::advance(320);
+  CHECK(card->fb == 0 && bg_colour(badge->obj) == k->t.card2 && lv_obj_get_style_bg_opa(badge->obj, LV_PART_MAIN) == LV_OPA_COVER);
+}
+
+// A switch's `c` (contract 4.7): at value 1 the track is legible(c, the
+// card's background now, its text colour now) and the knob readable of it;
+// at 0, and without a colour, the look of version 1.
+TEST(switch_colour) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Model &m = *active()->model;
+  D::Widget *sw = widget(28), *card = widget(22);
+  if (!CHECK(sw && card)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  CHECK_STR(rig.set("[21,1],[22,5030794]"), "");
+  const uint32_t track = D::legible(5030794, k->k.background, k->k.text);
+  CHECK(bg_colour(sw->o1) == track && bg_colour(sw->o2) == D::readable(track));
+  hh::refresh();
+  CHECK(hh::pixel(sw->r[0] + 6, centre_y(sw->r)) == hh::rgb565(track));
+  CHECK_STR(rig.set("[22,16766474]"), "");
+  const uint32_t track2 = D::legible(16766474, k->k.background, k->k.text);
+  CHECK(track2 != track && bg_colour(sw->o1) == track2 && bg_colour(sw->o2) == D::readable(track2));
+  CHECK_STR(rig.set("[22,null]"), "");
+  CHECK(bg_colour(sw->o1) == k->k.A && bg_colour(sw->o2) == k->k.AT);
+  CHECK_STR(rig.set("[21,0],[22,5030794]"), "");
+  CHECK(bg_colour(sw->o1) == k->t.card2 && bg_colour(sw->o2) == k->t.tx2);
+}
+
+// ================================================================ the slider (package E6)
+//
+// Contract 4.7, "Slider" and the (2) rows after it; cards spec B.4 and B.5.
+// The geometry itself is checked against maths.json in maths_fixture.
+
+// Sliders of every look and direction on card 1 of two_pages (slots "nnn"):
+// knobs from the left, the bottom and the top; a bar from the top; a knob
+// with a track of 2 colours and an upright bar with one of 8; a knob whose
+// track of 1 colour is no track and a bar whose 9 colours keep 8; a knob and
+// a bar with `nv`; and two pairs of the same track, one with `nv` (drawn at
+// full opacity without a value) and one without (faded).
+static const char *SLIDER_WIDGETS =
+    "{\"change\":{\"p\":0},\"id\":2,\"max\":100,\"min\":0,\"r\":[116,140,200,40],\"step\":1,\"t\":\"slider\","
+    "\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":1,\"id\":3,\"max\":100,\"min\":0,\"r\":[340,140,40,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":2,\"id\":4,\"max\":100,\"min\":0,\"r\":[400,140,40,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"dir\":2,\"icon\":983263,\"id\":5,\"look\":1,\"max\":100,\"min\":0,\"r\":[460,140,60,200],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":1}},"
+    "{\"change\":{\"p\":0},\"id\":6,\"max\":100,\"min\":0,\"r\":[116,200,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,255],\"value\":{\"s\":2}},"
+    "{\"change\":{\"p\":0},\"dir\":1,\"id\":7,\"look\":1,\"max\":100,\"min\":0,\"r\":[540,140,60,200],\"step\":1,"
+    "\"t\":\"slider\",\"track\":[16711680,65280,255,16776960,65535,16711935,16777215,0],\"value\":{\"s\":2}},"
+    "{\"id\":8,\"max\":100,\"min\":0,\"r\":[116,260,200,40],\"step\":1,\"t\":\"slider\",\"track\":[65280],"
+    "\"value\":{\"s\":2}},"
+    "{\"id\":9,\"look\":1,\"max\":100,\"min\":0,\"r\":[340,360,300,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[1,2,3,4,5,6,7,8,9],\"value\":{\"s\":2}},"
+    "{\"change\":{\"p\":0},\"id\":10,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,320,200,40],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":3}},"
+    "{\"change\":{\"p\":2},\"id\":11,\"look\":1,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,380,200,40],\"step\":1,"
+    "\"t\":\"slider\",\"value\":{\"s\":3}},"
+    "{\"id\":12,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,430,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,16776960,65280,65535,255,16711935,16711680],\"value\":{\"s\":3}},"
+    "{\"id\":13,\"max\":100,\"min\":0,\"r\":[340,430,200,40],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16711680,16776960,65280,65535,255,16711935,16711680],\"value\":{\"s\":3}},"
+    "{\"id\":14,\"look\":1,\"max\":100,\"min\":0,\"nv\":1,\"r\":[116,472,200,10],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16746770,16775677,13623551],\"value\":{\"s\":3}},"
+    "{\"id\":15,\"look\":1,\"max\":100,\"min\":0,\"r\":[340,472,200,10],\"step\":1,\"t\":\"slider\","
+    "\"track\":[16746770,16775677,13623551],\"value\":{\"s\":3}}";
+
+// The channels of an RGB565 pixel, 0 to 31 (green halved to 5 bits' scale).
+static void channels(uint16_t p, double c[3]) {
+  c[0] = p >> 11;
+  c[1] = ((p >> 5) & 63) / 2.0;
+  c[2] = p & 31;
+}
+
+// How far a pixel is from a colour, the largest channel difference.
+static double colour_gap(uint16_t p, uint32_t colour) {
+  double a[3], b[3];
+  channels(p, a);
+  channels(hh::rgb565(colour), b);
+  double d = 0;
+  for (int i = 0; i < 3; i++) d = fmax(d, fabs(a[i] - b[i]));
+  return d;
+}
+
+// Value from the finger for the three directions and both looks, with and
+// without a track; tracks of 2 and 8 colours as drawn, 1 colour (no track)
+// and 9 (the first 8); `nv`; a faded track as one picture; a drag on a bar
+// ended by a forced swap; the colours a bar is drawn in.
+TEST(slider_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(two_pages("", SLIDER_WIDGETS, "nnn"), false))) return;
+  CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  hh::advance(50);
+  D::Model &m = *active()->model;
+  D::Widget *w[16] = {};
+  for (int i = 2; i <= 15; i++) {
+    w[i] = widget((uint32_t) i);
+    if (!CHECK_MSG(w[i] && w[i]->obj, std::to_string(i))) return;
+  }
+  // One object for a bar and for any slider with a track; the four of
+  // version 1 for a knob, also one whose track of 1 colour is no track.
+  for (int i : {2, 3, 4, 8, 10}) CHECK_MSG(D::Loader::objects_of(*w[i]) == 4 && w[i]->o1 && w[i]->o3, std::to_string(i));
+  for (int i : {5, 6, 7, 9, 11, 12, 13, 14, 15})
+    CHECK_MSG(D::Loader::objects_of(*w[i]) == 1 && !w[i]->o1 && !w[i]->o2 && !w[i]->o3 &&
+                  lv_obj_get_child_count(w[i]->obj) == 0,
+              std::to_string(i));
+  CHECK(w[8]->track_n == 0 && !w[8]->track && w[6]->track_n == 2 && w[7]->track_n == 8);
+  CHECK(w[9]->track_n == 8 && w[9]->track[7] == 8);
+
+  // Value from the finger: along the axis of each direction, from x0 to x1
+  // with a track (x0 = R: 7 on the knob look, min(r2, S div 2) on a bar).
+  struct Press {
+    int id, x, y;
+    const char *want;
+  } presses[] = {
+      {2, 116 + 150, 160, "c=75"},             // from the left: 150 of 200
+      {3, 360, 140 + 200 - 50, "c=25"},        // from the bottom: 50 of 200
+      {4, 420, 140 + 50, "c=25"},              // from the top: 50 of 200
+      {5, 490, 140 + 150, "c=75"},             // a bar from the top
+      {6, 116 + 7 + 93, 220, "c=50"},          // (100 - 7) / 186
+      {7, 570, 140 + 200 - 55, "c=25"},        // (55 - 10) / 180, from the bottom
+      {6, 116 + 3, 220, "c=0"},                // on the start cap: 0
+      {6, 116 + 197, 220, "c=100"},            // on the end cap: 100
+      {10, 116 + 50, 340, "c=25"},             // nv: no value, and it takes input
+      {11, 116 + 150, 400, "c=75"},
+  };
+  for (const Press &p : presses) {
+    fake::st.events.clear();
+    hh::tap(p.x, p.y);
+    hh::advance(20);
+    CHECK_MSG(last_input_value() == p.want, std::to_string(p.id) + ": " + last_input_value() + ", want " + p.want);
+    CHECK_MSG(fake::events("tab1_input").size() == 1 && tab::current_page() == 0, std::to_string(p.id));
+    // Policy 2 (bar 11): the waiting outline on the drawn object until the answer.
+    if (p.id == 11) CHECK(w[11]->fb == 1 && lv_obj_get_style_outline_width(w[11]->obj, LV_PART_MAIN) == 2);
+    rig.settle();
+    CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  }
+  hh::advance(D::PROGRESS_TIMEOUT_MS);  // the value bar 11 sent is shown no more
+  // A drag that starts on an upright slider moves it and is never a swipe.
+  fake::st.events.clear();
+  hh::drag(360, 300, 300, 180, 200);
+  hh::advance(20);
+  CHECK_STR(last_input_value(), "c=80");
+  CHECK(tab::current_page() == 0);
+  rig.settle();
+  CHECK_STR(rig.set("[1,40],[2,50],[3,null]"), "");
+  hh::advance(20);
+
+  // The knob from the bottom: the fill grows upwards to the knob.
+  lv_obj_update_layout(w[3]->obj);
+  CHECK(lv_obj_get_height(w[3]->o2) == 80 && lv_obj_get_y(w[3]->o2) == 120 && lv_obj_get_y(w[3]->o3) == 200 - 80 - 11);
+  CHECK(lv_obj_get_height(w[4]->o2) == 80 && lv_obj_get_y(w[4]->o2) == 0 && lv_obj_get_y(w[4]->o3) == 80 - 11);
+  CHECK(lv_obj_get_x(w[3]->o1) == 13 && lv_obj_get_width(w[3]->o1) == 14);
+
+  // Tracks as drawn: each cap in its colour, the pieces fading from the
+  // start, the mark white on the place of the value.
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(118, 220), 0xFF0000) <= 1 && colour_gap(hh::pixel(116 + 198, 220), 0x0000FF) <= 1);
+  CHECK(colour_gap(hh::pixel(116 + 100, 220), 0xFFFFFF) <= 1);  // the mark at 7 + 0.5 * 186 = 100
+  CHECK(colour_gap(hh::pixel(116 + 40, 220), 0xFF0000) > 4 && colour_gap(hh::pixel(116 + 40, 220), 0x0000FF) > 4);
+  // From the bottom, 8 colours: the bottom cap in the first, the top cap in
+  // the last; piece 0 (10 to 35) red at its start and green at its end.
+  const int bottom = 140 + 200;
+  CHECK(colour_gap(hh::pixel(570, bottom - 3), 0xFF0000) <= 1 && colour_gap(hh::pixel(570, 140 + 3), 0x000000) <= 1);
+  CHECK(colour_gap(hh::pixel(552, bottom - 11), 0xFF0000) < colour_gap(hh::pixel(552, bottom - 11), 0x00FF00));
+  CHECK(colour_gap(hh::pixel(552, bottom - 34), 0x00FF00) < colour_gap(hh::pixel(552, bottom - 34), 0xFF0000));
+  // The mark of the upright bar: 12 along, S + 4 across, at 10 + 0.5 * 180 = 100.
+  CHECK(colour_gap(hh::pixel(570, bottom - 100), 0xFFFFFF) <= 1);
+  CHECK(colour_gap(hh::pixel(540 - 1, bottom - 100), 0x15181D) <= 1);  // 2 px past the side, its border
+
+  // `nv`: without a value at full opacity, the track only; without `nv` faded.
+  auto opa = [](D::Widget *x) { return (int) lv_obj_get_style_opa(x->obj, LV_PART_MAIN); };
+  CHECK(opa(w[10]) == LV_OPA_COVER && !w[10]->faded && hidden(w[10]->o2) && hidden(w[10]->o3));
+  CHECK(opa(w[11]) == LV_OPA_COVER && !w[11]->faded && w[11]->sl_pos == 0);
+  CHECK(opa(w[12]) == LV_OPA_COVER && w[12]->sl_pos == -1 && opa(w[13]) == LV_OPA_40 && w[13]->faded);
+  const D::CardLook *k = D::card_look(m, widget(1));
+  if (!CHECK(k)) return;
+  CHECK(colour_gap(hh::pixel(116 + 100, 400), k->t.card2) <= 1);  // a bar with nv and no value: the track
+  CHECK_STR(rig.set("[3,30]"), "");
+  CHECK(!hidden(w[10]->o3) && w[12]->sl_pos == D::slider_pos_of(D::slider_geom(200, 40, 0, 0, 7, 10), 0.3));
+  CHECK_STR(rig.set("[3,null]"), "");
+
+  // A faded track is one picture: each pixel of the faded copy is 40% of
+  // the one drawn at full opacity over the card, no part through another.
+  hh::refresh();
+  auto one_picture = [&](int x0, int x1, int y0, int y1, int dx) {
+    int worst = 0, seen = 0;
+    double bg[3];
+    channels(hh::rgb565(k->t.bg), bg);
+    for (int y = y0; y < y1; y++)
+      for (int x = x0; x < x1; x++) {
+        double full[3], faded[3];
+        channels(hh::pixel(x, y), full);
+        channels(hh::pixel(x + dx, y), faded);
+        if (full[0] == bg[0] && full[1] == bg[1] && full[2] == bg[2]) continue;
+        seen++;
+        for (int i = 0; i < 3; i++) {
+          const double want = 0.4 * full[i] + 0.6 * bg[i];
+          if (fabs(faded[i] - want) > 1.6) worst++;
+        }
+      }
+    return seen > 100 && worst == 0;
+  };
+  CHECK_MSG(one_picture(116, 316, 430, 470, 224), "the knob look's track");
+  CHECK_MSG(one_picture(116, 316, 472, 482, 224), "a bar's track");
+
+  // A bar's colours, from the widget's own (worked out at the build): the
+  // fill c_now, the handle c_on = readable(fill); the icon tx2 below 48.
+  CHECK_STR(rig.set("[1,60]"), "");
+  hh::refresh();
+  D::Widget *bar = w[5];
+  const int fill = (int) D::px_round(0.6 * 200);
+  CHECK(bar->sl_pos == fill && bar->sl_fill == bar->c_now && bar->c_on == D::readable(bar->c_now));
+  CHECK(colour_gap(hh::pixel(470, 140 + fill / 2), bar->c_now) == 0);
+  CHECK(colour_gap(hh::pixel(490, 140 + fill - 10), bar->c_on) == 0);  // the handle, fill - 12 to fill - 8
+  CHECK(colour_gap(hh::pixel(490, 140 + fill + 20), k->t.card2) == 0);  // the track past the fill
+  // The icon, centred 24 from the start edge: readable(fill) on a fill of
+  // 48 or more, else tx2 (the card is not filled).
+  auto icon_pixels = [&](uint32_t colour) {
+    int n = 0, sum = 0;
+    for (int y = 140; y < 140 + 60; y++)
+      for (int x = 490 - 16; x < 490 + 16; x++)
+        if (hh::pixel(x, y) == hh::rgb565(colour)) {
+          n++;
+          sum += y - 140;
+        }
+    // Its pixels centre on 24 from the start edge (the top: dir 2).
+    return n > 20 && std::abs(2 * sum - 48 * n) <= 3 * n ? n : 0;
+  };
+  CHECK(bar->sl_icon == bar->c_on && icon_pixels(bar->c_on) > 20);
+  CHECK_STR(rig.set("[1,20]"), "");
+  hh::refresh();
+  CHECK(bar->sl_pos == 40 && bar->sl_icon == k->t.tx2 && icon_pixels(k->t.tx2) > 20);
+  CHECK_STR(rig.set("[1,60]"), "");
+
+  // A drag on a bar ended by a forced swap sends the value under the finger.
+  fake::st.events.clear();
+  const std::string small = layout_bytes("layout_small.dl.json");
+  hh::press(490, 150);
+  hh::move(490, 140 + 120);  // 120 of 200 from the top: 60
+  hh::move(490, 140 + 170);  // 85
+  CHECK_STR(rig.ha.send(small), "");
+  CHECK_STR(rig.ha.commit(hash16(small)), "");
+  hh::advance(D::SWAP_WAIT_MS + 600);
+  CHECK_STR(tab::active_hash(), hash16(small));
+  const auto ev = fake::events("tab1_input");
+  CHECK_MSG(ev.size() == 1 && ev[0].d.find("|" + rig.hash + "|5|c|0|85") != std::string::npos,
+            ev.empty() ? std::string("nothing sent") : ev[0].d);
+  hh::release();
+  hh::advance(50);
+  CHECK(fake::events("tab1_input").size() == 1);
+
+  // Nothing is sent by a slider whose max is not above its min, nor by one
+  // whose track has no length (a knob look 12 long: x1 = 5 is below x0 = 7).
+  const std::string none =
+      "{\"change\":{\"p\":0},\"id\":2,\"max\":5,\"min\":5,\"r\":[116,140,200,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":3,\"look\":1,\"max\":{\"s\":2},\"min\":5,\"r\":[116,200,200,40],\"step\":1,"
+      "\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":4,\"max\":100,\"min\":0,\"r\":[116,260,12,40],\"step\":1,\"t\":\"slider\","
+      "\"track\":[255,65280],\"value\":{\"s\":1}},"
+      "{\"change\":{\"p\":0},\"id\":5,\"max\":100,\"min\":0,\"r\":[116,320,12,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}}";
+  if (!CHECK(rig.up(two_pages("", none, "nn"), false))) return;
+  CHECK_STR(rig.set("[1,5],[2,3]"), "");
+  for (const auto &p : {std::make_pair(200, 160), std::make_pair(200, 220), std::make_pair(122, 280)}) {
+    hh::tap(p.first, p.second);
+    hh::advance(20);
+    CHECK_MSG(sent_words().empty(), std::to_string(p.second) + ": " + sent_words());
+  }
+  // Without a track the same 12 px send (the run is the length).
+  hh::tap(122, 340);
+  hh::advance(20);
+  CHECK_STR(sent_words(), "5c");
+
+  // In a card that is not available, the 40% is one picture too: under the
+  // mark and under the fill nothing of the track is drawn, so each shows as
+  // 40% of its colour over the card.
+  const std::string un =
+      "{\"id\":2,\"max\":100,\"min\":0,\"r\":[116,140,300,40],\"step\":1,\"t\":\"slider\","
+      "\"track\":[255,65280],\"value\":{\"s\":1}},"
+      "{\"id\":3,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,200,300,40],\"step\":1,\"t\":\"slider\","
+      "\"value\":{\"s\":1}}";
+  // A white track on a dark card, so a track under a part would show.
+  if (!CHECK(rig.up(two_pages("\"un\":{\"s\":2},", un, "nb", "{\"card2\":16777215}"), false))) return;
+  CHECK_STR(rig.set("[1,50],[2,1]"), "");
+  hh::refresh();
+  D::Widget *mk = widget(2), *fl = widget(3);
+  const D::CardLook *uk = D::card_look(*active()->model, widget(1));
+  if (!CHECK(mk && fl && uk && uk->unavailable && mk->sl_pos == 150 && fl->sl_pos == 150)) return;
+  CHECK((int) lv_obj_get_style_opa(mk->obj, LV_PART_MAIN) == LV_OPA_40);
+  auto over_card = [&](uint16_t got, uint32_t colour) {
+    double g[3], c[3], b[3];
+    channels(got, g);
+    channels(hh::rgb565(colour), c);
+    channels(hh::rgb565(uk->t.bg), b);
+    for (int i = 0; i < 3; i++)
+      if (fabs(g[i] - (0.4 * c[i] + 0.6 * b[i])) > 1.6) return false;
+    return true;
+  };
+  CHECK_MSG(over_card(hh::pixel(116 + 150, 160), 0xFFFFFF), "the mark");
+  CHECK_MSG(over_card(hh::pixel(116 + 75, 220), fl->c_now), "the fill");
+  CHECK_MSG(over_card(hh::pixel(116 + 225, 220), uk->t.card2), "the track past the fill");
+  CHECK_STR(rig.set("[2,0]"), "");
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(116 + 150, 160), 0xFFFFFF) == 0 && colour_gap(hh::pixel(116 + 75, 220), fl->c_now) == 0);
+
+  // On the kit's filled card 1: the track in FP, the fill legible(c, FP, FT).
+  if (!CHECK(rig.up())) return;
+  hh::refresh();
+  D::Widget *kb = widget(6);
+  const D::CardLook *kk = D::card_look(*active()->model, widget(2));
+  if (!CHECK(kb && kk && kk->k.filled)) return;
+  CHECK(kb->sl_track == kk->k.FP && kb->c_now == D::legible(16754519, kk->k.FP, kk->k.text));
+  CHECK(colour_gap(hh::pixel(kb->r[0] + kb->r[2] - 20, centre_y(kb->r)), kk->k.FP) == 0);
+  CHECK(colour_gap(hh::pixel(kb->r[0] + 100, kb->r[1] + 6), kb->c_now) == 0);
+}
+
+// Package E7 (contract 4.7): the thermostat's buttons of side `bs`, its `c`
+// and its `mark` (drawn from its own value, also while the thermostat has
+// none, then faded); the chart's `c`, steps (`st` 1) and the "now" bar of
+// `mark`. The kit's page 1: thermostat 32 (bs 56, c, mark slot 24, value
+// slot 23, 7 to 35), line chart 34 (st 1, c, values slot 25) and bar chart
+// 35 (values slot 26, mark slot 27).
+TEST(thermostat_and_chart) {
+  // The mark's square by hand: s = 228, radius 0.36 * 228 = 82.08, arc
+  // width round(16.29 * 228 / 200) = 19, so a diameter of 15; 20.8 is at
+  // 135 + 270 * 13.8 / 28 = 268.07 degrees, centre (121.24, 31.97).
+  int32_t d[4];
+  CHECK(D::thermo_mark(248, 228, true, 20.8, 7, 35, d) && d[0] == 114 && d[1] == 24 && d[2] == 15 && d[3] == 15);
+  // 22 is at 279.64 degrees: centre (137.75, 33.08).
+  CHECK(D::thermo_mark(248, 228, true, 22, 7, 35, d) && d[0] == 130 && d[1] == 26 && d[2] == 15);
+  // The ends are inside, a value outside or none is no mark; min equal to
+  // max puts a value of min at 135 degrees; min above max has no inside.
+  CHECK(D::thermo_mark(248, 228, true, 7, 7, 35, d) && D::thermo_mark(248, 228, true, 35, 7, 35, d));
+  CHECK(!D::thermo_mark(248, 228, true, 6.9, 7, 35, d) && !D::thermo_mark(248, 228, true, 35.1, 7, 35, d));
+  CHECK(!D::thermo_mark(248, 228, false, 20, 7, 35, d) && !D::thermo_mark(248, 228, true, 20, 35, 7, d));
+  CHECK(D::thermo_mark(248, 228, true, 7, 7, 7, d) && d[0] == (int32_t) floor(124 - 0.36 * 228 * sqrt(0.5) - 7.5 + 0.5));
+  CHECK(!D::thermo_mark(0, 228, true, 20, 7, 35, d) && !D::thermo_mark(248, 0, true, 20, 7, 35, d));
+  // A thermostat of 1 px: a dot of the smallest diameter, 6, at a finite place.
+  CHECK(D::thermo_mark(1, 1, true, 1e9, -1e9, 1e9, d) && d[2] == 6 && std::abs(d[0]) < 10 && std::abs(d[1]) < 10);
+
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *th = widget(32), *th47 = widget(47), *line = widget(34), *bars = widget(35);
+  if (!CHECK(th && th47 && line && bars && th->obj && line->obj && bars->obj)) return;
+  const D::CardLook *k31 = D::card_look(m, widget(31)), *k33 = D::card_look(m, widget(33));
+  if (!CHECK(k31 && k33)) return;
+
+  // Buttons of side bs at the bottom corners; the default stays 36. The
+  // body is not clickable: a press there is the card's (contract 4.3).
+  CHECK(th->bs == 56 && obj_at(th->o2, 116, 140 + 228 - 56, 56, 56) && obj_at(th->o3, 116 + 248 - 56, 140 + 228 - 56, 56, 56));
+  CHECK(th47->bs == 36 && obj_at(th47->o2, 788, 448 + 196 - 36, 36, 36));
+  CHECK(!clickable(th->obj) && clickable(th->o2));
+  CHECK(obj_at(lv_obj_get_child(th->o2, 0), 116, 140 + 228 - 56, 56, 56));  // the icon's box
+  // A press 45 px in and 10 px down in the minus button, outside where a
+  // button of 36 would be, steps the value.
+  hh::tap(116 + 45, 312 + 10);
+  hh::advance(20);
+  CHECK_STR(sent_words(), "32c");
+  CHECK_STR(last_input_value(), "c=21");
+  rig.settle();
+  CHECK_STR(rig.set("[23,21.5],[24,20.8]"), "");
+  hh::advance(20);
+
+  // The value arc in legible(c, background, text); the mark a dot in the
+  // card's text colour now, on top of it.
+  hh::refresh();
+  CHECK(th->c_has && th->c_now == D::legible(16739166, k31->k.background, k31->k.text));
+  CHECK(colour_gap(hh::pixel(237, 171), k31->k.text) <= 1);
+  CHECK(colour_gap(hh::pixel(237 - 9, 171), th->c_now) <= 1);  // the arc past the dot's side
+  // A new mark repaints with no style call and no layout pass.
+  D::test_counts() = D::TestCounts{};
+  // 25 is at 308.57 degrees, on the track past the value arc (21.5):
+  // centre (175.18, 49.83), square [168, 42, 15, 15].
+  CHECK(D::thermo_mark(248, 228, true, 25, 7, 35, d) && d[0] == 168 && d[1] == 42);
+  CHECK_STR(rig.set("[24,25]"), "");
+  CHECK_MSG(D::test_counts().style_sets == 0, std::to_string(D::test_counts().style_sets) + " style calls");
+  CHECK(!layout_pending());
+  hh::refresh();
+  CHECK(colour_gap(hh::pixel(116 + 175, 140 + 49), k31->k.text) <= 1);
+  CHECK(colour_gap(hh::pixel(237, 171), th->c_now) <= 1);  // the old place
+  // Outside min to max, or without a value: no mark.
+  for (const char *no : {"[24,40]", "[24,6]", "[24,null]"}) {
+    CHECK_STR(rig.set(no), "");
+    hh::refresh();
+    CHECK_MSG(colour_gap(hh::pixel(116 + 175, 140 + 49), k31->t.card2) <= 1, no);
+  }
+  // Without a value of its own the thermostat fades, and the mark is drawn
+  // all the same, faded with it.
+  CHECK_STR(rig.set("[23,null],[24,null]"), "");
+  hh::refresh();
+  CHECK(th->faded && (int) lv_obj_get_style_opa(th->obj, LV_PART_MAIN) == LV_OPA_40);
+  const uint16_t track = hh::pixel(237, 171);
+  CHECK(colour_gap(track, th->c_now) > 8);  // no value arc
+  CHECK_STR(rig.set("[24,20.8]"), "");
+  hh::refresh();
+  const uint16_t dot = hh::pixel(237, 171);
+  CHECK(colour_gap(dot, k31->k.text) > 8);  // not at full opacity
+  double a[3], b[3];
+  channels(dot, a);
+  channels(track, b);
+  CHECK_MSG(a[0] + a[1] + a[2] < b[0] + b[1] + b[2] - 12, "the faded dot is darker than the faded track");
+  CHECK_STR(rig.set("[23,21.5],[24,20.8]"), "");
+
+  // The line chart with st 1, the same values and size as the first case
+  // of maths.json's steps: its rectangles in legible(c, ...), nothing on
+  // the straight line from point to point.
+  hh::refresh();
+  CHECK(line->st == 1 && line->c_has && line->c_now == D::legible(2060241, k33->k.background, k33->k.text));
+  CHECK(colour_gap(hh::pixel(404 + 30, 140 + 100), line->c_now) <= 1);  // [3, 99, 69, 3]
+  CHECK(colour_gap(hh::pixel(404 + 71, 140 + 95), line->c_now) <= 1);   // [70, 90, 3, 11]
+  CHECK(colour_gap(hh::pixel(404 + 300, 140 + 4), line->c_now) <= 1);   // [272, 3, 69, 3]
+  CHECK(colour_gap(hh::pixel(404 + 38, 140 + 95), k33->k.background) <= 1);  // the line would be at 95.4
+  CHECK(colour_gap(hh::pixel(404 + 38, 140 + 102), k33->t.line) <= 1);       // the base line, row h - 2
+
+  // The bar chart: before round(mark) acc2, at it acc, after it card2.
+  auto bar_at = [&](int i) { return hh::pixel(404 + (int) (i * (344 - 24) / 7.0 + i * 4 + 22), 252 + 112); };
+  auto bars_are = [&](const char *want) {
+    hh::refresh();
+    for (int i = 0; i < 7; i++) {
+      const uint32_t c = want[i] == '2' ? k33->t.acc2 : want[i] == 'a' ? k33->k.A : k33->t.card2;
+      if (colour_gap(bar_at(i), c) > 1) return false;
+    }
+    return true;
+  };
+  CHECK(k33->k.A != k33->t.acc2 && k33->t.card2 != k33->t.acc2);
+  CHECK_MSG(bars_are("2222acc"), "mark 4");
+  D::test_counts() = D::TestCounts{};
+  CHECK_STR(rig.set("[27,2.5]"), "");
+  CHECK(D::test_counts().style_sets == 0 && !layout_pending());
+  CHECK_MSG(bars_are("222accc"), "mark 2.5");
+  CHECK_STR(rig.set("[27,6.4]"), "");
+  CHECK_MSG(bars_are("222222a"), "mark 6.4");
+  CHECK_STR(rig.set("[27,-0.5]"), "");
+  CHECK_MSG(bars_are("acccccc"), "mark -0.5");
+  for (const char *no : {"[27,null]", "[27,-1]", "[27,7]", "[27,1000000000]"}) {
+    CHECK_STR(rig.set(no), "");
+    CHECK_MSG(bars_are("2222222"), no);
+  }
+  CHECK_STR(rig.set("[27,4]"), "");
+  shot("thermostat_and_chart");
+}
+
+// ================================================================ the choice (package E8)
+//
+// Contract 4.3 ("Who gets a press"), 4.7 ("Choice") and 7.4, cards spec B.4
+// and B.5: one object drawn by a callback, its cells, selected, pressed and
+// pulsing looks, swatches and dots, the press that picks a cell, and the
+// feedback of each policy.
+
+// One card on a theme whose roles all differ, with these widgets; slots
+// "bnnnnb": 1 the card's `on`, 2 to 5 numbers, 6 the card's `un`.
+static std::string choice_layout(const std::string &card_keys, const std::string &widgets) {
+  return std::string("{") + DISTINCT_THEME + "\"screen\":[1280,800]," +
+         "\"nav\":[{\"p\":0,\"title\":\"P\"},{\"p\":1,\"title\":\"Q\"}],\"pages\":[{\"title\":\"P\",\"w\":[{" + card_keys +
+         "\"hr\":[116,100,536,32],\"icon\":983861,\"id\":1,\"r\":[100,84,1000,700],\"t\":\"card\",\"title\":\"Modes\","
+         "\"w\":[" + widgets + "]}]},{\"title\":\"Q\",\"w\":[{\"id\":90,\"r\":[100,20,568,56],\"t\":\"heading\","
+         "\"text\":\"Q\"}]}],\"slots\":\"bnnnnb\",\"v\":2}";
+}
+
+static const char *CHOICE_WIDGETS =
+    // 2: four texts, policy 0. Cells of 128 x 48 at x 116, 252, 388, 524.
+    "{\"change\":{\"p\":0},\"id\":2,\"r\":[116,140,536,48],\"t\":\"choice\",\"texts\":[\"Off\",\"Low\",\"Medium\","
+    "\"High\"],\"value\":{\"s\":2}},"
+    // 3: icons and texts in 2 rows, one option without an icon, policy 2.
+    // Cells of 173 x 48 at x 116, 297, 478 and y 196, 252.
+    "{\"change\":{\"p\":2},\"icons\":[984473,984468,0,983568,984855,983608],\"id\":3,\"r\":[116,196,536,104],"
+    "\"rows\":2,\"t\":\"choice\",\"texts\":[\"Day\",\"Night\",\"Auto\",\"Fan\",\"Cool\",\"Heat\"],\"value\":{\"s\":3}},"
+    // 4: swatches as dots, policy 1. Cells of 100 x 56 at x 116 + 108 i,
+    // dots of 56 at 22 into each.
+    "{\"change\":{\"p\":1},\"cols\":[16729402,16752394,16766474,3199320,689407],\"id\":4,\"look\":1,"
+    "\"r\":[116,308,536,56],\"t\":\"choice\",\"value\":{\"s\":4}},"
+    // 5: policy 3, the question first. Cells of 146 x 48.
+    "{\"change\":{\"p\":3},\"id\":5,\"r\":[116,372,300,48],\"t\":\"choice\",\"texts\":[\"A\",\"B\"],\"value\":{\"s\":5}},"
+    // 6: only shows, with a text too long for its cell of 106 x 48.
+    "{\"id\":6,\"r\":[432,372,220,48],\"t\":\"choice\",\"texts\":[\"An option far too long for its cell\",\"B\"]},"
+    // 7: an icon over a text in a cell of 264 x 80, a text alone; no value.
+    "{\"change\":{\"p\":0},\"icons\":[983568,0],\"id\":7,\"r\":[116,436,536,80],\"t\":\"choice\",\"texts\":[\"Fan\","
+    "\"Heat\"]},"
+    // 8: swatches with texts in cells of 128 x 48 at x 680, 816, 952.
+    "{\"change\":{\"p\":0},\"cols\":[16777215,0,16729402],\"id\":8,\"r\":[680,140,400,48],\"t\":\"choice\","
+    "\"texts\":[\"W\",\"K\",\"R\"]},"
+    // 9: four options in 27 px: cells below 1 px, nothing drawn.
+    "{\"change\":{\"p\":0},\"id\":9,\"r\":[700,300,27,48],\"t\":\"choice\",\"texts\":[\"a\",\"b\",\"c\",\"d\"]}";
+
+// Pixels of colour c in the rectangle [x, y, w, h] of the frame.
+static int pixels_of(int x, int y, int w, int h, uint32_t c) {
+  const uint16_t want = hh::rgb565(c);
+  int n = 0;
+  for (int py = y; py < y + h; py++)
+    for (int px = x; px < x + w; px++) n += hh::pixel(px, py) == want ? 1 : 0;
+  return n;
+}
+
+// The areas LVGL will draw again that meet the rectangle r, and their span.
+static int redrawn_in(const int16_t r[4], int *x0 = nullptr, int *x1 = nullptr) {
+  lv_display_t *disp = lv_display_get_default();
+  int n = 0, from = 1 << 20, to = -(1 << 20);
+  for (uint32_t i = 0; i < disp->inv_p; i++) {
+    if (disp->inv_area_joined[i]) continue;
+    const lv_area_t &a = disp->inv_areas[i];
+    if (a.x2 < r[0] || a.x1 >= r[0] + r[2] || a.y2 < r[1] || a.y1 >= r[1] + r[3]) continue;
+    n++;
+    from = std::min(from, (int) a.x1);
+    to = std::max(to, (int) a.x2 + 1);
+  }
+  if (x0) *x0 = from;
+  if (x1) *x1 = to;
+  return n;
+}
+
+// The looks and the build: one object for any number of options, the
+// cells' colours, the content in the card's text colour now (acct on a
+// selected cell, readable(c) on a swatch), a selected swatch's border, the
+// dots, the pressed looks, the filled card, the cut text and the stacking
+// rule, and a choice with cells below 1 px that is not there.
+TEST(choice_looks) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]"), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *w[10] = {};
+  for (int i = 2; i <= 9; i++) w[i] = widget((uint32_t) i);
+  for (int i = 2; i <= 9; i++)
+    if (!CHECK_MSG(w[i], std::to_string(i))) return;
+  const D::CardLook *k = D::card_look(m, card);
+  if (!CHECK(k)) return;
+  // One object each, no children; a press target only with `change`.
+  for (int i = 2; i <= 8; i++) {
+    CHECK_MSG(w[i]->obj && lv_obj_get_child_count(w[i]->obj) == 0 && obj_at(w[i]->obj, w[i]->r[0], w[i]->r[1], w[i]->r[2], w[i]->r[3]),
+              std::to_string(i));
+    CHECK_MSG(clickable(w[i]->obj) == (i != 6), std::to_string(i) + " clickable");
+  }
+  CHECK(w[9]->obj == nullptr && D::Loader::objects_of(*w[9]) == 0 && w[9]->options == 4);
+  // 16 options are one object too.
+  {
+    D::Widget c16 = *w[2];
+    c16.options = 16;
+    c16.rows = 4;
+    c16.r[3] = 200;
+    CHECK(D::Loader::objects_of(c16) == 1);
+  }
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  const int y2 = 164;  // the middle row of widget 2
+  // Plain cells in card2, the selected one in accf; content tx and acct.
+  CHECK(D::choice_selected(m, *w[2]) == 1);
+  CHECK(hh::pixel(120, y2) == hh::rgb565(k->t.card2) && hh::pixel(256, y2) == hh::rgb565(k->k.AF) &&
+        hh::pixel(392, y2) == hh::rgb565(k->t.card2));
+  CHECK(hh::pixel(248, y2) == hh::rgb565(k->t.bg));  // the gap shows the card
+  CHECK(pixels_of(116, 140, 128, 48, k->k.text) > 5 && pixels_of(116, 140, 128, 48, k->k.AT) == 0);
+  CHECK(pixels_of(252, 140, 128, 48, k->k.AT) > 5 && pixels_of(252, 140, 128, 48, k->k.text) == 0);
+  // The cell's radius is r2 (10): its corner pixel shows the card.
+  CHECK(hh::pixel(116, 140) == hh::rgb565(k->t.bg) && hh::pixel(126, 150) == hh::rgb565(k->t.card2));
+  // A gap between the rows of widget 3 shows the card; its second row is
+  // drawn where 4.7 puts it.
+  CHECK(hh::pixel(200, 247) == hh::rgb565(k->t.bg) && hh::pixel(118, 254 + 20) == hh::rgb565(k->t.card2));
+  // Swatches as dots: each the circle of 56 centred in its cell, in its
+  // colour, the rest of the cell the card's.
+  const uint32_t cols[5] = {16729402, 16752394, 16766474, 3199320, 689407};
+  for (int i = 0; i < 5; i++) {
+    const int cx = 116 + 108 * i;
+    CHECK_MSG(hh::pixel(cx + 50, 336) == hh::rgb565(cols[i]) && hh::pixel(cx + 2, 336) == hh::rgb565(k->t.bg) &&
+                  hh::pixel(cx + 24, 336) == hh::rgb565(cols[i]) && hh::pixel(cx + 50, 309) == hh::rgb565(cols[i]),
+              "dot " + std::to_string(i));
+  }
+  CHECK(hh::pixel(116 + 22 + 3, 310) == hh::rgb565(k->t.bg));  // outside the circle, inside its square
+  // Selected swatch: a 3 px border in the card's text colour now, inside;
+  // the swatch keeps its colour.
+  CHECK_STR(rig.set("[4,1]"), "");
+  hh::refresh();
+  CHECK(hh::pixel(247, 336) == hh::rgb565(k->k.text) && hh::pixel(248, 336) == hh::rgb565(k->k.text) &&
+        hh::pixel(250, 336) == hh::rgb565(cols[1]) && hh::pixel(274, 336) == hh::rgb565(cols[1]));
+  CHECK(hh::pixel(139, 336) == hh::rgb565(cols[0]));  // the others have none
+  // Swatches with texts: the content is readable(c), worked out at the
+  // build (white has the dark text, black the white one).
+  CHECK(w[8]->ch_dark == (1u | (D::readable(16729402) == D::COLOUR_INK ? 4u : 0u)));
+  CHECK(pixels_of(680, 140, 128, 48, D::COLOUR_INK) > 5 && pixels_of(816, 140, 128, 48, D::COLOUR_WHITE) > 5 &&
+        pixels_of(952, 140, 128, 48, D::readable(16729402)) > 5);
+  CHECK(hh::pixel(684, y2) == hh::rgb565(16777215) && hh::pixel(820, y2) == hh::rgb565(0));
+  // The cut text: the longest start that fits 94 px (106 - 12) with the
+  // ellipsis, worked out at the build; the other text is whole.
+  {
+    const D::Widget &c = *w[6];
+    const lv_font_t *f = D::text_font(15);
+    const std::string t = D::choice_text(c, 0);
+    const size_t keep = c.ch_fit[0];
+    const std::string ell = "\xE2\x80\xA6";
+    CHECK((c.ch_cut & 1) && !(c.ch_cut & 2) && c.cut && keep > 3 && keep < t.size() && c.ch_fit[1] == 1);
+    const std::string shown = t.substr(0, keep) + ell;
+    CHECK(D::text_width(f, shown.c_str(), shown.size()) <= 94);
+    size_t next = keep + 1;
+    while (next < t.size() && ((uint8_t) t[next] & 0xC0) == 0x80) next++;
+    const std::string longer = t.substr(0, next) + ell;
+    CHECK(t[keep] == ' ' || D::text_width(f, longer.c_str(), longer.size()) > 94);
+    CHECK(!w[2]->ch_cut && !w[2]->cut);
+  }
+  // The button's rules for the content: an icon over a text when the cell
+  // is 64 or more high; side by side below; a part alone centred.
+  {
+    const int ih = D::line_height(D::icon_font(24)), th = D::line_height(D::text_font(15));
+    const D::ChoicePlace st = D::choice_place(*w[7], 0, 264, 80, "Fan", 3);
+    const int iw = lv_font_get_glyph_width(D::icon_font(24), 983568, 0);
+    CHECK(st.cp == 983568 && st.text && st.centre && st.iy == (80 - (ih + 6 + th)) / 2 && st.ty == st.iy + ih + 6 &&
+          st.ix == (264 - iw) / 2 && st.tx == 6 && st.tw == 252);
+    const D::ChoicePlace alone = D::choice_place(*w[7], 1, 264, 80, "Heat", 4);
+    CHECK(alone.cp == 0 && alone.text && alone.centre && alone.tx == 6 && alone.tw == 252 && alone.ty == (80 - th) / 2);
+    const int tw = D::text_width(D::text_font(15), "Day", 3);
+    const int iw3 = lv_font_get_glyph_width(D::icon_font(24), 984473, 0);
+    const D::ChoicePlace side = D::choice_place(*w[3], 0, 173, 48, "Day", 3);
+    CHECK(side.cp == 984473 && side.text && !side.centre && side.ix == (173 - (iw3 + 6 + tw)) / 2 &&
+          side.tx == side.ix + iw3 + 6 && side.iy == (48 - ih) / 2 && side.tw == 173 - 12 - iw3 - 6);
+    const D::ChoicePlace no_icon = D::choice_place(*w[3], 2, 173, 48, "Auto", 4);
+    CHECK(no_icon.cp == 0 && no_icon.centre && no_icon.tx == 6);
+    // On the screen: the icon's pixels above the text's.
+    int top = 1 << 20, bottom = -1;
+    for (int py = 436; py < 516; py++)
+      for (int px = 116; px < 380; px++)
+        if (hh::pixel(px, py) == hh::rgb565(k->k.text)) {
+          top = std::min(top, py);
+          bottom = std::max(bottom, py);
+        }
+    CHECK(top < 436 + st.iy + ih && bottom >= 436 + st.ty);
+  }
+  // Pressed: card2_pr; the selected cell accf_pr; a swatch
+  // mix(readable(c), c, 85). The look follows the finger: off while it is
+  // outside the cell it went down in, back when it returns.
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(w[2]->pressed && hh::pixel(392, y2) == hh::rgb565(k->t.card2_pr) && hh::pixel(120, y2) == hh::rgb565(k->t.card2));
+  // Down and out of the control (a move across would be a swipe).
+  finger(400, 214, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(!w[2]->pressed && w[2]->ch_down == 2 && hh::pixel(392, y2) == hh::rgb565(k->t.card2));
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(w[2]->pressed && hh::pixel(392, y2) == hh::rgb565(k->t.card2_pr));
+  finger(400, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+  finger(260, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(256, y2) == hh::rgb565(k->k.AP));
+  finger(260, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+  finger(140, 336, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(166, 336) == hh::rgb565(D::mix(D::readable(cols[0]), cols[0], 85)));
+  finger(140, 336, false);
+  hh::advance(40);
+  rig.settle();
+  // A filled card: cells onbg_pr, also pressed, content ontx; the selected
+  // cell keeps accf.
+  CHECK_STR(rig.set("[1,1],[2,1]"), "");
+  CHECK(k->k.filled == 1);
+  hh::refresh();
+  CHECK(hh::pixel(120, y2) == hh::rgb565(k->k.FP) && k->k.FP == k->t.onbg_pr && hh::pixel(256, y2) == hh::rgb565(k->k.AF));
+  CHECK(pixels_of(116, 140, 128, 48, k->k.text) > 5 && k->k.text == k->t.ontx);
+  finger(400, y2, true);
+  hh::advance(20);
+  hh::refresh();
+  CHECK(hh::pixel(392, y2) == hh::rgb565(k->k.FP));
+  finger(400, y2, false);
+  hh::advance(40);
+  rig.settle();
+  CHECK_STR(rig.set("[1,0],[2,1]"), "");
+  // Not available: the control at 40%, applied once.
+  CHECK_STR(rig.set("[6,1]"), "");
+  CHECK(lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_40 && lv_obj_get_style_opa(w[4]->obj, LV_PART_MAIN) == LV_OPA_40);
+  hh::refresh();
+  CHECK(hh::pixel(120, y2) != hh::rgb565(k->t.card2) && hh::pixel(120, y2) != hh::rgb565(k->t.bg));
+  CHECK_STR(rig.set("[6,0]"), "");
+  CHECK(lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_COVER);
+  // No value, and a value that is no index: none selected, not faded.
+  for (const char *v : {"null", "4", "-1", "0.5", "1000000000"}) {
+    CHECK_STR(rig.set(std::string("[2,") + v + "]"), "");
+    hh::refresh();
+    CHECK_MSG(D::choice_selected(m, *w[2]) == -1 && !w[2]->faded && hh::pixel(256, y2) == hh::rgb565(k->t.card2) &&
+                  lv_obj_get_style_opa(w[2]->obj, LV_PART_MAIN) == LV_OPA_COVER,
+              v);
+  }
+  CHECK_STR(rig.set("[2,3]"), "");
+  CHECK(D::choice_selected(m, *w[2]) == 3);
+  shot("choice_looks");
+}
+
+// The selected option of the kit's first choice through the steps of
+// state_v2.json that set it: 1e9, -1 and 0.5 are none, 3 is the fourth,
+// 4 is past the options.
+TEST(choice_selected_by_value) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  const tj::Value st = fixture("state_v2.json");
+  CHECK_STR(st["hash"].s, rig.hash);
+  D::Widget *c = widget(19);
+  if (!CHECK(c && c->obj)) return;
+  D::Model &m = *active()->model;
+  const D::CardLook *k = D::card_look(m, D::card_of(m, *c));
+  int seen = 0;
+  for (const tj::Value &step : st["steps"].a)
+    for (const tj::Value &show : step["show"].a) {
+      if (show["id"].n != 19 || !show.has("selected")) continue;
+      for (const tj::Value &pl : step["payloads"].a) CHECK_STR(rig.ha.set(pl.s), "");
+      hh::refresh();
+      const int want = show["selected"].is_null() ? -1 : show["selected"].i();
+      CHECK_MSG(D::choice_selected(m, *c) == want, step["note"].s);
+      // Cell i of 4 in 536 px: 128 wide, every 136 px; its left edge is
+      // free of the text.
+      for (int i = 0; i < 4; i++) {
+        const uint32_t bg = i == want ? k->k.AF : k->k.filled ? k->k.FP : k->t.card2;
+        CHECK_MSG(hh::pixel(c->r[0] + 136 * i + 3, c->r[1] + 24) == hh::rgb565(bg), step["note"].s + " cell " + std::to_string(i));
+      }
+      seen++;
+    }
+  CHECK(seen >= 5);
+}
+
+// Contract 7.4 for a choice: it sends when the finger lifts in the cell it
+// went down in, also the option already selected. Policy 0 shows the
+// tapped option at once with the same way back as a switch (ack not ok, no
+// ack within 4 s; an ok ack keeps it until the value comes). Policy 1
+// flashes the tapped cell for 300 ms. Policy 2: the outline until a value
+// of the card changes, or 30 s. Policy 3: the question, then the index.
+// A gap does nothing; a choice that only shows is the card's; one with no
+// cells is not there; a press is lost when the card turns unavailable.
+TEST(choice_feedback) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  const char *rest = "[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]";
+  CHECK_STR(rig.set(rest), "");
+  hh::advance(20);
+  D::Model &m = *active()->model;
+  D::Widget *card = widget(1), *c2 = widget(2), *c3 = widget(3), *c4 = widget(4), *c5 = widget(5);
+  if (!CHECK(card && c2 && c3 && c4 && c5)) return;
+  const D::CardLook *k = D::card_look(m, card);
+  const int y2 = 164;
+  auto shows = [&](int sel, const std::string &when) {
+    hh::refresh();
+    bool ok = D::choice_selected(m, *c2) == sel;
+    for (int i = 0; i < 4; i++) ok = ok && hh::pixel(120 + 136 * i, y2) == hh::rgb565(i == sel ? k->k.AF : k->t.card2);
+    CHECK_MSG(ok, when + ": selected " + std::to_string(D::choice_selected(m, *c2)));
+  };
+  shows(1, "at rest");
+  // Policy 0: the fourth cell, at once; ack not ok: back at once.
+  hh::tap(588, y2);
+  CHECK(sent_words() == "2c" && last_input_value() == "c=3");
+  shows(3, "tapped");
+  rig.ha.ack(last_input_counter(), false, "failed");
+  shows(1, "ack not ok");
+  // No ack: back after 4 s.
+  rig.settle();
+  hh::tap(588, y2);
+  hh::advance(3800);
+  shows(3, "3.8 s without an ack");
+  hh::advance(300);
+  shows(1, "4.1 s without an ack");
+  // An ok ack keeps it until the value comes.
+  rig.settle();
+  hh::tap(588, y2);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(1000);
+  CHECK(c2->ovr == 2);
+  shows(3, "ok ack");
+  CHECK_STR(rig.set("[2,3]"), "");
+  CHECK(c2->ovr == 0);
+  shows(3, "the value came");
+  // A tap on the option already selected sends again.
+  rig.settle();
+  hh::tap(588, y2);
+  CHECK(sent_words() == "2c" && last_input_value() == "c=3");
+  rig.settle();
+  CHECK_STR(rig.set("[2,1]"), "");
+
+  // A gap does nothing, also in a card with a tap; a release in another
+  // cell sends nothing; a finger that leaves its cell and comes back sends
+  // that cell.
+  hh::tap(248, y2);
+  CHECK(sent_words().empty());
+  // (On widget 3, from its first row to its second: a move across would
+  // be a swipe.)
+  finger(200, 220, true);
+  hh::advance(30);
+  finger(200, 276, true);
+  hh::advance(30);
+  finger(200, 276, false);
+  hh::advance(40);
+  CHECK(sent_words().empty() && c3->fb == 0);
+  finger(200, 220, true);
+  hh::advance(30);
+  finger(200, 276, true);
+  hh::advance(30);
+  CHECK(!c3->pressed && c3->ch_down == 0);
+  finger(204, 224, true);
+  hh::advance(30);
+  CHECK(c3->pressed);
+  finger(204, 224, false);
+  hh::advance(40);
+  CHECK(sent_words() == "3c" && last_input_value() == "c=0");
+  rig.settle();
+  CHECK_STR(rig.set("[5,0]"), "");  // ends the outline of policy 2
+  CHECK(c3->fb == 0);
+  // A choice that only shows is the card's; one with cells below 1 px is
+  // not there, so the card has the press.
+  hh::tap(480, 396);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  hh::tap(713, 324);
+  CHECK_STR(sent_words(), "1t");
+  rig.settle();
+  CHECK_STR(rig.set(rest), "");
+
+  // Policy 1 (swatches): the tapped cell flashes accf with acct for 300 ms;
+  // the selected option does not move.
+  hh::tap(374, 336);
+  CHECK(sent_words() == "4c" && last_input_value() == "c=2");
+  hh::refresh();
+  CHECK(c4->ch_pulse_d == 2 && hh::pixel(382, 336) == hh::rgb565(k->k.AF) && D::choice_selected(m, *c4) == -1);
+  CHECK(hh::pixel(274, 336) == hh::rgb565(16752394));
+  hh::advance(150);
+  hh::refresh();
+  CHECK(hh::pixel(382, 336) == hh::rgb565(k->k.AF));
+  hh::advance(200);
+  hh::refresh();
+  CHECK(c4->ch_pulse_d == -1 && hh::pixel(382, 336) == hh::rgb565(16766474));
+  rig.settle();
+
+  // Policy 2: the outline around the control until a value of the card
+  // changes; the selected option does not move.
+  hh::tap(383, 276);
+  CHECK(sent_words() == "3c" && last_input_value() == "c=4");
+  CHECK(c3->fb == 1 && lv_obj_get_style_outline_width(c3->obj, LV_PART_MAIN) == 2 && D::choice_selected(m, *c3) == 0);
+  CHECK(lv_color_to_u32(lv_obj_get_style_outline_color(c3->obj, LV_PART_MAIN)) % 0x1000000 == k->k.A);
+  rig.ha.ack(last_input_counter(), true, "");
+  hh::advance(5000);
+  CHECK(c3->fb == 1);
+  CHECK_STR(rig.set("[5,1]"), "");  // another widget of the card
+  CHECK(c3->fb == 0 && lv_obj_get_style_outline_width(c3->obj, LV_PART_MAIN) == 0);
+  rig.settle();
+  hh::tap(383, 276);
+  hh::advance(29000);
+  CHECK(c3->fb == 1);
+  hh::advance(1100);
+  CHECK(c3->fb == 0);
+  rig.settle();
+
+  // Policy 3: the question first, nothing sent; yes sends the index.
+  hh::tap(180, 396);
+  CHECK(sent_words().empty() && !hidden(D::g.question));
+  D::question_answer(true);
+  CHECK(sent_words() == "5c" && last_input_value() == "c=0");
+  CHECK_MSG(c5->fb == 1 && D::choice_selected(m, *c5) == 1,  // the value, not the tap
+            std::to_string(c5->fb) + " " + std::to_string(D::choice_selected(m, *c5)));
+  rig.settle();
+
+  // A press is lost when the card turns unavailable under the finger, also
+  // when it is back before the release; no input while it is.
+  finger(400, y2, true);
+  hh::advance(30);
+  CHECK_STR(rig.set("[6,1]"), "");
+  CHECK(!c2->pressed && c2->ch_down == -1);
+  CHECK_STR(rig.set("[6,0]"), "");
+  finger(400, y2, false);
+  hh::advance(40);
+  CHECK(sent_words().empty());
+  CHECK_STR(rig.set("[6,1]"), "");
+  hh::tap(400, y2);
+  hh::advance(20);
+  CHECK(sent_words().empty() && D::choice_selected(m, *c2) == 1);
+  CHECK_STR(rig.set("[6,0]"), "");
+
+  // A swipe may start on a choice: the page changes, nothing is sent and
+  // the pressed look goes.
+  finger(400, y2, true);
+  for (int i = 1; i <= 25; i++) {
+    hh::advance(25);
+    finger(400 - 6 * i, y2, true);
+  }
+  finger(hh::g_x, hh::g_y, false);
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && sent_words().empty() && !c2->pressed && c2->ch_down == -1);
+  tab::go_to(0);
+  hh::advance(20);
+
+  // Without a session nothing is sent, and the strip says why.
+  D::g.session = false;
+  hh::tap(588, y2);
+  CHECK(sent_words().empty() && !hidden(D::g.strip) && D::choice_selected(m, *c2) == 1);
+  D::g.session = true;
+}
+
+// What a repaint of a choice costs (cards spec B.4): with unchanged state no
+// style call, no contrast and nothing drawn again; a new value or a press
+// draws only the cells that change, without a layout pass; the draw
+// callback skips the cells outside the band it is called for; a change of
+// the card's colours draws the whole control.
+TEST(choice_repaint_cost) {
+  KitRig rig;
+  if (!CHECK(rig.up(choice_layout("\"on\":{\"s\":1},\"tap\":{\"p\":0},\"un\":{\"s\":6},", CHOICE_WIDGETS), false))) return;
+  CHECK_STR(rig.set("[1,0],[2,1],[3,0],[4,null],[5,null],[6,0]"), "");
+  hh::advance(20);
+  D::Layout *l = active();
+  D::Model &m = *l->model;
+  D::Widget *c2 = widget(2), *c3 = widget(3);
+  if (!CHECK(c2 && c3)) return;
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  CHECK(!layout_pending());
+  auto reset = [] {
+    D::test_counts() = D::TestCounts{};
+    D::test_contrasts() = 0;
+  };
+  // Unchanged state: nothing set, worked out or drawn.
+  reset();
+  for (uint32_t i = 0; i < m.nw; i++)
+    if (m.w[i].obj) D::paint_widget(*l, m.w[i]);
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && redrawn_in(c2->r) == 0 && redrawn_in(c3->r) == 0);
+  // A new value: the cell it leaves and the cell it takes, nothing between.
+  reset();
+  CHECK_STR(rig.set("[2,3]"), "");
+  int x0 = 0, x1 = 0;
+  CHECK(D::test_counts().style_sets == 0 && D::test_contrasts() == 0 && !layout_pending());
+  CHECK(redrawn_in(c2->r, &x0, &x1) == 2 && x0 == 252 && x1 == 652);
+  const int16_t middle[4] = {388, 140, 128, 48};
+  CHECK(redrawn_in(middle) == 0 && redrawn_in(c3->r) == 0);
+  // The callback draws only the cells in the area it is called for.
+  reset();
+  hh::refresh();
+  CHECK_MSG(D::test_counts().choice_cells == 2, std::to_string(D::test_counts().choice_cells) + " cells drawn");
+  // A press draws one cell, without a style call; the release sends it, so
+  // it draws that cell and the one selected before.
+  reset();
+  finger(400, 164, true);
+  hh::advance(20);
+  CHECK(c2->pressed && c2->ch_press_d == 2);
+  CHECK_MSG(D::test_counts().style_sets == 0 && D::test_counts().choice_cells == 1,
+            std::to_string(D::test_counts().style_sets) + " style sets, " +
+                std::to_string(D::test_counts().choice_cells) + " cells drawn");
+  reset();
+  finger(400, 164, false);
+  hh::advance(20);
+  CHECK_MSG(!c2->pressed && c2->ch_press_d == -1 && c2->ch_sel_d == 2 && D::test_counts().choice_cells == 2 &&
+                D::test_counts().style_sets == 0,
+            std::to_string(c2->pressed) + " " + std::to_string(c2->ch_press_d) + " " +
+                std::to_string(D::test_counts().choice_cells));
+  rig.settle();
+  hh::refresh();
+  // The card fills: its colours move, so the whole control is drawn again.
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(redrawn_in(c2->r, &x0, &x1) >= 1 && x0 <= 116 && x1 >= 652 && !layout_pending());
+  hh::refresh();
+  CHECK_STR(rig.set("[1,1]"), "");
+  CHECK(redrawn_in(c2->r) == 0);
+}
+
+// ================================================================ pages (package E9)
+
+// A layout v2 for the page rules of contract 4.8. subs says which of the
+// five pages say `sub` 1: by default page 0 (which counts for nothing) and
+// the detail pages 1 (`ttl` 5) and 3 (`ttl` 0), between normal pages, so a
+// swipe has to skip them. The side bar names pages 0, 3, 2 and 4. Each page
+// has one card: on page 0 buttons with go 1, go 3 and back; on page 1 go 3,
+// back and one that asks first; on page 2 go 1; on page 3 back. tag makes
+// another hash.
+static std::string gen_detail_layout(const char *tag = "", const char *subs = "11010") {
+  auto button = [](int id, int x, const std::string &rest) {
+    return "{\"id\":" + std::to_string(id) + ",\"r\":[" + std::to_string(x) + ",40,128,48],\"t\":\"button\"," + rest + "}";
+  };
+  const std::string go1 = "\"tap\":{\"go\":1},\"text\":\"Go 1\"", go3 = "\"tap\":{\"go\":3},\"text\":\"Go 3\"",
+                    back = "\"tap\":{\"back\":1},\"text\":\"Back\"";
+  const std::string items[5] = {
+      button(2, 116, go1) + "," + button(3, 260, go3) + "," + button(4, 404, back),
+      button(11, 116, go3) + "," + button(12, 260, back) + "," +
+          button(13, 404, "\"confirm\":\"Sure?\",\"tap\":{\"p\":3},\"text\":\"Ask\""),
+      button(21, 116, go1), button(31, 116, back),
+      "{\"id\":41,\"r\":[116,40,300,28],\"size\":1,\"t\":\"label\",\"text\":\"Four\"}"};
+  std::string s = "{\"nav\":[{\"p\":0,\"title\":\"A\"},{\"p\":3,\"title\":\"D\"},{\"p\":2,\"title\":\"B\"},"
+                  "{\"p\":4,\"title\":\"C\"}],\"pages\":[";
+  for (int p = 0; p < 5; p++) {
+    s += std::string(p ? "," : "") + "{";
+    if (subs[p] == '1') s += "\"sub\":1,";
+    if (p == 1) s += "\"ttl\":5,";
+    if (p == 3) s += "\"ttl\":0,";
+    s += "\"title\":\"P" + std::to_string(p) + tag + "\",\"w\":[{\"id\":" + std::to_string(100 + p) +
+         ",\"r\":[100,20,500,300],\"t\":\"card\",\"w\":[" + items[p] + "]}]}";
+  }
+  s += "],\"screen\":[1280,800],\"slots\":\"\",\"v\":2}";
+  return s;
+}
+
+static void swipe_left() { hh::drag(900, 700, 500, 690, 120); }
+static void swipe_right() { hh::drag(500, 700, 900, 700, 120); }
+
+// Contract 4.8: swipes skip detail pages and wrap over the normal ones; the
+// back entry, a swipe to the right and {"back": 1} return to the origin; a
+// go from one detail page to another keeps it; `ttl` without a touch, never
+// with `ttl` 0, standing still under a finger and while the question is
+// open; a layout switch never ends on a detail page; a restart starts on
+// page 0; `sub` on page 0 counts for nothing; a side bar entry that names a
+// detail page is not drawn and the others keep their places.
+TEST(detail_pages) {
+  Ha ha;
+  ha.boot(true);
+  CHECK(ha.hello());
+  CHECK(ha.show(gen_detail_layout()));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model *m = l->model;
+  auto page = [] { return tab::current_page(); };
+  CHECK(m->pages[0].sub == 0 && !D::is_detail(*m, 0) && D::is_detail(*m, 1) && !D::is_detail(*m, 2) &&
+        D::is_detail(*m, 3) && !D::is_detail(*m, 4));
+  CHECK(page() == 0 && !D::g.on_detail);
+  // The entry for page 3 is not drawn; the others keep their places.
+  CHECK(m->nav[1].obj == nullptr && obj_at(m->nav[0].obj, 16, 16, 64, 64) && obj_at(m->nav[2].obj, 16, 160, 64, 64) &&
+        obj_at(m->nav[3].obj, 16, 232, 64, 64));
+  CHECK(m->back.obj && hidden(m->back.obj) && m->back.page == D::BACK_ENTRY);
+  // Swipes over the normal pages 0, 2 and 4, wrapping at both ends.
+  for (int want : {2, 4, 0}) {
+    swipe_left();
+    CHECK_MSG(page() == want, "left to " + std::to_string(page()) + ", want " + std::to_string(want));
+  }
+  for (int want : {4, 2, 0}) {
+    swipe_right();
+    CHECK_MSG(page() == want, "right to " + std::to_string(page()) + ", want " + std::to_string(want));
+  }
+  // A go opens a detail page; the page it came from is the origin. The side
+  // bar shows only the back entry, in the look of the entry on screen.
+  // The stock theme has card_pr equal to onbg; a distinct card_pr shows which is drawn.
+  D::Theme &th1 = const_cast<D::Theme &>(D::page_theme(*m, 1));
+  CHECK(th1.c[D::C_CARD_PR] == th1.c[D::C_ONBG]);
+  th1.c[D::C_CARD_PR] = 0x5A2D7E;
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.on_detail && D::g.origin == 0);
+  hh::advance(40);
+  CHECK(!hidden(m->back.obj) && hidden(m->nav[0].obj) && hidden(m->nav[2].obj) && hidden(m->nav[3].obj));
+  CHECK(obj_at(m->back.obj, 16, 16, 64, 64));
+  char arrow[5];
+  D::icon_utf8(D::ICON_ARROW_LEFT, arrow);
+  CHECK_STR(label_text(m->back.icon_obj), arrow);
+  CHECK(hh::pixel(20, 48) == hh::rgb565(m->theme.c[D::C_ONBG]));
+  CHECK(lv_color_to_u32(lv_obj_get_style_text_color(m->back.icon_obj, LV_PART_MAIN)) == (0xFF000000u | m->theme.c[D::C_ACC]));
+  // Back by the entry, card_pr while it is pressed: the side bar as before.
+  finger(48, 48, true);
+  CHECK(advance_until([&] { return m->back.pressed != 0; }, 20));
+  hh::refresh();
+  CHECK(hh::pixel(20, 48) == hh::rgb565(0x5A2D7E));
+  CHECK(page() == 1);
+  finger(48, 48, false);
+  hh::advance(40);
+  CHECK(!m->back.pressed);
+  CHECK(page() == 0 && !D::g.on_detail);
+  CHECK(hidden(m->back.obj) && !hidden(m->nav[0].obj) && !hidden(m->nav[2].obj));
+  // From page 2: a go from detail page 1 to detail page 3 keeps the origin;
+  // a swipe to the left does nothing there, one to the right goes back.
+  swipe_left();
+  CHECK(page() == 2);
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  hh::tap(180, 64);
+  CHECK(page() == 3 && D::g.origin == 2);
+  swipe_left();
+  CHECK(page() == 3);
+  swipe_right();
+  CHECK(page() == 2 && !D::g.on_detail);
+  // Back by {"back": 1}; on a normal page it does nothing.
+  hh::tap(180, 64);
+  hh::tap(324, 64);
+  CHECK(page() == 2);
+  swipe_right();
+  CHECK(page() == 0);
+  hh::tap(468, 64);
+  CHECK(page() == 0);
+  CHECK(fake::events("tab1_input").empty());  // pages send nothing
+  // `ttl` 5: back after 5 s without a touch, counted from the release.
+  hh::tap(180, 64);
+  CHECK(page() == 1);
+  hh::advance(4900);
+  CHECK(page() == 1);
+  hh::advance(200);
+  CHECK(page() == 0 && !D::g.on_detail);
+  // A press starts the count again.
+  hh::tap(180, 64);
+  hh::advance(3000);
+  hh::tap(900, 600);
+  hh::advance(3000);
+  CHECK(page() == 1);
+  hh::advance(2200);
+  CHECK(page() == 0);
+  // It stands still while a finger is down.
+  hh::tap(180, 64);
+  finger(900, 600, true);
+  hh::advance(8000);
+  CHECK(page() == 1);
+  finger(900, 600, false);
+  hh::advance(4800);
+  CHECK(page() == 1);
+  hh::advance(300);
+  CHECK(page() == 0);
+  // And while the question box is open.
+  hh::tap(180, 64);
+  hh::tap(468, 64);
+  CHECK(page() == 1 && !hidden(D::g.question));
+  hh::advance(9000);
+  CHECK(page() == 1 && !hidden(D::g.question));
+  D::question_answer(false);
+  hh::advance(4800);
+  CHECK(page() == 1);
+  hh::advance(300);
+  CHECK(page() == 0);
+  // `ttl` 0: never.
+  hh::tap(180, 64);
+  hh::tap(180, 64);
+  CHECK(page() == 3 && D::g.origin == 0);
+  hh::advance(120000);
+  CHECK(page() == 3);
+  hh::tap(180, 64);
+  CHECK(page() == 0);
+  // A switch from a detail page shows the origin when it is a normal page
+  // of the new layout...
+  swipe_left();
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("b")));
+  CHECK(page() == 2 && !D::g.on_detail && D::g.origin == 2);
+  // ... else page 0 (page 2 is a detail page of this one). The tap comes
+  // at once after the switch: a page is laid out when it is shown, so its
+  // button is where it is drawn.
+  {
+    D::Widget *b21 = widget(21);
+    lv_area_t a{};
+    if (b21 && b21->obj) lv_obj_get_coords(b21->obj, &a);  // no layout pass here
+    CHECK(b21 && a.x1 == 116 && a.y1 == 40 && lv_area_get_width(&a) == 128);
+  }
+  hh::tap(180, 64);
+  CHECK(page() == 1 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("c", "01110")));
+  CHECK(page() == 0 && !D::g.on_detail);
+  m = active()->model;
+  CHECK(m->nav[1].obj == nullptr && m->nav[2].obj == nullptr && m->nav[3].obj != nullptr);
+  // From a normal page whose index is a detail page of the new layout: page
+  // 0, and the origin is not read (it still names page 2 here, a normal page
+  // of the new layout).
+  CHECK(ha.show(gen_detail_layout("d")));
+  swipe_left();
+  hh::tap(180, 64);
+  hh::tap(324, 64);
+  swipe_left();
+  CHECK(page() == 4 && D::g.origin == 2);
+  CHECK(ha.show(gen_detail_layout("e", "01011")));
+  CHECK(page() == 0 && D::g.origin == 0);
+  // A restart starts on page 0.
+  const std::string stored = gen_detail_layout("f");
+  CHECK(ha.show(stored));
+  swipe_left();
+  CHECK(page() == 2);
+  hh::advance(31000);
+  CHECK(fake::st.flash_has);
+  ha.boot(true, true);
+  CHECK(advance_until([&] { return hash16(stored) == tab::active_hash(); }, 3000));
+  CHECK(page() == 0 && !D::g.on_detail);
+}
+
+// Contract 4.8: the side bar, the question box, the message strip, the page
+// and every card on a page with a theme take its colours; back on a page
+// without one they take the layout's again. The root, the side bar and the
+// engine's pieces are restyled only when the theme changes.
+TEST(page_theme) {
+  KitRig rig;
+  if (!CHECK(rig.up())) return;
+  D::Layout *l = active();
+  D::Model &m = *l->model;
+  const D::Theme lt = m.theme, pt = m.themes[m.pages[1].theme];  // copies: the model goes with its layout
+  CHECK(m.pages[1].theme > 0 && pt.c[D::C_WALL] != lt.c[D::C_WALL] && pt.c[D::C_CARD] != lt.c[D::C_CARD]);
+  auto bg = [](lv_obj_t *o) { return lv_color_to_u32(lv_obj_get_style_bg_color(o, LV_PART_MAIN)) & 0xFFFFFF; };
+  auto fg = [](lv_obj_t *o) { return lv_color_to_u32(lv_obj_get_style_text_color(o, LV_PART_MAIN)) & 0xFFFFFF; };
+  // A point of the page that no item covers: the wall.
+  auto wall_at = [&](int p, int *x, int *y) {
+    for (int yy = 790; yy > 0; yy -= 10)
+      for (int xx = 1270; xx > 100; xx -= 10) {
+        bool free = true;
+        for (uint32_t i = 0; i < m.nw && free; i++) {
+          const D::Widget &w = m.w[i];
+          if (w.page == p && w.card < 0 && xx >= w.r[0] - 2 && xx < w.r[0] + w.r[2] + 2 && yy >= w.r[1] - 2 &&
+              yy < w.r[1] + w.r[3] + 2)
+            free = false;
+        }
+        if (free) {
+          *x = xx;
+          *y = yy;
+          return true;
+        }
+      }
+    return false;
+  };
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  if (!CHECK(wall_at(0, &x0, &y0) && wall_at(1, &x1, &y1))) return;
+  hh::advance(40);
+  CHECK(hh::pixel(x0, y0) == hh::rgb565(lt.c[D::C_WALL]) && hh::pixel(4, 700) == hh::rgb565(lt.c[D::C_CARD]));
+  // Page 1 has a theme: one restyle.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(1);
+  hh::advance(40);
+  CHECK(D::test_counts().page_themes == 1);
+  CHECK(hh::pixel(x1, y1) == hh::rgb565(pt.c[D::C_WALL]));
+  CHECK(hh::pixel(4, 700) == hh::rgb565(pt.c[D::C_CARD]) && bg(l->bar) == pt.c[D::C_CARD]);
+  CHECK(hh::pixel(20, 16 + 72 + 32) == hh::rgb565(pt.c[D::C_ONBG]));
+  CHECK(fg(m.nav[1].icon_obj) == pt.c[D::C_ACC] && fg(m.nav[0].icon_obj) == pt.c[D::C_TX2]);
+  // A card of the page: the page's card colour.
+  D::Widget *c31 = widget(31);
+  if (CHECK(c31 && c31->obj)) CHECK(bg(c31->obj) == pt.c[D::C_CARD]);
+  // The question box, opened by card 44 (it asks first).
+  D::Widget *c44 = widget(44);
+  if (!CHECK(c44)) return;
+  hh::tap(centre_x(c44->r), centre_y(c44->r));
+  CHECK(!hidden(D::g.question));
+  CHECK(bg(D::g.q_box) == pt.c[D::C_CARD] && bg(D::g.q_yes) == pt.c[D::C_ACCF] && bg(D::g.q_no) == pt.c[D::C_CARD2] &&
+        fg(D::g.q_text) == pt.c[D::C_TX]);
+  hh::advance(40);
+  CHECK(hh::pixel(380, 300) == hh::rgb565(pt.c[D::C_CARD]));
+  D::question_answer(false);
+  // The message strip.
+  D::show_strip("Strip");
+  CHECK(bg(D::g.strip) == pt.c[D::C_CARD2] && fg(D::g.strip_label) == pt.c[D::C_TX]);
+  D::hide_strip();
+  // Back to page 0: the layout's colours again, in one restyle.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(0);
+  hh::advance(40);
+  CHECK(D::test_counts().page_themes == 1);
+  CHECK(hh::pixel(x0, y0) == hh::rgb565(lt.c[D::C_WALL]) && hh::pixel(4, 700) == hh::rgb565(lt.c[D::C_CARD]));
+  CHECK(bg(D::g.q_box) == lt.c[D::C_CARD] && bg(D::g.strip) == lt.c[D::C_CARD2] && fg(m.nav[0].icon_obj) == lt.c[D::C_ACC]);
+  // Pages of one theme: no restyle. A swipe to page 1 restyles as a go does.
+  D::test_counts() = D::TestCounts{};
+  tab::go_to(2);
+  tab::go_to(0);
+  tab::go_to(0);
+  CHECK(D::test_counts().page_themes == 0);
+  swipe_left();
+  CHECK(tab::current_page() == 1 && D::test_counts().page_themes == 1 && bg(l->bar) == pt.c[D::C_CARD]);
+  // A layout that comes up on a page with a theme shows it at once.
+  CHECK(rig.ha.show(layout_bytes("layout_v2_kit.nochoice.dl.json")));
+  hh::advance(40);
+  CHECK(tab::current_page() == 1 && hh::pixel(4, 700) == hh::rgb565(pt.c[D::C_CARD]));
+}
+
+// Objects reachable from the shown screen are exactly the engine's own
+// pieces and, for the layout on screen, its root, the side bar and the page
+// on screen (cards spec B.6). "" when that holds, else what does not.
+static std::string shown_tree() {
+  lv_obj_t *scr = lv_screen_active();
+  if (scr != D::g.screen || scr == D::g.park) return "another screen is shown";
+  if (lv_obj_get_child_count(scr) != 2 || lv_obj_get_child(scr, 0) != D::g.base || lv_obj_get_child(scr, 1) != D::g.overlay)
+    return "the screen holds more than the base and the overlay";
+  D::Layout *a = active();
+  for (uint32_t i = 0; i < lv_obj_get_child_count(D::g.base); i++) {
+    lv_obj_t *c = lv_obj_get_child(D::g.base, (int32_t) i);
+    if (c != D::g.waiting && (!a || c != a->root)) return "an object under the base that is not the shown layout's";
+  }
+  uint32_t want = 1 + count_objects(D::g.overlay) + 1 + count_objects(D::g.waiting);
+  if (a && a->root) {
+    lv_obj_t *po = a->model->pages[D::g.page].obj;
+    if (lv_obj_get_child_count(a->root) != 2 || lv_obj_get_child(a->root, 0) != a->bar || lv_obj_get_child(a->root, 1) != po)
+      return "the root holds more than the side bar and the page on screen";
+    want += 1 + count_objects(a->bar) + count_objects(po);
+  }
+  if (count_objects(scr) != want)
+    return std::to_string(count_objects(scr)) + " objects on the shown screen, want " + std::to_string(want);
+  return "";
+}
+
+// The page rule on the object tree (cards spec B.6): with the kit on screen
+// on page 1 and a 64-page layout being built, then shown on page 1, then the
+// kit being deleted, the shown screen holds only the page on screen, the
+// side bar and the engine's pieces; everything else hangs under the parking
+// screen, which the engine never lays out (it stays marked for a layout pass).
+TEST(offscreen_tree) {
+  Ha ha;
+  ha.boot(false);
+  CHECK(ha.hello());
+  CHECK(ha.show(layout_bytes("layout_v2_kit.dl.json")));
+  tab::go_to(1);
+  hh::advance(40);
+  CHECK_STR(shown_tree(), "");
+  D::Layout *kit = active();
+  const std::string big = gen_pages64();
+  CHECK_STR(ha.send(big, 16000), "");
+  CHECK_STR(ha.commit(hash16(big)), "");
+  int steps = 0;
+  std::string worst;
+  uint32_t most_parked = 0;
+  while (tab::building() && steps < 5000) {
+    hh::advance(1);
+    steps++;
+    const std::string t = shown_tree();
+    if (!t.empty() && worst.empty()) worst = "step " + std::to_string(steps) + ": " + t;
+    most_parked = std::max(most_parked, count_objects(D::g.park));
+    D::Layout *s = D::staged_layout();
+    if (s && s->root && lv_obj_get_screen(s->root) != D::g.park && worst.empty()) worst = "the layout being built is shown";
+  }
+  CHECK_STR(worst, "");
+  CHECK(steps > 10);
+  CHECK(advance_until([&] { return hash16(big) == tab::active_hash(); }, 5000));
+  CHECK(tab::current_page() == 1);
+  CHECK_STR(shown_tree(), "");
+  // The kit is being deleted under the parking screen.
+  CHECK(kit->state == D::L_RETIRING && kit->root && lv_obj_get_screen(kit->root) == D::g.park);
+  // Every page that is not on screen is parked, and the engine laid none out.
+  D::Layout *a = active();
+  int parked = 0;
+  for (uint32_t p = 0; p < a->model->npages; p++)
+    parked += a->model->pages[p].obj && lv_obj_get_screen(a->model->pages[p].obj) == D::g.park;
+  CHECK(parked == 63);
+  CHECK(D::g.park->scr_layout_inv == 1);
+  const uint32_t on_screen = count_objects(lv_screen_active()), all = count_built();
+  printf("  64 pages: %u objects on the shown screen of %u, at most %u parked during the build\n", (unsigned) on_screen,
+         (unsigned) all, (unsigned) most_parked);
+  CHECK(on_screen * 5 < all);
+  CHECK(advance_until([] { return slots_in_use() == 1; }, 3000));
+  CHECK_STR(shown_tree(), "");
+  // Pages on screen one after the other: always one page under the root, and
+  // its widgets at their rectangles once shown.
+  for (int p : {2, 20, 0, 41, 19}) {
+    tab::go_to(p);
+    hh::advance(40);
+    CHECK_MSG(shown_tree().empty(), "page " + std::to_string(p) + ": " + shown_tree());
+    const D::Page &pg = a->model->pages[p];
+    for (uint32_t i = pg.first; i < (uint32_t) pg.first + pg.count; i++) {
+      const D::Widget &w = a->model->w[i];
+      if (w.kind == D::W_CARD) CHECK_MSG(obj_at(w.obj, w.r[0], w.r[1], w.r[2], w.r[3]), "page " + std::to_string(p));
+    }
+  }
+  CHECK(D::g.park->scr_layout_inv == 1);
+  // A tab_clear parks the layout on screen for its deletion.
+  CHECK_STR(ha.clear(), "");
+  CHECK_STR(shown_tree(), "");
+  CHECK(advance_until([] { return slots_in_use() == 0; }, 3000));
+  CHECK(lv_obj_get_child_count(D::g.park) == 0);
+}
+
+// ================================================================ clock and rate (package E10)
+//
+// Contract 4.4 (age) and 4.7 (clock, slider `rate`), cards spec B.7: every
+// slot remembers its last write, also of an equal value; a clock and a
+// slider with `rate` count on from the write of their `value`, on the
+// engine's own 64-bit count; once a second the page on screen is looked at.
+
+// What the kit draws for one "show" entry of state_v2.json, against it; ""
+// when it holds. The widget's page is shown first: a page not on screen is
+// brought up to date before it shows (show_page).
+static std::string state_show_miss(D::Model &m, const tj::Value &show) {
+  D::Widget *w = widget((uint32_t) show["id"].n);
+  const std::string id = "widget " + show["id"].s;
+  if (!w || !w->obj) return id + " is not built";
+  if (tab::current_page() != w->page) tab::go_to(w->page);
+  // What the page shows within a second (B.7): the pass, as the timer runs
+  // it once a second; clock_keeps_going checks when the timer runs it.
+  D::count_page(*active(), w->page);
+  std::string miss;
+  auto add = [&](const std::string &s) { miss += (miss.empty() ? "" : ", ") + id + " " + s; };
+  auto opa = [](lv_obj_t *o) { return o ? (int) lv_obj_get_style_opa(o, LV_PART_MAIN) : -1; };
+  if (show.has("text") && label_text(w->obj) != show["text"].s) add("shows \"" + label_text(w->obj) + "\"");
+  if (show.has("value")) {
+    double v = 0;
+    const bool has = D::slider_value(m, *w, &v);
+    if (show["value"].is_null() ? has : !has || fabs(v - show["value"].n) > 1e-9)
+      add("value " + (has ? std::to_string(v) : std::string("none")));
+    // Drawn where that value is, as of now.
+    if (w->sl_pos != D::slider_pos_now(m, *w)) add("is drawn at " + std::to_string(w->sl_pos));
+    if (!show["value"].is_null()) {
+      double lo, hi, step;
+      D::limits_of(m, *w, &lo, &hi, &step);
+      const D::CardLook *k = D::card_look(m, D::card_of(m, *w));
+      const D::SliderGeom g = D::slider_geom(w->r[2], w->r[3], w->look, w->dir, w->track_n, k ? k->t.r2 : 0);
+      if (w->sl_pos != D::slider_shown(g, true, show["value"].n, lo, hi)) add("pixel " + std::to_string(w->sl_pos));
+    }
+  }
+  if (show.has("faded") && opa(w->obj) != (show["faded"].n == 1 ? LV_OPA_40 : LV_OPA_COVER))
+    add("opacity " + std::to_string(opa(w->obj)));
+  if (show.has("vis") && hidden(w->obj) != (show["vis"].n == 0)) add("vis");
+  if (show.has("tint")) {
+    const D::CardLook *k = D::card_look(m, w);
+    if (!k || k->has_tint != !show["tint"].is_null() || (k->has_tint && k->tint != (uint32_t) show["tint"].n)) add("tint");
+  }
+  if (show.has("colour")) {
+    uint32_t c = 0;
+    const bool has = D::bound_colour(m, w->c, &c);
+    if (has != !show["colour"].is_null() || (has && c != (uint32_t) show["colour"].n)) add("colour");
+  }
+  if (show.has("un") && D::card_unavailable(m, *w) != (show["un"].n == 1)) add("un");
+  if (show.has("selected") && D::choice_selected(m, *w) != (show["selected"].is_null() ? -1 : show["selected"].i()))
+    add("selected " + std::to_string(D::choice_selected(m, *w)));
+  if (show.has("mark")) {
+    double k = 0;
+    const bool has = D::bound_num(m, w->mark, &k);
+    if (w->kind == D::W_THERMO) {
+      double lo, hi, step;
+      D::limits_of(m, *w, &lo, &hi, &step);
+      int32_t d[4];
+      const bool drawn = D::thermo_mark(w->r[2], w->r[3], has, k, lo, hi, d);
+      if (drawn != !show["mark"].is_null() || (drawn && k != show["mark"].n)) add("mark");
+    } else {
+      const double *list = nullptr;
+      const int n = D::bound_list(m, w->value, &list);
+      const int got = D::chart_mark(n, has, k);
+      if (got != (show["mark"].is_null() ? -1 : show["mark"].i())) add("mark " + std::to_string(got));
+    }
+  }
+  return miss;
+}
+
+// Every step of state_v2.json at its time on the fake clock (contract 4.4,
+// 4.7): the clock text, the `rate` position, colours, `vis`, `un`, a
+// choice's selection and the marks; an equal value written again starts the
+// age again, a new `rate` alone does not.
+TEST(state_v2_fixture) {
+  const tj::Value st = fixture("state_v2.json");
+  CHECK_STR(st["layout"].s, "layout_v2_kit");
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  CHECK_STR(st["hash"].s, rig.hash);
+  D::Model &m = *active()->model;
+  CHECK(st["steps"].size() >= 30);
+  const uint32_t t0 = hh::g_ms;
+  int shows = 0;
+  for (const tj::Value &step : st["steps"].a) {
+    const uint32_t at = t0 + (uint32_t) step["at_ms"].n;
+    if (at > hh::g_ms) hh::advance(at - hh::g_ms);
+    for (const tj::Value &pl : step["payloads"].a) CHECK_STR(rig.ha.set(pl.s), "");
+    std::string miss;
+    for (const tj::Value &show : step["show"].a) {
+      const std::string one = state_show_miss(m, show);
+      if (!one.empty()) miss += (miss.empty() ? "" : "; ") + one;
+      shows++;
+    }
+    CHECK_MSG(miss.empty(), "at " + step["at_ms"].s + " ms (" + step["note"].s + "): " + miss);
+  }
+  CHECK(shows >= 70);
+}
+
+// The once-a-second pass with LVGL's refresh held, so what it invalidated
+// and whether it left a layout pass behind can be read. A pause alone is
+// not enough: an invalidation resumes the refresh timer (LVGL's
+// REFR_REQUEST), so its period is made longer than the test.
+struct HeldRefresh {
+  lv_timer_t *t = lv_display_get_refr_timer(lv_display_get_default());
+  HeldRefresh() {
+    hh::refresh();
+    lv_timer_set_period(t, 0x7FFFFFFF);
+    lv_timer_reset(t);
+  }
+  ~HeldRefresh() {
+    lv_timer_set_period(t, LV_DEF_REFR_PERIOD);
+    hh::refresh();
+  }
+};
+
+// Contract 4.7, "Label, clock", on the kit's two clocks (page 1, slot 28:
+// `clk` 1 at px 96 and `clk` 2 at px 48): a value, then minutes without
+// one; 23:59 to 00:00; a fraction; null; -1, 1e9 and -1e9; more than 50
+// days of fake time, past the wrap of the 32-bit tick. A clock whose
+// `value` is a constant stands still.
+TEST(clock_keeps_going) {
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *c24 = widget(39), *c12 = widget(40);
+  if (!CHECK(c24 && c12 && c24->clk == 1 && c12->clk == 2 && c24->page == 1)) return;
+  auto both = [&](const char *a, const char *b) {
+    const bool ok = label_text(c24->obj) == a && label_text(c12->obj) == b;
+    if (!ok) printf("  shows \"%s\" and \"%s\", want \"%s\" and \"%s\"\n", label_text(c24->obj).c_str(), label_text(c12->obj).c_str(), a, b);
+    return ok;
+  };
+  // Before any value.
+  CHECK(both("--:--", "--:--"));
+  CHECK_STR(rig.set("[28,615]"), "");
+  const uint32_t w0 = hh::g_ms;
+  CHECK(both("10:15", "10:15"));
+  // The minute turns 60 s after the write, at the next pass: within a second.
+  hh::advance(59990);
+  CHECK(both("10:15", "10:15"));
+  hh::advance(1010);
+  CHECK(both("10:16", "10:16"));
+  hh::advance(w0 + 180000 - hh::g_ms - 10);
+  CHECK(both("10:17", "10:17"));
+  hh::advance(1010);
+  CHECK(both("10:18", "10:18"));
+  // 23:59 to 00:00 (12:00 on the 12 hour clock), and a fraction.
+  CHECK_STR(rig.set("[28,1439]"), "");
+  CHECK(both("23:59", "11:59"));
+  hh::advance(61000);
+  CHECK(both("00:00", "12:00"));
+  CHECK_STR(rig.set("[28,1439.5]"), "");
+  CHECK(both("23:59", "11:59"));
+  hh::advance(31000);
+  CHECK(both("00:00", "12:00"));
+  CHECK_STR(rig.set("[28,779]"), "");
+  CHECK(both("12:59", "12:59"));
+  CHECK_STR(rig.set("[28,780]"), "");
+  CHECK(both("13:00", "1:00"));
+  // No value, and the odd values.
+  CHECK_STR(rig.set("[28,null]"), "");
+  CHECK(both("--:--", "--:--"));
+  hh::advance(61000);
+  CHECK(both("--:--", "--:--"));
+  CHECK_STR(rig.set("[28,-1]"), "");
+  CHECK(both("23:59", "11:59"));
+  CHECK_STR(rig.set("[28,1e9]"), "");
+  CHECK(both("10:40", "10:40"));
+  CHECK_STR(rig.set("[28,-1e9]"), "");
+  CHECK(both("13:20", "1:20"));
+  CHECK_STR(rig.set("[28,1e12]"), "");  // held at 1e9 (contract 4.4)
+  CHECK(both("10:40", "10:40"));
+  // An equal value again starts the age again.
+  CHECK_STR(rig.set("[28,0]"), "");
+  hh::advance(61000);
+  CHECK(both("00:01", "12:01"));
+  CHECK_STR(rig.set("[28,0]"), "");
+  CHECK(both("00:00", "12:00"));
+  // Page 1 not on screen: its clocks are not looked at, and are right the
+  // moment it shows again.
+  tab::go_to(0);
+  hh::advance(20);
+  hh::advance(121000);
+  CHECK(both("00:00", "12:00"));
+  tab::go_to(1);
+  CHECK(both("00:02", "12:02"));
+  // More than 50 days, in steps the engine sees one by one: the 32-bit tick
+  // wraps after 49.7 days, the count does not.
+  CHECK_STR(rig.set("[28,0]"), "");
+  uint64_t passed = 0;
+  bool wrapped = false;
+  auto pass_to = [&](uint64_t total) {
+    while (passed + 2000 < total) {
+      const uint64_t jump = std::min<uint64_t>(1000000000ull, total - passed - 2000);
+      const uint32_t before = hh::g_ms;
+      hh::g_ms += (uint32_t) jump;
+      wrapped = wrapped || hh::g_ms < before;
+      passed += jump;
+      hh::advance(10);
+      passed += 10;
+    }
+    hh::advance((uint32_t) (total - passed));
+    passed = total;
+  };
+  pass_to(4320000000ull + 1010);  // 50 days and a second
+  CHECK(wrapped);
+  CHECK(both("00:00", "12:00"));
+  pass_to(4320059000ull + 500);
+  CHECK(both("00:00", "12:00"));
+  pass_to(4320060000ull + 1010);
+  CHECK(both("00:01", "12:01"));
+
+  // A clock with a constant value has age 0 for ever (contract 4.4).
+  const std::string still =
+      two_pages("", "{\"clk\":1,\"id\":2,\"px\":48,\"r\":[116,150,248,60],\"t\":\"label\",\"text\":\"\",\"value\":615},"
+                    "{\"clk\":2,\"id\":3,\"px\":48,\"r\":[116,220,248,60],\"t\":\"label\",\"text\":\"x\",\"value\":{\"s\":1}}",
+                "n");
+  if (!CHECK(rig.up(still, false))) return;
+  CHECK_STR(label_text(widget(2)->obj), "10:15");
+  CHECK_STR(label_text(widget(3)->obj), "--:--");  // `text` is ignored
+  hh::advance(181000);
+  CHECK_STR(label_text(widget(2)->obj), "10:15");
+}
+
+// Contract 4.7, "Slider, nv and rate", on the kit's thin bar (id 17, page 0,
+// 0 to 300 in 344 px, `value` slot 13, `rate` slot 14): it moves once a
+// second by itself, by the strip that moved, with no style call and no
+// layout pass; a write of `rate` alone keeps the age; not on screen it is
+// not looked at. A constant `value`, and a slider with `change`, stand
+// still. Also a minute on a clock that keeps its size (repaint_cost).
+TEST(rate_moves_the_bar) {
+  KitRig rig;
+  if (!CHECK(rig.up("", false))) return;
+  D::Model &m = *active()->model;
+  D::Widget *bar = widget(17);
+  if (!CHECK(bar && bar->look == 1 && !bar->change && bar->page == 0)) return;
+  CHECK(m.slots[12].counted && !m.slots[13].counted && m.slots[27].counted && !m.slots[6].counted);
+  CHECK_STR(rig.set("[13,30],[14,1]"), "");
+  const int at30 = D::px_round(30.0 / 300 * 344);
+  CHECK(bar->sl_pos == at30);
+  {
+    HeldRefresh held;
+    D::test_counts() = D::TestCounts{};
+    CHECK(advance_until([&] { return bar->sl_pos != at30; }, 2100));
+    CHECK(!layout_pending() && D::test_counts().style_sets == 0);
+    // The strip that moved (a pixel or two), with the radius and a pixel
+    // each side: well under the bar's 344 px.
+    int x0 = 0, x1 = 0;
+    const int n = redrawn_in(bar->r, &x0, &x1);
+    CHECK_MSG(n >= 1 && x1 - x0 > 0 && x1 - x0 < 30, std::to_string(n) + " areas, " + std::to_string(x0) + " to " + std::to_string(x1));
+  }
+  // Ten seconds on: 40, and each repaint moved by a pixel or more.
+  hh::advance(10000);
+  double v = 0;
+  CHECK(D::slider_value(m, *bar, &v) && v > 40 && v < 42.2);
+  CHECK(bar->sl_pos == D::slider_pos_now(m, *bar));
+  // Page 1 on screen: page 0's bar is not looked at, and is right when it shows.
+  tab::go_to(1);
+  hh::advance(20);
+  const int left = bar->sl_pos;
+  hh::advance(5000);
+  CHECK(bar->sl_pos == left);
+  tab::go_to(0);
+  CHECK(bar->sl_pos == D::slider_pos_now(m, *bar) && bar->sl_pos > left + 4);
+  // A clock that keeps its size: a new minute is one text, no layout pass.
+  CHECK_STR(rig.set("[28,615]"), "");
+  tab::go_to(1);
+  hh::advance(20);
+  D::Widget *c24 = widget(39), *c12 = widget(40);
+  const lv_font_t *f24 = font_of(c24->obj), *f12 = font_of(c12->obj);
+  hh::advance(59000);
+  {
+    HeldRefresh held;
+    D::test_counts() = D::TestCounts{};
+    CHECK(advance_until([&] { return label_text(c24->obj) == "10:16"; }, 2100));
+    CHECK_STR(label_text(c12->obj), "10:16");
+    CHECK(!layout_pending() && font_of(c24->obj) == f24 && font_of(c12->obj) == f12);
+    CHECK_MSG(D::test_counts().style_sets == 2, std::to_string(D::test_counts().style_sets) + " style calls");
+    // And the pass right after sets nothing.
+    D::test_counts() = D::TestCounts{};
+    hh::advance(1000);
+    CHECK(D::test_counts().style_sets == 0 && !layout_pending());
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  // A write of `rate` alone keeps the age: 30 written now, rate 2 five
+  // seconds later shows 40 at once.
+  CHECK_STR(rig.set("[13,30],[14,1]"), "");
+  hh::advance(5000);
+  CHECK_STR(rig.set("[14,2]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 40);
+  // The same value again starts the age again; rate null counts as 0.
+  CHECK_STR(rig.set("[13,30]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 30 && bar->sl_pos == at30);
+  CHECK_STR(rig.set("[14,null]"), "");
+  hh::advance(3000);
+  CHECK(D::slider_value(m, *bar, &v) && v == 30 && bar->sl_pos == at30);
+  // Held to min and max, also with a rate of 1e9 and of -1e9.
+  CHECK_STR(rig.set("[14,1e9]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 300 && bar->sl_pos == 344);
+  CHECK_STR(rig.set("[14,-1e9]"), "");
+  CHECK(D::slider_value(m, *bar, &v) && v == 0 && bar->sl_pos == 0);
+  // No value: no fill, nothing moves.
+  CHECK_STR(rig.set("[13,null],[14,1]"), "");
+  CHECK(!D::slider_value(m, *bar, &v));
+  hh::advance(2000);
+  CHECK(!D::slider_value(m, *bar, &v));
+
+  // A constant `value` has age 0; `change` turns `rate` off; min above max.
+  const std::string sliders = two_pages(
+      "",
+      "{\"id\":2,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,150,344,8],\"rate\":5,\"step\":1,\"t\":\"slider\",\"value\":10},"
+      "{\"change\":{\"p\":0},\"id\":3,\"look\":1,\"max\":100,\"min\":0,\"r\":[116,200,344,40],\"rate\":5,\"step\":1,"
+      "\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"id\":4,\"max\":10,\"min\":20,\"r\":[116,260,344,40],\"rate\":{\"s\":2},\"step\":1,\"t\":\"slider\",\"value\":{\"s\":1}},"
+      "{\"id\":5,\"max\":100,\"min\":0,\"r\":[116,320,344,40],\"rate\":{\"s\":2},\"step\":1,\"t\":\"slider\",\"value\":{\"s\":3}}",
+      "nnn");
+  if (!CHECK(rig.up(sliders, false))) return;
+  D::Model &sm = *active()->model;
+  CHECK(sm.slots[0].counted && !sm.slots[1].counted && sm.slots[2].counted);  // slot 1: slider 4 counts
+  CHECK_STR(rig.set("[1,10],[2,1],[3,10]"), "");
+  D::Widget *k5 = widget(5);
+  const int k5_at = k5->sl_pos;
+  hh::advance(3000);
+  double a = 0, b = 0, c = 0, d = 0;
+  CHECK(D::slider_value(sm, *widget(2), &a) && a == 10);
+  CHECK(D::slider_value(sm, *widget(3), &b) && b == 10);
+  CHECK(D::slider_value(sm, *widget(4), &c) && c == 10);  // held to max, then min: as the clamp reads
+  // A knob slider with `rate` moves too, by its knob's place.
+  CHECK(D::slider_value(sm, *k5, &d) && d >= 12.9 && d <= 13.1);
+  // Drawn at most a second behind (3.4 px a second here).
+  CHECK_MSG(abs(k5->sl_pos - D::slider_pos_now(sm, *k5)) <= 4 && k5->sl_pos > k5_at + 5,
+            std::to_string(k5->sl_pos) + " " + std::to_string(D::slider_pos_now(sm, *k5)) + " " + std::to_string(k5_at));
+}
+
+// ================================================================ the cards fixture (package E12)
+//
+// layout_v2_cards is what apollo_tab makes from the nine cards of the first
+// version 2 library: 2 normal pages and a detail page for each light card
+// that does more than turn on and off (the porch light only turns on and off:
+// its card has no hold and no detail page). Engine 0.2.0 must load and draw it
+// before it is released (cards spec A.5, G.4).
+// Its .v1 form is the same dashboard for engine 0.1.0: this engine loads it
+// here, and the frozen 0.1.0 program draws it in v1_pixels_unchanged
+// (frames.h).
+
+// Values a person would see, in the order of the fixture's 104 slots: the
+// sofa lamp on at 68 % in a warm colour, the ceiling light on at 40 %, the
+// desk lamp on at 80 %, the porch light off, the kettle on, readings with
+// numbers. The fixture has no values of its own (cards spec I14a). They are
+// what the fixture's own slot templates (source.json bindings) give for one
+// set of device states, not numbers written by hand.
+static const char *CARDS_VALUES =
+    "[1,1],[2,16755021],[3,0],[4,\"On \xC2\xB7 68%\"],[5,68],[6,1],[7,0],[8,\"Kettle\"],[9,\"On\"],"
+    "[10,1],[11,16766112],[12,0],[13,\"Ceiling\"],[14,\"On \xC2\xB7 40%\"],[15,40],[16,0],"
+    "[17,\"Movie\"],[18,\"Dinner\"],[19,\"All off\"],[20,1],[21,0],"
+    "[22,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[23,68],[24,30],[25,0],[26,65],[27,16744448],[28,2700],"
+    "[29,0],[30,null],[31,0],[32,\"Temperature\"],[33,\"\"],[34,\"21.5 \xC2\xB0" "C\"],[35,1],[36,0],"
+    "[37,\"\"],[38,0],[39,\"Temperature\"],[40,\"\"],[41,\"21.5 \xC2\xB0" "C\"],[42,983362],[43,0],"
+    "[44,\"Target\"],[45,\"21.5\"],[46,21.5],[47,\"Mode\"],[48,0],[49,\"\"],[50,1],[51,0],"
+    "[52,\"Backlight\"],[53,\"45%\"],[54,45],[55,0],[56,\"Night\"],[57,0],[58,983362],[59,1],"
+    "[60,16761722],[61,0],[62,\"Desk\"],[63,\"On \xC2\xB7 80% \xC2\xB7 3000 K\"],[64,80],[65,3000],"
+    "[66,0],[67,0],[68,null],[69,0],[70,\"Porch\"],[71,\"Off\"],[72,0],[73,\"Doorbell\"],[74,0],"
+    "[75,null],[76,0],[77,985115],[78,\"Front door\"],[79,\"\"],[80,\"Closed\"],[81,0],[82,1],"
+    "[83,984335],[84,\"Temperature\"],[85,0],[86,0],[87,\"Guest mode\"],[88,\"Off\"],[89,\"Night\"],"
+    "[90,\"Mode\"],[91,\"Comfort\"],[92,\"Target\"],[93,\"21.5\"],[94,\"Backlight\"],"
+    "[95,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[96,30],[97,0],[98,2700],[99,\"Ceiling\"],"
+    "[100,\"On \xC2\xB7 40%\"],[101,\"On \xC2\xB7 68% \xC2\xB7 2700 K\"],[102,\"Desk\"],"
+    "[103,\"On \xC2\xB7 80% \xC2\xB7 3000 K\"],[104,null]";
+
+// The light tiles with `hold`: each card's first label child is the card's
+// (contract 4.3), so a press there is the card's press.
+struct HoldCard {
+  uint32_t card;
+  int x, y, go;
+};
+static std::vector<HoldCard> cards_with_hold(const tj::Value &dl) {
+  std::vector<HoldCard> out;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      if (it["t"].s != "card" || !it["hold"].has("go")) continue;
+      for (const tj::Value &w : it["w"].a)
+        if (w["t"].s == "label") {
+          out.push_back({(uint32_t) it["id"].n, (int) (w["r"][0].n + w["r"][2].n / 2), (int) (w["r"][1].n + w["r"][3].n / 2),
+                         (int) it["hold"]["go"].n});
+          break;
+        }
+    }
+  return out;
+}
+
+// CARDS_VALUES by slot.
+static std::map<int, tj::Value> cards_values() {
+  std::map<int, tj::Value> out;
+  tj::Value v;
+  if (!CHECK_MSG(tj::parse(std::string("[") + CARDS_VALUES + "]", &v), "CARDS_VALUES does not parse")) return out;
+  for (const tj::Value &e : v.a) out[(int) e[0].n] = e[1];
+  return out;
+}
+
+// The slot an item's key is bound to ({"s": n}), or 0.
+static int bound_slot(const tj::Value &it, const char *key) {
+  return it.has(key) && it[key].t == tj::Value::OBJ && it[key].has("s") ? (int) it[key]["s"].n : 0;
+}
+
+// The fixture's card with this id.
+static const tj::Value *fixture_card(const tj::Value &dl, uint32_t id) {
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      if (it["id"].n == id) return &it;
+  return nullptr;
+}
+
+// Two caps objects with the same keys and values, in any order.
+static void same_caps(const tj::Value &got, const tj::Value &want, const std::string &path) {
+  if (!CHECK_MSG(got.t == tj::Value::OBJ && want.t == tj::Value::OBJ && got.size() == want.size(), path)) return;
+  for (auto &kv : want.o)
+    if (CHECK_MSG(got.has(kv.first.c_str()), path + " lacks " + kv.first))
+      same_value(got[kv.first.c_str()], kv.second, path + "." + kv.first);
+}
+
+TEST(cards_loads) {
+  const std::string bytes = layout_bytes("layout_v2_cards.dl.json");
+  const tj::Value dl = fixture("layout_v2_cards.dl.json");
+  const tj::Value meta = fixture("layout_v2_cards.meta.json");
+  const tj::Value contract = tj::load(CDIR + "/contract.json");
+  const std::string hash = sha_hex(bytes).substr(0, 16);
+  CHECK_STR(hash, meta["hash"].s);
+  CHECK(bytes.size() == meta["size"].n);
+  // Made for this engine: the caps of the layout are contract.json's
+  // engine_caps, which hello_fixture holds the engine's answer to.
+  same_caps(meta["caps"], contract["engine_caps"], "layout_v2_cards caps");
+  CHECK(meta["dropped"].size() == 0);
+  D::Loader ld;
+  CHECK_STR(D::model_check(bytes.data(), bytes.size(), ld), "");
+  CHECK(ld.c.version == 2);
+  CHECK(ld.c.pages == meta["counts"]["pages"].n && ld.c.normal == meta["counts"]["normal_pages"].n);
+  CHECK(ld.c.widgets == meta["counts"]["widgets"].n && ld.c.ids == meta["counts"]["widgets"].n);
+  CHECK(ld.c.slots == meta["counts"]["slots"].n && dl["slots"].s.size() == meta["slots"].size());
+  for (size_t i = 0; i < meta["slots"].size(); i++)
+    CHECK_MSG(meta["slots"][i]["d"].n == i + 1 && meta["slots"][i]["type"].s == dl["slots"].s.substr(i, 1),
+              "slot " + std::to_string(i + 1));
+  // Within what the engine keeps across a restart, and in one chunk.
+  CHECK(bytes.size() <= (size_t) contract["engine_caps"]["max_stored"].n &&
+        bytes.size() <= (size_t) contract["engine_caps"]["max_chunk"].n);
+
+  Ha ha;
+  ha.boot(true);
+  CHECK(ha.hello());
+  CHECK(ha.show(bytes));
+  D::Layout *l = active();
+  if (!CHECK(l && l->model)) return;
+  D::Model &m = *l->model;
+  CHECK(m.npages == dl["pages"].size() && tab::page_count() == (int) m.npages);
+  int detail_pages = 0;
+  for (uint32_t p = 0; p < m.npages; p++) {
+    const tj::Value &pg = dl["pages"][(size_t) p];
+    const bool sub = pg["sub"].n == 1 && p > 0;
+    detail_pages += sub;
+    CHECK_MSG(m.pages[p].sub == (sub ? 1 : 0), "page " + std::to_string(p) + " sub");
+    // A page without `ttl` gets the contract's default (timing.sub_ttl_s).
+    CHECK_MSG(m.pages[p].ttl == (pg.has("ttl") ? pg["ttl"].n : contract["timing"]["sub_ttl_s"].n),
+              "page " + std::to_string(p) + " ttl");
+    CHECK_MSG(m.pages[p].theme == 0 && !pg.has("theme"), "page " + std::to_string(p) + " theme");
+    CHECK_MSG(D::is_detail(m, (int) p) == sub, "page " + std::to_string(p) + " is_detail");
+  }
+  CHECK(detail_pages > 0 && detail_pages == meta["counts"]["pages"].n - meta["counts"]["normal_pages"].n);
+  // The dashboard's theme is midnight (source.json: apollo_tab theme).
+  CHECK_STR(fixture("layout_v2_cards.source.json")["dashboard"]["apollo_tab"]["theme"].s, "midnight");
+  for (int c = 0; c < D::C_COUNT; c++)
+    CHECK_MSG(m.theme.c[c] == (uint32_t) dl["theme"][D::THEME_KEYS[c]].n, D::THEME_KEYS[c]);
+  check_v2_keys(dl, m, "layout_v2_cards");
+  // Every widget at its rectangle; a choice is one object.
+  int choices = 0, want_choices = 0;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      for (const tj::Value &w : it["w"].a) want_choices += w["t"].s == "choice";
+  for (uint32_t i = 0; i < m.nw; i++) {
+    const D::Widget &w = m.w[i];
+    const std::string id = "layout_v2_cards widget " + std::to_string(w.id);
+    if (!CHECK_MSG(w.obj, id)) continue;
+    if (w.kind == D::W_CHOICE) {
+      choices++;
+      CHECK_MSG(lv_obj_get_child_count(w.obj) == 0 && D::Loader::objects_of(w) == 1, id + " is one object");
+    }
+    int bx = 0, by = 0, bw = w.r[2], bh = w.r[3];
+    if (w.kind == D::W_BUTTON) D::button_box(w, &bx, &by, &bw, &bh);
+    if (w.kind == D::W_IMAGE) D::image_box(w, &bx, &by, &bw, &bh);
+    CHECK_MSG(obj_at(w.obj, w.r[0] + bx, w.r[1] + by, bw, bh), id + " at " + rect_text(w.obj));
+  }
+  CHECK_MSG(choices == want_choices && want_choices > 0, std::to_string(choices) + " choices");
+
+  // Every page, with nothing set and then with values (pictures for the
+  // coordinator: cards_none_pageN.png and cards_values_pageN.png).
+  const uint16_t wall = hh::rgb565(m.theme.c[D::C_WALL]);
+  std::vector<std::vector<uint16_t>> none(m.npages);
+  const size_t px = (size_t) hh::W * hh::H;
+  auto pictures = [&](const char *label, std::vector<std::vector<uint16_t>> *keep) {
+    for (int p = 0; p < tab::page_count(); p++) {
+      tab::go_to(p);
+      hh::advance(40);
+      CHECK(tab::current_page() == p);
+      lv_obj_invalidate(lv_screen_active());
+      hh::refresh();
+      shot(std::string("cards_") + label + "_page" + std::to_string(p));
+      const double share = share_not(wall, 96);
+      CHECK_MSG(share > 0.05, std::string(label) + " page " + std::to_string(p) + ": " + std::to_string(share));
+      if (keep) (*keep)[p].assign(hh::g_fb, hh::g_fb + px);
+    }
+    tab::go_to(0);
+    hh::advance(20);
+  };
+  pictures("none", &none);
+  // The widgets the values below speak of, found in the fixture: the first
+  // light tile with a hold the values turn on (the sofa lamp), the first
+  // tinted card with a tap they leave off (the porch light, which only turns
+  // on and off and so has no hold), and the first reading shown in two sizes.
+  const auto holds = cards_with_hold(dl);
+  const std::map<int, tj::Value> vals = cards_values();
+  auto value_of = [&](int slot) { auto it = vals.find(slot); return it == vals.end() ? tj::Value() : it->second; };
+  const tj::Value *lit_card = nullptr, *off_card = nullptr;
+  for (const HoldCard &h : holds) {
+    const tj::Value *c = fixture_card(dl, h.card);
+    if (!c) continue;
+    const tj::Value on = value_of(bound_slot(*c, "on"));
+    if (!lit_card && on.t == tj::Value::NUM && on.n == 1) lit_card = c;
+  }
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a) {
+      // A light the tap turns on and off: a reading card has a tint but no tap.
+      if (off_card || it["t"].s != "card" || !bound_slot(it, "tint") || !it.has("tap")) continue;
+      const tj::Value on = value_of(bound_slot(it, "on"));
+      if (on.t == tj::Value::NUM && on.n == 0) off_card = &it;
+    }
+  // The light left off is the on/off one: it has no hold.
+  CHECK(off_card && !off_card->has("hold"));
+  const tj::Value *big = nullptr, *small = nullptr;
+  for (const tj::Value &p : dl["pages"].a)
+    for (const tj::Value &it : p["w"].a)
+      for (const tj::Value &w : it["w"].a) {
+        if (big || w["t"].s != "label" || !w.has("px") || w["px"].n != 48 || !bound_slot(w, "vis")) continue;
+        for (const tj::Value &o : it["w"].a)
+          if (&o != &w && o["t"].s == "label" && bound_slot(o, "vis") && bound_slot(o, "text") == bound_slot(w, "text"))
+            big = &w, small = &o;
+      }
+  if (!CHECK(lit_card && off_card && big && small)) return;
+  const D::Widget *lit = widget((uint32_t) (*lit_card)["id"].n), *off = widget((uint32_t) (*off_card)["id"].n);
+  const D::Widget *wbig = widget((uint32_t) (*big)["id"].n), *wsmall = widget((uint32_t) (*small)["id"].n);
+  if (!CHECK(lit && off && wbig && wsmall)) return;
+  // The lit tile's labels bound to a text slot.
+  std::vector<std::pair<const D::Widget *, std::string>> lit_labels;
+  for (const tj::Value &w : (*lit_card)["w"].a) {
+    const int s = bound_slot(w, "text");
+    if (w["t"].s != "label" || !s || value_of(s).t != tj::Value::STR) continue;
+    const D::Widget *lw = widget((uint32_t) w["id"].n);
+    if (CHECK(lw)) lit_labels.push_back({lw, value_of(s).s});
+  }
+  CHECK(!lit_labels.empty());
+  // Nothing set: the labels bound to a slot are empty.
+  for (const auto &ll : lit_labels) CHECK_STR(label_text(ll.first->obj), "");
+  const std::string snap = std::string("{\"f\":1,\"h\":\"") + hash + "\",\"v\":[" + CARDS_VALUES + "]}";
+  CHECK_STR(ha.set(snap), "");
+  hh::advance(60);
+  for (const auto &ll : lit_labels) CHECK_STR(label_text(ll.first->obj), ll.second);
+  // A reading with a number: the values show the 48 px label.
+  const tj::Value vis_big = value_of(bound_slot(*big, "vis")), vis_small = value_of(bound_slot(*small, "vis"));
+  CHECK(vis_big.t == tj::Value::NUM && vis_big.n != 0 && vis_small.t == tj::Value::NUM && vis_small.n == 0);
+  CHECK(!hidden(wbig->obj) && hidden(wsmall->obj));
+  CHECK_STR(label_text(wbig->obj), value_of(bound_slot(*big, "text")).s);
+  pictures("values", nullptr);
+  // The lit tile changed with its values; the tile left off did not take a
+  // colour.
+  tab::go_to(lit->page);
+  hh::advance(40);
+  lv_obj_invalidate(lv_screen_active());
+  hh::refresh();
+  long changed = 0;
+  for (int y = lit->r[1]; y < lit->r[1] + lit->r[3]; y++)
+    for (int x = lit->r[0]; x < lit->r[0] + lit->r[2]; x++)
+      changed += hh::pixel(x, y) != none[lit->page][(size_t) y * hh::W + x];
+  CHECK_MSG(changed > lit->r[2] * lit->r[3] / 4,
+            std::to_string(changed) + " pixels of card " + std::to_string(lit->id) + " changed");
+  CHECK(hh::pixel(lit->r[0] + lit->r[2] - 12, lit->r[1] + 12) != hh::rgb565(m.theme.c[D::C_CARD]));
+  tab::go_to(off->page);
+  hh::advance(40);
+  CHECK(hh::pixel(off->r[0] + off->r[2] - 12, off->r[1] + 12) == hh::rgb565(m.theme.c[D::C_CARD]));
+  tab::go_to(0);
+  hh::advance(20);
+
+  // A hold on each light card that has one opens its own detail page, which sends
+  // nothing; the back entry, or a swipe to the right on the wall under the
+  // card, goes back to the page it came from. Swipes skip the detail pages.
+  std::set<int> goes;
+  for (const HoldCard &h : holds) goes.insert(h.go);
+  CHECK(holds.size() == (size_t) detail_pages && goes.size() == holds.size());
+  fake::st.events.clear();
+  bool by_swipe = true;
+  for (const HoldCard &h : holds) {
+    const D::Widget *c = widget(h.card);
+    if (!CHECK(c)) continue;
+    tab::go_to(c->page);
+    hh::advance(40);
+    press_for(h.x, h.y, 700);
+    CHECK_MSG(tab::current_page() == h.go && D::g.on_detail && D::g.origin == c->page,
+              "card " + std::to_string(h.card) + " opened page " + std::to_string(tab::current_page()));
+    CHECK(D::is_detail(m, h.go));
+    if (by_swipe) {
+      hh::drag(500, 792, 900, 792, 120);
+    } else if (CHECK(m.back.obj && !hidden(m.back.obj))) {
+      lv_obj_update_layout(m.back.obj);
+      lv_area_t a;
+      lv_obj_get_coords(m.back.obj, &a);
+      hh::tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    }
+    hh::advance(40);
+    by_swipe = !by_swipe;
+    CHECK_MSG(tab::current_page() == c->page && !D::g.on_detail, "back from page " + std::to_string(h.go));
+  }
+  CHECK(fake::events("tab1_input").empty());
+  tab::go_to(0);
+  hh::advance(40);
+  // Swipes on the wall of both normal pages. The usual swipe line (y 700 from
+  // x 900) starts on the brightness bar of page 1's screen card, and a press
+  // that starts on a slider with `change` is never a swipe (contract 4.8).
+  auto item_at = [&](int page, int x, int y, const char *type) {
+    for (const tj::Value &it : dl["pages"][(size_t) page]["w"].a) {
+      const tj::Value &r = it["r"];
+      if (!type && x >= r[0].n && x < r[0].n + r[2].n && y >= r[1].n && y < r[1].n + r[3].n) return true;
+      if (type)
+        for (const tj::Value &w : it["w"].a)
+          if (w["t"].s == type && x >= w["r"][0].n && x < w["r"][0].n + w["r"][2].n && y >= w["r"][1].n &&
+              y < w["r"][1].n + w["r"][3].n)
+            return true;
+    }
+    return false;
+  };
+  CHECK(item_at(1, 900, 700, "slider"));
+  for (int page = 0; page < 2; page++)
+    for (int x : {400, 800})
+      CHECK_MSG(!item_at(page, x, 720, nullptr), "page " + std::to_string(page) + " wall at " + std::to_string(x));
+  auto swipe = [](int x0, int x1) { hh::drag(x0, 720, x1, 720, 120); };
+  swipe(800, 400);
+  CHECK(tab::current_page() == 1);
+  swipe(800, 400);
+  CHECK(tab::current_page() == 0);
+  swipe(400, 800);
+  CHECK(tab::current_page() == 1);
+  CHECK(fake::events("tab1_input").empty());
+  tab::go_to(0);
+  hh::advance(20);
+
+  g_cut_report.clear();
+  report_cuts("layout_v2_cards");
+  FILE *f = fopen((OUT + "/cut_texts.txt").c_str(), "a");
+  if (f) {
+    fprintf(f, "%s", g_cut_report.empty() ? "layout_v2_cards: no text is cut.\n" : g_cut_report.c_str());
+    fclose(f);
+  }
+  draw_and_press_all("layout_v2_cards");
+
+  // The .v1 form: the same dashboard for engine 0.1.0, version 1 keys only.
+  // This engine loads it too (a tablet that took it before the update keeps
+  // drawing it, contract 9).
+  const std::string v1 = layout_bytes("layout_v2_cards.v1.dl.json");
+  const tj::Value v1meta = fixture("layout_v2_cards.v1.meta.json");
+  CHECK_STR(sha_hex(v1).substr(0, 16), v1meta["hash"].s);
+  CHECK(v1.size() == v1meta["size"].n && v1meta["dropped"].size() == 0);
+  same_caps(v1meta["caps"], fixture("hello.json")["cases"][0]["response"]["caps"], "layout_v2_cards.v1 caps");
+  D::Loader l1;
+  CHECK_STR(D::model_check(v1.data(), v1.size(), l1), "");
+  CHECK(l1.c.version == 1 && l1.c.pages == v1meta["counts"]["pages"].n && l1.c.normal == l1.c.pages);
+  CHECK(l1.c.widgets == v1meta["counts"]["widgets"].n && l1.c.slots == v1meta["counts"]["slots"].n);
+  CHECK(fixture("layout_v2_cards.v1.dl.json")["v"].n == 1);
+  CHECK(ha.show(v1));
+  if (!CHECK(active() && active()->model)) return;
+  // The version 1 form has the normal pages only.
+  CHECK(tab::page_count() == (int) meta["counts"]["normal_pages"].n);
+  const uint16_t wall1 = hh::rgb565(active()->model->theme.c[D::C_WALL]);
+  for (int p = 0; p < tab::page_count(); p++) {
+    tab::go_to(p);
+    hh::advance(40);
+    shot("cards_v1_page" + std::to_string(p));
+    CHECK_MSG(share_not(wall1, 96) > 0.05, "v1 page " + std::to_string(p));
+  }
+  tab::go_to(0);
+  hh::advance(20);
+  draw_and_press_all("layout_v2_cards.v1");
 }

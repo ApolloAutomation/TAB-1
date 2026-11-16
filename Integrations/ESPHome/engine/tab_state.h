@@ -23,8 +23,18 @@
 namespace tab {
 namespace detail {
 
-static const char *const ENGINE_VERSION = "0.1.0";
-static const int PROTO_LOW = 1, PROTO_HIGH = 1;
+static const char *const ENGINE_VERSION = "0.2.0";
+// The highest contract version this build tells Home Assistant it speaks
+// (contract.json `proto`). Engine 0.2.0 draws all of version 2, so it is 2;
+// the shipped files and the host tests use this one value, and nothing
+// sets it from outside (tools/check_engine_package.py).
+#ifndef TAB_PROTO_HIGH
+#define TAB_PROTO_HIGH 2
+#endif
+static const int PROTO_LOW = 1, PROTO_HIGH = TAB_PROTO_HIGH;
+// Field 1 of the input payload and of the knock: `input_version` in
+// contract.json, 1 in both contract versions. It is not `proto`.
+static const int INPUT_VERSION = 1;
 static const uint32_t MAX_CHUNK = 16000;
 static const uint32_t CACHE_LIMIT = 128 * 1024;  // larger layouts are not stored
 static const size_t MEMORY_MARGIN = 1024 * 1024; // PSRAM kept free during a build
@@ -33,6 +43,7 @@ static const uint32_t TICK_MS = 5;
 static const uint32_t SLICE_MS = 4;
 static const uint32_t SLICE_OBJECTS = 48;        // objects per build slice at most
 static const uint32_t DELETE_OBJECTS = 96;       // objects per delete slice at most
+static const uint32_t STALE_WIDGETS = 16;        // stale widgets painted per slice at most
 static const uint32_t SWAP_WAIT_MS = 3000;       // longest wait for a finger to lift
 // The strip when that wait ends during a drag on a slider that asks first (contract 7.4).
 static const char *const SWAP_DRAG_TEXT = "The dashboard changed. Try again";
@@ -43,9 +54,22 @@ static const uint32_t PULSE_MS = 300;
 static const uint32_t STRIP_MS = 2500;
 static const uint32_t AWAY_MARK_MS = 10000;
 static const uint32_t CACHE_DELAY_MS = 30000;
+// (2) Flash writes (contract 5, timing.cache_bucket and cache_refill_s): a
+// count of the saves the tablet may make, full after a restart, one back for
+// every CACHE_REFILL_MS of running, never above CACHE_BUCKET. Erases take none.
+static const uint8_t CACHE_BUCKET = 12;
+static const uint32_t CACHE_REFILL_MS = 2u * 60 * 60 * 1000;
 static const uint32_t EARLY_WINDOW_MS = 30000;  // a call before the state subscription counts this long
 static const int KNOCK_FIRST_S = 3, KNOCK_REPEATS = 5, KNOCK_MAX_S = 300;
 static const int SWIPE_PX = 48;
+// (2) A press that has moved this far from its first point is no longer a
+// card tap and no longer a hold, and stays so (contract 4.3): dx*dx + dy*dy.
+static const int32_t MOVED_PX2 = 12 * 12;
+static const uint32_t CARD_PRESS_MS = 80;  // a card shows its pressed look this long after the touch
+static const uint32_t HOLD_MS = 500;       // a press held this long opens the `hold` page
+// (2) Clocks and sliders with `rate` on the page on screen are looked at this
+// often, and repainted when a minute or a pixel changed (cards spec B.7).
+static const uint32_t COUNT_MS = 1000;
 // Hold-to-erase (design 10.8): a touch that starts within ERASE_ARM_MS of
 // power-on and stays down ERASE_HOLD_MS asks whether to erase the tablet.
 // After ERASE_ARM_MS nothing of this runs on the touch path any more.
@@ -184,6 +208,9 @@ static const uint32_t ICON_PLUS = 984085;            // mdi:plus
 static const uint32_t ICON_PLACEHOLDER = 985462;     // mdi:image-outline
 static const uint32_t ICON_FALLBACK = 984613;        // mdi:help-circle-outline
 static const uint32_t ICON_TABLET = 986830;          // mdi:tablet-dashboard
+static const uint32_t ICON_ARROW_LEFT = 983117;      // mdi:arrow-left, (2) the back entry
+// (2) Nav.page of the side bar's back entry (contract 4.7).
+static const uint16_t BACK_ENTRY = 0xFFFF;
 
 // Colours of the engine's own screens before any layout arrives: the
 // editor's defaults (styles.js).
@@ -228,6 +255,14 @@ struct Layout {
   uint8_t b_stage;   // 0 root, 1 items, 2 values, 3 done
   uint32_t ready_at;
   uint16_t d_page;   // delete progress
+  uint16_t stale;    // widgets with a stale mark (shown layout only, cards spec B.4)
+  uint16_t s_page;   // the page the next stale slice starts on
+  // (2) Pages (cards spec B.6). Only the root, with the side bar and the page
+  // on screen, hangs under the shown screen; every other page object, and
+  // the root of a layout being built or deleted, under g.park.
+  uint16_t b_page;      // build progress: the next page object to make
+  int16_t shown;        // the page whose object is under the root; -1 none
+  uint8_t theme_shown;  // the theme (Model.themes index) the root and side bar show
 };
 
 // What one slice may still spend: objects, and milliseconds since start.
@@ -302,8 +337,23 @@ struct State {
   uint8_t gen_next;
   Transfer tr;
   const char *build_code;
+  // The largest free PSRAM block read when the layout being built was
+  // staged. tab_status and tab_hello report it during the build: asking the
+  // heap walks all of it (contract 3.1).
+  size_t staged_block;
   bool obj_fail;  // LVGL could not create an object during this build slice
   int page;
+  // (2) Detail pages (contract 4.8, cards spec B.6): the normal page the one
+  // on screen was opened from, whether the page on screen is a detail page,
+  // and the time without a touch counted towards its `ttl`.
+  int origin;
+  bool on_detail;
+  uint32_t idle_ms, idle_tick;
+  // (2) Clock and `rate` (cards spec B.7): the 64-bit count of milliseconds
+  // made from LVGL's 32-bit tick, so it never wraps, and when the
+  // once-a-second pass over the page on screen last ran.
+  uint64_t ms_high;
+  uint32_t ms_last, count_at;
   // Flash cache.
   char stored[17];
   uint32_t save_at;  // 0: nothing scheduled
@@ -311,8 +361,16 @@ struct State {
   // Flash may hold a stored copy, also one `stored` does not name: one
   // kept at boot because it could not be shown, or a write that failed.
   bool flash_copy;
+  // (2) The saves left (CACHE_BUCKET at begin()), and when the next one comes
+  // back on the 64-bit count; refill_at is read only while writes_left is
+  // below CACHE_BUCKET.
+  uint8_t writes_left;
+  uint64_t refill_at;
   // Screens.
   lv_obj_t *screen, *base, *overlay, *waiting, *mark;
+  // (2) A second screen that is never loaded: LVGL neither lays it out nor
+  // searches it for a touch (cards spec B.6). Nothing may lay it out.
+  lv_obj_t *park;
   lv_obj_t *headline, *hint, *hint2;  // the waiting screen's state, next step and its second line
   lv_obj_t *strip, *strip_label;
   lv_obj_t *question, *q_box, *q_text, *q_no, *q_yes;
@@ -344,6 +402,14 @@ struct State {
   lv_indev_t *indev;
   bool tracking, swallowed, press_on_slider;
   lv_point_t start;
+  // (2) The press now (cards spec B.5): when it began, whether it moved 12 px
+  // (never cleared before the next press), whether its hold was looked at,
+  // whether it began while the erase watch ran, and the card it is on.
+  uint32_t press_at;
+  bool moved, held, press_in_watch;
+  int8_t cp_layout;  // -1: no card has the press
+  uint8_t cp_gen;
+  uint16_t cp_widget;
   // Feedback.
   Pending pend[PENDING];
   FbRef fbl[FB_REFS];
@@ -367,6 +433,16 @@ inline State g;
 
 inline uint32_t now() { return lv_tick_get(); }
 
+// (2) The engine's millisecond count in 64 bits (cards spec B.7). The 32-bit
+// tick wraps after 49.7 days; the timer reads this every tick, so a wrap is
+// never missed.
+inline uint64_t now64() {
+  const uint32_t t = now();
+  if (t < g.ms_last) g.ms_high += (uint64_t) 1 << 32;
+  g.ms_last = t;
+  return g.ms_high | t;
+}
+
 inline bool Budget::left() const { return objects > 0 && now() - start < ms; }
 
 // No limit: for a boot, or to free a layout slot at once.
@@ -381,6 +457,9 @@ inline void say(int level, const char *fmt, ...) {
   va_end(ap);
   g.pf.log(level, line);
 }
+
+// (2) A detail page: `sub` 1 and not page 0 (contract 4.2, 4.8).
+inline bool is_detail(const Model &m, int page) { return page > 0 && page < (int) m.npages && m.pages[page].sub; }
 
 inline Layout *layout_at(int i) { return (i >= 0 && i < LAYOUTS) ? &g.lay[i] : nullptr; }
 inline Layout *active_layout() { return layout_at(g.active); }
@@ -437,48 +516,39 @@ inline int bound_list(Model &m, const Bound &b, const double **out) {
   return s->list_n;
 }
 
+// (2) A colour field (contract 4.4): false for no value, and for a number
+// that is not whole or not 0 to 0xFFFFFF.
+inline bool bound_colour(Model &m, const Bound &b, uint32_t *out) {
+  double v;
+  if (!bound_num(m, b, &v) || !(v >= 0 && v <= MAX_COLOUR) || v != floor(v)) return false;
+  *out = (uint32_t) v;
+  return true;
+}
+
+// (2) The age of a widget, in seconds (contract 4.4): the time since the slot
+// of its `value` was last written. 0 for a constant, and for a slot that
+// was never written.
+inline double value_age_s(Model &m, const Bound &value) {
+  const Slot *s = slot_of(m, value);
+  if (!s || s->null) return 0;
+  const uint64_t t = now64();
+  return t > s->at ? (double) (t - s->at) / 1000.0 : 0;
+}
+
 inline bool bound_dirty(const Bound &b) {
   return b.how == B_SLOT && b.slot >= 1 && b.slot <= MAX_SLOTS && (g.dirty[(b.slot - 1) >> 3] >> ((b.slot - 1) & 7) & 1);
 }
 
 // ---------------------------------------------------------------- colours
 
-// The colours one card is drawn with: the theme with the card's style on top
-// (render.js cardTokens).
-struct Tok {
-  uint32_t bg, bg2, tx, tx2, acc, acc2, acct, accf, accf_pr, card2, card2_pr, line, onbg, onbg_pr, ontx, ion, card_pr;
-  int16_t r, r2, bw;
-  int8_t gd;
-  bool has_bg2;
-};
-
-inline double channel_linear(uint32_t c) {
-  const double v = c / 255.0;
-  return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+// The theme of a page: its own (contract 4.8), else the layout's.
+inline const Theme &page_theme(const Model &m, int page) {
+  if (page >= 0 && page < (int) m.npages && m.themes && m.pages[page].theme < m.nthemes)
+    return m.themes[m.pages[page].theme];
+  return m.theme;
 }
 
-inline double luminance(uint32_t rgb) {
-  return 0.2126 * channel_linear(rgb >> 16 & 255) + 0.7152 * channel_linear(rgb >> 8 & 255) +
-         0.0722 * channel_linear(rgb & 255);
-}
-
-inline double contrast(uint32_t a, uint32_t b) {
-  const double x = luminance(a), y = luminance(b);
-  return ((x > y ? x : y) + 0.05) / ((x > y ? y : x) + 0.05);
-}
-
-// t = 0 gives fg, t = 1 gives bg (render.js blend).
-inline uint32_t blend(uint32_t fg, uint32_t bg, double t) {
-  uint32_t out = 0;
-  for (int shift = 16; shift >= 0; shift -= 8) {
-    const double v = (fg >> shift & 255) * (1 - t) + (bg >> shift & 255) * t;
-    out |= (uint32_t) (int) floor(v + 0.5) << shift;
-  }
-  return out;
-}
-
-inline Tok theme_tokens(const Model &m) {
-  const Theme &th = m.theme;
+inline Tok theme_tokens(const Theme &th) {
   Tok t{};
   t.bg = th.c[C_CARD];
   t.bg2 = 0;
@@ -505,34 +575,188 @@ inline Tok theme_tokens(const Model &m) {
   return t;
 }
 
-inline Tok card_tokens(const Model &m, const Widget *card) {
-  Tok t = theme_tokens(m);
-  if (!card || card->style < 0 || card->style >= (int) m.nstyles) return t;
-  const CardStyle &s = m.styles[card->style];
-  uint32_t *dst[S_COUNT] = {&t.bg, &t.bg2, &t.tx, &t.tx2, &t.acc, &t.acc2, &t.acct, &t.card2, &t.line, &t.onbg, &t.ontx};
-  for (int i = 0; i < S_COUNT; i++)
-    if (s.mask & (1u << i)) *dst[i] = s.c[i];
-  t.has_bg2 = (s.mask & (1u << S_BG2)) != 0;
-  if (s.has_r) t.r = s.r;
-  if (s.has_r2) t.r2 = s.r2;
-  if (s.has_bw) t.bw = s.bw;
-  t.gd = s.gd;
+// The layout's own theme: the side bar and the engine's pieces (until the
+// page theme reaches them).
+inline Tok theme_tokens(const Model &m) { return theme_tokens(m.theme); }
+
+// A card's tokens (contract 4.7): the theme with the style on top; ion and
+// onbg_pr the style's own, else worked out when the style's onbg differs
+// from the theme's, else the theme's. style may be nullptr.
+inline Tok style_tokens(const Theme &th, const CardStyle *s) {
+  Tok t = theme_tokens(th);
+  if (!s) return t;
+  uint32_t *dst[S_COUNT] = {&t.bg,    &t.bg2,      &t.tx,   &t.tx2,      &t.acc,      &t.acc2,
+                            &t.acct,  &t.card2,    &t.line, &t.onbg,     &t.ontx,     &t.card_pr,
+                            &t.card2_pr, &t.accf, &t.accf_pr, &t.onbg_pr, &t.ion};
+  for (int i = 0; i < S_ONTX + 1; i++)
+    if (s->mask & (1u << i)) *dst[i] = s->c[i];
+  t.has_bg2 = (s->mask & (1u << S_BG2)) != 0;
+  if (s->has_r) t.r = s->r;
+  if (s->has_r2) t.r2 = s->r2;
+  if (s->has_bw) t.bw = s->bw;
+  t.gd = s->gd;
   // A style with its own "on" fill gets its own ion and onbg_pr.
-  if ((s.mask & (1u << S_ONBG)) && s.c[S_ONBG] != m.theme.c[C_ONBG]) {
-    t.ion = contrast(t.acc, s.c[S_ONBG]) >= 3 ? t.acc : t.ontx;
-    t.onbg_pr = blend(t.ontx, s.c[S_ONBG], 0.82);
+  if ((s->mask & (1u << S_ONBG)) && s->c[S_ONBG] != th.c[C_ONBG]) {
+    t.ion = contrast(t.acc, s->c[S_ONBG]) >= 3 ? t.acc : t.ontx;
+    t.onbg_pr = blend(t.ontx, s->c[S_ONBG], 0.82);
   }
+  // (2) The roles a style names itself win over those worked out above.
+  for (int i = S_CARD_PR; i < S_COUNT; i++)
+    if (s->mask & (1u << i)) *dst[i] = s->c[i];
   return t;
 }
 
-inline bool card_is_on(Model &m, const Widget *card) {
-  if (!card) return false;
-  double v;
-  return bound_num(m, card->on, &v) && v != 0;
+// Works the tokens out; paints read CardLook.t instead (card_look).
+inline Tok card_tokens(const Model &m, const Widget *card) {
+  const Theme &th = page_theme(m, card ? card->page : 0);
+  if (!card || card->style < 0 || card->style >= (int) m.nstyles) return theme_tokens(th);
+  return style_tokens(th, &m.styles[card->style]);
 }
 
 inline Widget *card_of(Model &m, const Widget &w) {
   return (w.card >= 0 && w.card < (int) m.nw) ? &m.w[w.card] : nullptr;
+}
+
+// (2) The optimistic bool a card shows for one slot (contract 7.4): set by
+// a tap with policy 0 on the card, a switch or a button of the card, and
+// shown by the card's `on` and every switch and button `value` of the card
+// bound to the same slot, while the widget that was tapped still shows it.
+// The card's own flip of its `on` slot keeps showing while a tap on another
+// slot of the card waits too (the record names only the last tap).
+inline bool slot_override(Model &m, const Widget *card, const Bound &b, double *v) {
+  if (!card || card->kind != W_CARD || b.how != B_SLOT) return false;
+  if (card->ovr_slot && card->ovr_slot == b.slot && card->ovr_from < m.nw) {
+    const Widget &o = m.w[card->ovr_from];
+    if (o.ovr) {
+      *v = o.ovr_value;
+      return true;
+    }
+  }
+  if (card->ovr && card->on.how == B_SLOT && card->on.slot == b.slot) {
+    *v = card->ovr_value;
+    return true;
+  }
+  return false;
+}
+
+// A card's `on` now: the optimistic value while one is shown, else the slot.
+inline bool card_is_on(Model &m, const Widget *card) {
+  if (!card) return false;
+  double v;
+  if (slot_override(m, card, card->on, &v)) return v != 0;
+  return bound_num(m, card->on, &v) && v != 0;
+}
+
+// The record of a card, or nullptr for a widget outside a card and a card
+// whose colours were not worked out yet.
+inline CardLook *card_look(Model &m, const Widget *card) {
+  if (!card || card->cl < 0 || card->cl >= (int) m.nlooks) return nullptr;
+  CardLook &k = m.looks[card->cl];
+  return k.ready ? &k : nullptr;
+}
+
+// Works a card's nine colours out again from its `on`, `tint` and `un`
+// (cards spec B.3), and its tokens the first time. The one place that knows
+// the tint rule. Returns true when anything the card shows changed.
+inline bool card_look_update(Model &m, Widget &card) {
+  if (card.kind != W_CARD || card.cl < 0 || card.cl >= (int) m.nlooks) return false;
+  TAB_COUNT(look_updates);
+  CardLook &k = m.looks[card.cl];
+  if (!k.ready) {
+    k.t = card_tokens(m, &card);
+    // Pressed (contract 4.7): card_pr; a style with bg and no card_pr: mix(tx, bg, 90).
+    const CardStyle *s = card.style >= 0 && card.style < (int) m.nstyles ? &m.styles[card.style] : nullptr;
+    const bool own_bg = s && (s->mask & (1u << S_BG)) && !(s->mask & (1u << S_CARD_PR));
+    k.pr = own_bg ? mix(k.t.tx, k.t.bg, 90) : k.t.card_pr;
+  }
+  uint32_t tint = 0;
+  const bool has_tint = bound_colour(m, card.c, &tint);
+  double un = 0;
+  const uint8_t unavailable = bound_num(m, card.vis, &un) && un == 1 ? 1 : 0;
+  const uint8_t on = card_is_on(m, &card) ? 1 : 0;
+  if (k.ready && k.on == on && k.has_tint == (has_tint ? 1 : 0) && k.tint == tint && k.unavailable == unavailable)
+    return false;
+  k.k = card_colours(k.t, on != 0, card.lit, has_tint, tint);
+  k.on = on;
+  k.has_tint = has_tint ? 1 : 0;
+  k.tint = has_tint ? tint : 0;
+  k.unavailable = unavailable;
+  k.ready = 1;
+  return true;
+}
+
+// (2) The card is not available (`un` 1, contract 4.3): for a card, and for a
+// widget of a card. Read from the card's record, worked out with its state.
+inline bool card_unavailable(Model &m, const Widget &w) {
+  const CardLook *k = card_look(m, w.kind == W_CARD ? &w : card_of(m, w));
+  return k && k->unavailable;
+}
+
+// A widget's own colours that contract 4.7 gets through contrast, readable
+// or legible, kept in the widget (cards spec B.3): worked out at the build,
+// when its `c` slot is written with another value, and after its card's
+// colours changed. Paints read them and never call contrast. Returns true
+// when they changed.
+inline bool widget_colour_update(Model &m, Widget &w) {
+  TAB_COUNT(colour_updates);
+  const uint32_t before_now = w.c_now, before_on = w.c_on;
+  const uint8_t before_has = w.c_has;
+  uint32_t c = 0;
+  const bool has_c = w.kind != W_CARD && w.kind != W_CHOICE && bound_colour(m, w.c, &c);
+  w.c_has = 0;
+  w.c_now = w.c_on = 0;
+  if (w.kind == W_HEADING) {
+    if (has_c) {
+      const Theme &th = page_theme(m, w.page);
+      w.c_now = legible(c, th.c[C_WALL], th.c[C_TX]);
+      w.c_has = 1;
+    }
+  } else if (CardLook *k = card_look(m, card_of(m, w))) {
+    const CardColours &cc = k->k;
+    switch (w.kind) {
+      case W_LABEL:
+      case W_THERMO:
+      case W_CHART:
+        if (has_c) {
+          w.c_now = legible(c, cc.background, cc.text);
+          w.c_has = 1;
+        }
+        break;
+      case W_SWITCH:
+        if (has_c) {
+          w.c_now = legible(c, cc.background, cc.text);
+          w.c_on = readable(w.c_now);
+          w.c_has = 1;
+        }
+        break;
+      case W_BUTTON:
+        if (has_c) {
+          w.c_now = c;
+          w.c_on = readable(c);
+          w.c_has = 1;
+        }
+        break;
+      case W_SLIDER: {
+        // The fill; a bar's handle and icon go on it. `c` does not colour a
+        // slider with a track.
+        const uint32_t track = cc.filled ? cc.FP : k->t.card2;
+        w.c_now = has_c && !w.track_n ? legible(c, track, cc.text) : cc.filled ? cc.FI : cc.A;
+        w.c_on = w.look == 1 ? readable(w.c_now) : 0;
+        w.c_has = 1;
+        break;
+      }
+      case W_IMAGE: {
+        const ImageColours ic = image_colours(k->t, cc, w.look, has_c, c);
+        w.c_now = ic.fill;
+        w.c_on = ic.icon;
+        w.c_has = 1;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return w.c_now != before_now || w.c_on != before_on || w.c_has != before_has;
 }
 
 // ------------------------------------------------- calls across headers
@@ -545,8 +769,10 @@ void build_abort(Layout &l);
 bool delete_step(Layout &l, Budget &b);
 void show_layout(Layout &l);
 void show_page(Layout &l, int page);
+void page_back(Layout &l);
 void paint_widget(Layout &l, Widget &w);
 void paint_dirty(Layout &l);
+void paint_stale(Layout &l, uint32_t start);
 void show_waiting(bool on);
 void show_strip(const char *text);
 void show_note(const char *text);
@@ -566,6 +792,7 @@ bool send_input(Layout &l, Widget &w, char event, bool confirmed, bool has_value
 void widget_tapped(Layout &l, Widget &w);
 void slider_released(Layout &l, Widget &w, double value);
 void thermostat_step(Layout &l, Widget &w, int direction);
+void choice_picked(Layout &l, Widget &w, int option);
 void question_answer(bool yes);
 void erase_answer(bool erase);
 void fb_track(Layout &l, Widget &w);
