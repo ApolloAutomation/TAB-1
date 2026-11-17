@@ -13,14 +13,14 @@ permissions:
 jobs:
   ci:
     name: CI
-    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@main
     with:
       yaml-files: |
         Integrations/ESPHome/TAB-1.yaml
 
   engine:
     name: CI (dashboard engine)
-    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@3a3af1b3b4f0958f93e7a8e2d1c943a8b33da1bf # main 2026-11-12
+    uses: ApolloAutomation/Workflows/.github/workflows/esphome-ci.yml@main
     with:
       yaml-files: |
         Integrations/ESPHome/TAB-1-engine.yaml
