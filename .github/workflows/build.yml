@@ -8,8 +8,10 @@ name: Build and Publish
 # The file has no secrets, so it builds as is.
 #
 # Needs, once per repository (as in the other Apollo device repositories):
-#   - .github/release-drafter.yml on the default branch: the shared workflow
-#     drafts and publishes the release with release-drafter;
+#   - a release-drafter config: the shared workflow drafts and publishes the
+#     release with release-drafter, which falls back to the org-wide
+#     ApolloAutomation/.github/.github/release-drafter.yml when this repository
+#     has none;
 #   - Settings > Pages > Source set to "GitHub Actions".
 
 on:
